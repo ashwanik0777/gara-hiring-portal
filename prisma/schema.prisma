@@ -1,0 +1,1031 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -----------------------------------------------------------------------------
+// Identity & Better Auth Core
+// -----------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions      Session[]
+  accounts      Account[]
+  roles         UserRole[]
+  auditLogs     AuditLog[]
+
+  candidateProfile    CandidateProfile?
+  employeeProfile     Employee?
+  createdOpenings     Opening[]                  @relation("CreatedOpenings")
+  createdFormVersions OpeningFormVersion[]       @relation("CreatedFormVersions")
+  statusHistories     ApplicationStatusHistory[]
+  assignedApplications Application[]             @relation("AssignedRecruiter")
+  conductedInterviews InterviewSchedule[]        @relation("InterviewerSchedules")
+  scheduledInterviews InterviewSchedule[]        @relation("SchedulerSchedules")
+  submittedFeedbacks  InterviewFeedback[]        @relation("InterviewerFeedbacks")
+  supervisedEnrollments     InternshipEnrollment[] @relation("SupervisorEnrollments")
+  evaluationsAsIntern       InternshipEnrollment[] @relation("InternEnrollments")
+  conductedFinalEvaluations InternshipEnrollment[] @relation("EvaluatorEnrollments")
+  approvedIdCards           InternIdCard[]         @relation("IdCardApprover")
+  assignedInternTasks       InternTask[]           @relation("AssignedInternTasks")
+  reviewedTaskSubmissions   TaskSubmission[]       @relation("ReviewedTaskSubmissions")
+  approvedCompletions       InternCompletion[]     @relation("ApprovedCompletions")
+  issuedCertificates        Certificate[]          @relation("IssuedCertificates")
+  requestedCertificateReissues CertificateReissueHistory[] @relation("RequestedReissues")
+  extendedJobOffers         JobOffer[]             @relation("ExtendedJobOffers")
+  changedEmploymentHistories EmploymentHistory[]   @relation("ChangedEmploymentHistories")
+  uploadedEmployeeDocs      EmployeeDocument[]     @relation("UploadedEmployeeDocuments")
+  performanceReviewsConducted EmployeePerformanceReview[] @relation("PerformanceReviewers")
+  processedExits            EmployeeExitRecord[]   @relation("ExitProcessors")
+  reviewedAttendanceCorrections AttendanceRegularization[] @relation("AttendanceApprovers")
+  reviewedLeaveRequests        LeaveRequest[]             @relation("LeaveApprovers")
+  finalizedPayrollRecords      PayrollRecord[]            @relation("PayrollFinalizers")
+  subAdminPermission           SubAdminPermission?
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id @default(uuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String   @id @default(uuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([identifier, value])
+  @@map("verifications")
+}
+
+// -----------------------------------------------------------------------------
+// Role-Based Access Control (RBAC)
+// -----------------------------------------------------------------------------
+
+enum Role {
+  CANDIDATE
+  INTERN
+  EMPLOYEE
+  MENTOR
+  INTERVIEWER
+  HR
+  MANAGER
+  ADMIN
+}
+
+model UserRole {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role     @default(CANDIDATE)
+  assignedAt DateTime @default(now())
+  assignedBy String?
+
+  @@unique([userId, role])
+  @@map("user_roles")
+}
+
+model SubAdminPermission {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  canApplications Boolean  @default(true)
+  canOpenings     Boolean  @default(false)
+  canInterviews   Boolean  @default(false)
+  canEvaluations  Boolean  @default(false)
+  canEmployees    Boolean  @default(false)
+  canAttendance   Boolean  @default(false)
+  canLeave        Boolean  @default(false)
+  canPayroll      Boolean  @default(false)
+  canReports      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("sub_admin_permissions")
+}
+
+// -----------------------------------------------------------------------------
+// Candidate Profile & Employee Core Foundations
+// -----------------------------------------------------------------------------
+
+model CandidateProfile {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone               String?
+  location            String?
+  currentOrganization String?
+  highestEducation    String?
+  linkedinUrl         String?
+  githubUrl           String?
+  portfolioUrl        String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  applications        Application[]
+
+  @@map("candidate_profiles")
+}
+
+enum EmployeeStatus {
+  PROBATION
+  ACTIVE
+  ON_LEAVE
+  EXITED
+}
+
+model Employee {
+  id             String         @id @default(uuid())
+  userId         String         @unique
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employeeCode   String         @unique
+  department     String
+  designation    String
+  joiningDate    DateTime
+  status         EmployeeStatus @default(PROBATION)
+
+  // Reporting Line
+  managerId      String?
+  manager        Employee?      @relation("ReportingLine", fields: [managerId], references: [id], onDelete: SetNull)
+  directReports  Employee[]     @relation("ReportingLine")
+
+  // Confidential Fields (Strict RBAC: Admin, HR, and self only)
+  personalPhone  String?
+  emergencyContact Json?        // { name, relation, phone }
+  internalNotes  String?
+
+  // Originating Application (if hired from recruitment)
+  applicationId  String?        @unique
+  application    Application?   @relation("HiredApplication", fields: [applicationId], references: [id], onDelete: SetNull)
+
+  // Onboarding checklist (Prompt 7)
+  onboardingChecklist Json?     // Array of { id, label, completed, completedAt }
+
+  // Child relations
+  employmentHistories EmploymentHistory[]
+  secureDocuments     EmployeeDocument[]
+  performanceReviews  EmployeePerformanceReview[]
+  exitRecord          EmployeeExitRecord?
+
+  // HRMS Core Relations (Prompt 8 - Structural records, policy-gated operations)
+  attendanceRecords    AttendanceRecord[]
+  attendanceCorrections AttendanceRegularization[]
+  leaveRequests        LeaveRequest[]
+  payrollRecords       PayrollRecord[]
+
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([managerId])
+  @@index([department])
+  @@index([status])
+  @@map("employees")
+}
+
+// -----------------------------------------------------------------------------
+// Platform Infrastructure: Audit & Outbox
+// -----------------------------------------------------------------------------
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  actorId      String?
+  actor        User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorRole    String?
+  action       String
+  resourceType String
+  resourceId   String
+  diffPayload  Json?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+model NotificationOutbox {
+  id             String    @id @default(uuid())
+  recipientEmail String
+  templateName   String
+  payload        Json
+  status         String    @default("PENDING") // PENDING, PROCESSING, SENT, FAILED
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  lastError      String?
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@map("notification_outbox")
+}
+
+
+// -----------------------------------------------------------------------------
+// Openings & Dynamic Form Versions (Prompt 2)
+// -----------------------------------------------------------------------------
+
+enum OpeningType {
+  INTERNSHIP
+  FULL_TIME
+}
+
+enum WorkplaceType {
+  REMOTE
+  HYBRID
+  ON_SITE
+}
+
+enum OpeningStatus {
+  DRAFT
+  PUBLISHED
+  PAUSED
+  CLOSED
+}
+
+model Opening {
+  id                  String               @id @default(uuid())
+  title               String
+  slug                String               @unique
+  department          String
+  type                OpeningType          @default(INTERNSHIP)
+  location            String
+  workplaceType       WorkplaceType        @default(REMOTE)
+  description         String
+  requirements        String
+  responsibilities    String?
+  status              OpeningStatus        @default(DRAFT)
+  activeFormVersionId String?
+  createdById         String
+  createdBy           User                 @relation("CreatedOpenings", fields: [createdById], references: [id])
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  formVersions        OpeningFormVersion[]
+  applications        Application[]
+
+  @@map("openings")
+}
+
+model OpeningFormVersion {
+  id               String        @id @default(uuid())
+  openingId        String
+  opening          Opening       @relation(fields: [openingId], references: [id], onDelete: Cascade)
+  versionNumber    Int
+  schemaDefinition Json          // Structure: { sections: [...], fields: [...] }
+  isPublished      Boolean       @default(false)
+  createdById      String
+  createdBy        User          @relation("CreatedFormVersions", fields: [createdById], references: [id])
+  createdAt        DateTime      @default(now())
+
+  applications     Application[]
+
+  @@unique([openingId, versionNumber])
+  @@map("opening_form_versions")
+}
+
+// -----------------------------------------------------------------------------
+// Candidate Applications & Recruitment Pipeline (Prompt 3)
+// -----------------------------------------------------------------------------
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  SCREENING
+  SHORTLISTED
+  INTERVIEW_SCHEDULED
+  INTERVIEWED
+  EVALUATION_SELECTED
+  OFFERED
+  OFFER_ACCEPTED
+  HIRED
+  REJECTED
+  WITHDRAWN
+  ARCHIVED
+}
+
+model Application {
+  id                 String             @id @default(uuid())
+  referenceCode      String             @unique
+  openingId          String
+  opening            Opening            @relation(fields: [openingId], references: [id], onDelete: Restrict)
+  candidateId        String
+  candidate          CandidateProfile   @relation(fields: [candidateId], references: [id], onDelete: Restrict)
+  formVersionId      String
+  formVersion        OpeningFormVersion @relation(fields: [formVersionId], references: [id], onDelete: Restrict)
+  status             ApplicationStatus  @default(SUBMITTED)
+  submittedResponses Json               // Immutable snapshot of form responses
+  resumeStorageKey   String             // Private storage key (not a public URL)
+  assignedRecruiterId String?
+  assignedRecruiter  User?              @relation("AssignedRecruiter", fields: [assignedRecruiterId], references: [id], onDelete: SetNull)
+  isArchived         Boolean            @default(false)
+  archivedAt         DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  statusHistory      ApplicationStatusHistory[]
+  interviewSchedules InterviewSchedule[]
+  enrollment         InternshipEnrollment?
+  jobOffer           JobOffer?                  @relation("ApplicationOffer")
+  hiredEmployee      Employee?                  @relation("HiredApplication")
+
+  @@index([openingId, candidateId])
+  @@index([status])
+  @@index([assignedRecruiterId])
+  @@map("applications")
+}
+
+model ApplicationStatusHistory {
+  id               String      @id @default(uuid())
+  applicationId    String
+  application      Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  fromStatus       String
+  toStatus         String
+  actorId          String?
+  actor            User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  internalNotes    String?     // Confidential notes for staff ONLY
+  candidateMessage String?     // Visible to candidate
+  createdAt        DateTime    @default(now())
+
+  @@index([applicationId])
+  @@map("application_status_history")
+}
+
+// -----------------------------------------------------------------------------
+// Interview Operations & Feedback (Prompt 4)
+// -----------------------------------------------------------------------------
+
+enum InterviewStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  RESCHEDULED
+}
+
+enum InterviewRecommendation {
+  STRONG_HIRE
+  HIRE
+  HOLD
+  NO_HIRE
+}
+
+model InterviewSchedule {
+  id                 String             @id @default(uuid())
+  applicationId      String
+  application        Application        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  roundNumber        Int                @default(1)
+  roundName          String             // e.g. "Screening Call", "Technical Evaluation", "Cultural Alignment"
+  scheduledAt        DateTime
+  durationMinutes    Int                @default(45)
+  meetingLink        String?
+  status             InterviewStatus    @default(SCHEDULED)
+  interviewerId      String?
+  interviewer        User?              @relation("InterviewerSchedules", fields: [interviewerId], references: [id], onDelete: SetNull)
+  scheduledById      String
+  scheduledBy        User               @relation("SchedulerSchedules", fields: [scheduledById], references: [id])
+  rescheduleReason   String?
+  cancellationReason String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  feedback           InterviewFeedback?
+
+  @@index([applicationId])
+  @@index([interviewerId])
+  @@map("interview_schedules")
+}
+
+model InterviewFeedback {
+  id              String                  @id @default(uuid())
+  scheduleId      String                  @unique
+  schedule        InterviewSchedule       @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  interviewerId   String
+  interviewer     User                    @relation("InterviewerFeedbacks", fields: [interviewerId], references: [id])
+  ratings         Json                    // Structured criteria ratings
+  recommendation  InterviewRecommendation
+  summaryNotes    String                  // Confidential internal evaluation notes
+  submittedAt     DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@map("interview_feedbacks")
+}
+
+// -----------------------------------------------------------------------------
+// Seven-Working-Day Supervised Evaluation & Intern Entry (Prompt 5)
+// -----------------------------------------------------------------------------
+
+enum EvaluationStatus {
+  PENDING_TRIGGER   // Selected for evaluation, waiting for approved start trigger (OD-001)
+  IN_PROGRESS       // Actively in 7-working-day evaluation window
+  UNDER_REVIEW      // Checkpoints finished, awaiting supervisor final review
+  PASSED            // Supervisor & HR approved pass
+  FAILED            // Did not meet pass threshold
+  EXTENDED          // Supervised evaluation extended
+}
+
+enum CheckpointStatus {
+  PENDING
+  SUBMITTED
+  REVIEWED
+  BLOCKED
+}
+
+enum OnboardingStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum IdCardStatus {
+  PENDING_APPROVAL
+  APPROVED
+  ISSUED
+  REVOKED
+}
+
+model InternshipEnrollment {
+  id                 String               @id @default(uuid())
+  applicationId      String               @unique
+  application        Application          @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  userId             String
+  user               User                 @relation("InternEnrollments", fields: [userId], references: [id], onDelete: Cascade)
+  supervisorId       String?
+  supervisor         User?                @relation("SupervisorEnrollments", fields: [supervisorId], references: [id], onDelete: SetNull)
+  startDate          DateTime?            // Triggered start date (OD-001)
+  endDate            DateTime?            // Computed 7th working day end date (OD-002)
+  workingDaysTarget  Int                  @default(7)
+  status             EvaluationStatus     @default(PENDING_TRIGGER)
+  checkpointConfig   Json?                // Configurable milestone settings
+  finalReviewNotes   String?              // Supervisor final evaluation summary
+  evaluatedById      String?
+  evaluatedBy        User?                @relation("EvaluatorEnrollments", fields: [evaluatedById], references: [id], onDelete: SetNull)
+  evaluatedAt        DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  checkpoints        EvaluationCheckpoint[]
+  onboarding         InternOnboarding?
+  idCard             InternIdCard?
+  tasks              InternTask[]
+  progressReports    ProgressReport[]
+  completion         InternCompletion?
+  certificate        Certificate?
+
+  @@index([userId])
+  @@index([supervisorId])
+  @@index([status])
+  @@map("internship_enrollments")
+}
+
+model EvaluationCheckpoint {
+  id                 String               @id @default(uuid())
+  enrollmentId       String
+  enrollment         InternshipEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  dayNumber          Int                  // Day 1 to 7
+  title              String
+  description        String?
+  submissionNotes    String?              // Intern submitted task notes
+  supervisorFeedback String?              // Supervisor evaluation notes
+  status             CheckpointStatus     @default(PENDING)
+  reviewedById       String?
+  reviewedAt         DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@unique([enrollmentId, dayNumber])
+  @@map("evaluation_checkpoints")
+}
+
+model InternOnboarding {
+  id                 String               @id @default(uuid())
+  enrollmentId       String               @unique
+  enrollment         InternshipEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  userId             String
+  checklistItems     Json                 // Array of items with id, label, completed, verifiedAt
+  status             OnboardingStatus     @default(PENDING)
+  completedAt        DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@map("intern_onboardings")
+}
+
+model InternIdCard {
+  id                 String               @id @default(uuid())
+  enrollmentId       String               @unique
+  enrollment         InternshipEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  userId             String
+  cardNumber         String?              @unique // Generated ID card identifier e.g. GARA-INT-2026-XXXX
+  status             IdCardStatus         @default(PENDING_APPROVAL)
+  approvedById       String?
+  approvedBy         User?                @relation("IdCardApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt         DateTime?
+  issuedAt           DateTime?
+  metadata           Json?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@map("intern_id_cards")
+}
+
+// -----------------------------------------------------------------------------
+// Internship Tasks, Work Tracking & Progress Reports (Prompt 6)
+// -----------------------------------------------------------------------------
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  ASSIGNED
+  IN_PROGRESS
+  SUBMITTED
+  REVISION_REQUESTED
+  COMPLETED
+  BLOCKED
+}
+
+enum SubmissionReviewStatus {
+  PENDING
+  APPROVED
+  REVISION_REQUESTED
+}
+
+enum ProgressCadence {
+  WEEKLY
+  BIWEEKLY
+  MILESTONE
+  CHECKPOINT
+}
+
+model InternTask {
+  id                 String               @id @default(uuid())
+  enrollmentId       String
+  enrollment         InternshipEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  title              String
+  description        String
+  priority           TaskPriority         @default(MEDIUM)
+  dueDate            DateTime?
+  status             TaskStatus           @default(ASSIGNED)
+  assignedById       String
+  assignedBy         User                 @relation("AssignedInternTasks", fields: [assignedById], references: [id])
+  changeRequestNotes String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  submissions        TaskSubmission[]
+
+  @@index([enrollmentId])
+  @@index([status])
+  @@map("intern_tasks")
+}
+
+model TaskSubmission {
+  id                  String                 @id @default(uuid())
+  taskId              String
+  task                InternTask             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  versionNumber       Int                    @default(1)
+  submissionNotes     String
+  deliverableUrls     Json?                  // Array of deliverables/links
+  status              SubmissionReviewStatus @default(PENDING)
+  supervisorFeedback  String?
+  reviewedById        String?
+  reviewedBy          User?                  @relation("ReviewedTaskSubmissions", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt          DateTime?
+  submittedAt         DateTime               @default(now())
+
+  @@index([taskId])
+  @@map("task_submissions")
+}
+
+model ProgressReport {
+  id                 String               @id @default(uuid())
+  enrollmentId       String
+  enrollment         InternshipEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  cadence            ProgressCadence      @default(WEEKLY)
+  periodIdentifier   String               // e.g. "Week 1", "Week 2", "Milestone 1"
+  summary            String
+  learnings          String?
+  blockers           String?
+  supervisorFeedback String?
+  submittedAt        DateTime             @default(now())
+  reviewedAt         DateTime?
+
+  @@index([enrollmentId])
+  @@map("progress_reports")
+}
+
+// -----------------------------------------------------------------------------
+// Internship Completion & Certificate Verification (Prompt 6)
+// -----------------------------------------------------------------------------
+
+enum CompletionStatus {
+  IN_PROGRESS
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum CertificateStatus {
+  ACTIVE
+  REVOKED
+  SUPERSEDED
+}
+
+model InternCompletion {
+  id                       String               @id @default(uuid())
+  enrollmentId             String               @unique
+  enrollment               InternshipEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  status                   CompletionStatus     @default(PENDING_REVIEW)
+  checklistResponses       Json                 // Array of checklist items { id, label, completed, verifiedAt }
+  isEligibleForCertificate Boolean              @default(false)
+  completionNotes          String?
+  approvedById             String?
+  approvedBy               User?                @relation("ApprovedCompletions", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt               DateTime?
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
+
+  @@map("intern_completions")
+}
+
+model Certificate {
+  id               String               @id @default(uuid())
+  verificationCode String               @unique // Unique verification identifier
+  enrollmentId     String               @unique // Enforces idempotency: only 1 certificate per enrollment
+  enrollment       InternshipEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  recipientName    String
+  programmeTitle   String
+  issueDate        DateTime
+  completionDate   DateTime
+  signatoryTitle   String               // Configurable signatory title (OD-009)
+  signatoryName    String               // Configurable signatory name (OD-009)
+  pdfStorageKey    String?
+  qrPayloadUrl     String
+  status           CertificateStatus    @default(ACTIVE)
+  revocationReason String?
+  revokedAt        DateTime?
+  versionNumber    Int                  @default(1)
+  issuedById       String?
+  issuedBy         User?                @relation("IssuedCertificates", fields: [issuedById], references: [id], onDelete: SetNull)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  reissueHistory   CertificateReissueHistory[]
+  verificationLogs CertificateVerificationLog[]
+
+  @@map("certificates")
+}
+
+model CertificateReissueHistory {
+  id                  String      @id @default(uuid())
+  certificateId       String
+  certificate         Certificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+  previousCode        String
+  newCode             String
+  reason              String
+  requestedById       String
+  requestedBy         User        @relation("RequestedReissues", fields: [requestedById], references: [id])
+  createdAt           DateTime    @default(now())
+
+  @@map("certificate_reissue_histories")
+}
+
+model CertificateVerificationLog {
+  id            String      @id @default(uuid())
+  certificateId String
+  certificate   Certificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+  queriedAt     DateTime    @default(now())
+  ipHash        String
+  userAgent     String?
+
+  @@index([certificateId])
+  @@map("certificate_verification_logs")
+}
+
+// -----------------------------------------------------------------------------
+// Full-Time Recruitment & Employee Core (Prompt 7)
+// -----------------------------------------------------------------------------
+
+enum OfferStatus {
+  DRAFT
+  EXTENDED
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  REVOKED
+}
+
+model JobOffer {
+  id                  String      @id @default(uuid())
+  applicationId       String      @unique
+  application         Application @relation("ApplicationOffer", fields: [applicationId], references: [id], onDelete: Cascade)
+  status              OfferStatus @default(DRAFT)
+  expectedJoiningDate DateTime
+  department          String
+  designation         String
+  location            String?
+  termsSummary        String      // Agreed terms summary (OD-007 / OD-008: No fake statutory formulas or unapproved salary models)
+  extendedById        String?
+  extendedBy          User?       @relation("ExtendedJobOffers", fields: [extendedById], references: [id], onDelete: SetNull)
+  extendedAt          DateTime?
+  decisionAt          DateTime?
+  declineReason       String?
+  notes               String?     // Internal notes for staff
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  @@index([applicationId])
+  @@map("job_offers")
+}
+
+model EmploymentHistory {
+  id            String    @id @default(uuid())
+  employeeId    String
+  employee      Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  changeType    String    // DESIGNATION_CHANGE, DEPARTMENT_CHANGE, MANAGER_CHANGE, STATUS_CHANGE, NOTE
+  previousValue String?
+  newValue      String
+  effectiveDate DateTime  @default(now())
+  remarks       String?
+  changedById   String?
+  changedBy     User?     @relation("ChangedEmploymentHistories", fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime  @default(now())
+
+  @@index([employeeId])
+  @@map("employment_histories")
+}
+
+model EmployeeDocument {
+  id             String    @id @default(uuid())
+  employeeId     String
+  employee       Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  documentType   String    // e.g. "GOVERNMENT_ID", "DEGREE_CERTIFICATE", "OFFER_LETTER", "RELIEVING_LETTER"
+  title          String
+  storageKey     String    // Private storage path (never public)
+  mimeType       String
+  fileSizeBytes  Int
+  isConfidential Boolean   @default(true)
+  uploadedById   String
+  uploadedBy     User      @relation("UploadedEmployeeDocuments", fields: [uploadedById], references: [id])
+  uploadedAt     DateTime  @default(now())
+
+  @@index([employeeId])
+  @@map("employee_documents")
+}
+
+model EmployeePerformanceReview {
+  id          String   @id @default(uuid())
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  reviewCycle String   // e.g. "2026-H1", "PROBATION_REVIEW"
+  status      String   @default("DRAFT") // DRAFT, SUBMITTED, FINALIZED
+  reviewerId  String
+  reviewer    User     @relation("PerformanceReviewers", fields: [reviewerId], references: [id])
+  reviewData  Json     // Configurable criteria responses
+  summary     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([employeeId])
+  @@map("employee_performance_reviews")
+}
+
+model EmployeeExitRecord {
+  id                  String    @id @default(uuid())
+  employeeId          String    @unique
+  employee            Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  resignationDate     DateTime?
+  lastWorkingDate     DateTime
+  reason              String?
+  clearanceChecklist  Json?     // Handover, IT assets, Access revocation
+  exitInterviewNotes  String?
+  status              String    @default("PENDING") // PENDING, CLEARED, FINALIZED
+  processedById       String?
+  processedBy         User?     @relation("ExitProcessors", fields: [processedById], references: [id], onDelete: SetNull)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@map("employee_exit_records")
+}
+
+// -----------------------------------------------------------------------------
+// HRMS Modules (Prompt 8: Attendance, Leave & Payroll Foundations)
+// -----------------------------------------------------------------------------
+
+// Prompt 8A: Attendance Structural Record Foundations (OD-006 / D-10)
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  ON_LEAVE
+  REGULARIZATION_PENDING
+}
+
+enum AttendanceEntryMethod {
+  WEB_PORTAL
+  MANUAL_ENTRY
+  SYSTEM_IMPORT
+}
+
+model AttendanceRecord {
+  id              String                @id @default(uuid())
+  employeeId      String
+  employee        Employee              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date            DateTime              // Working day date
+  checkInTime     DateTime?
+  checkOutTime    DateTime?
+  status          AttendanceStatus      @default(PRESENT)
+  entryMethod     AttendanceEntryMethod @default(WEB_PORTAL)
+  notes           String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  regularizations AttendanceRegularization[]
+
+  @@unique([employeeId, date])
+  @@index([employeeId])
+  @@index([date])
+  @@map("attendance_records")
+}
+
+enum RegularizationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model AttendanceRegularization {
+  id                 String               @id @default(uuid())
+  employeeId         String
+  employee           Employee             @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  attendanceRecordId String
+  attendanceRecord   AttendanceRecord     @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
+  requestedCheckIn   DateTime?
+  requestedCheckOut  DateTime?
+  reason             String
+  status             RegularizationStatus @default(PENDING)
+  reviewNotes        String?
+  reviewedById       String?
+  reviewedBy         User?                @relation("AttendanceApprovers", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt         DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@index([employeeId])
+  @@index([attendanceRecordId])
+  @@map("attendance_regularizations")
+}
+
+// Prompt 8B: Leave Structural Record Foundations (OD-007 / D-11)
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model LeaveType {
+  id               String         @id @default(uuid())
+  code             String         @unique // e.g. "CASUAL", "SICK", "EARNED"
+  name             String
+  description      String?
+  isPaid           Boolean        @default(true)
+  requiresApproval Boolean        @default(true)
+  isActive         Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  leaveRequests    LeaveRequest[]
+
+  @@map("leave_types")
+}
+
+model LeaveRequest {
+  id           String             @id @default(uuid())
+  employeeId   String
+  employee     Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveTypeId  String
+  leaveType    LeaveType          @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  startDate    DateTime
+  endDate      DateTime
+  reason       String
+  status       LeaveRequestStatus @default(PENDING)
+  reviewNotes  String?
+  reviewedById String?
+  reviewedBy   User?              @relation("LeaveApprovers", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([employeeId])
+  @@index([leaveTypeId])
+  @@map("leave_requests")
+}
+
+// Prompt 8C: Payroll Structural Record Foundations (OD-008 / D-12)
+enum PayrollStatus {
+  DRAFT
+  FINALIZED
+  PAID
+  VOID
+}
+
+model PayrollPeriod {
+  id        String          @id @default(uuid())
+  code      String          @unique // e.g. "2026-04"
+  startDate DateTime
+  endDate   DateTime
+  status    PayrollStatus   @default(DRAFT)
+  notes     String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  records   PayrollRecord[]
+
+  @@map("payroll_periods")
+}
+
+model PayrollRecord {
+  id                    String        @id @default(uuid())
+  payrollPeriodId       String
+  payrollPeriod         PayrollPeriod @relation(fields: [payrollPeriodId], references: [id], onDelete: Cascade)
+  employeeId            String
+  employee              Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  status                PayrollStatus @default(DRAFT)
+  disbursementReference String?       // Bank transfer / UTR reference
+  disbursedAt           DateTime?
+  notes                 String?       // Audit notes (NO calculated pay formulas)
+  finalizedById         String?
+  finalizedBy           User?         @relation("PayrollFinalizers", fields: [finalizedById], references: [id], onDelete: SetNull)
+  finalizedAt           DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@unique([payrollPeriodId, employeeId])
+  @@index([employeeId])
+  @@index([payrollPeriodId])
+  @@map("payroll_records")
+}
+
+// -----------------------------------------------------------------------------
+// Analytics & Platform Telemetry
+// -----------------------------------------------------------------------------
+
+model SiteVisitor {
+  id          String   @id @default(uuid())
+  visitorId   String   @unique
+  ipHash      String?
+  userAgent   String?
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @updatedAt
+
+  @@index([visitorId])
+  @@index([ipHash])
+  @@map("site_visitors")
+}
+
+
+
