@@ -1,0 +1,123 @@
+import { Suspense } from "react";
+import Link from "next/link";
+import { Navbar } from "@/components/navigation/navbar";
+import { Footer } from "@/components/navigation/footer";
+import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/feedback/empty-state";
+import { getPublicOpenings } from "@/features/openings/services/opening-service";
+import { Briefcase, Building, ArrowRight } from "lucide-react";
+
+export const metadata = {
+  title: "Careers & Openings",
+  description: "Explore structured internship programs and full-time career opportunities at GARA Innovation.",
+};
+
+// Next.js 16 Cache Components: Allow streaming/blocking data access
+export const instant = false;
+
+function OpeningsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
+      {[1, 2, 3, 4, 5, 6].map((i) => (
+        <div key={i} className="rounded-3xl border border-border/80 bg-card/80 p-6 space-y-4">
+          <div className="flex justify-between items-center">
+            <div className="h-5 w-24 rounded-full bg-muted/80" />
+            <div className="h-4 w-16 rounded bg-muted/80" />
+          </div>
+          <div className="h-6 w-3/4 rounded bg-muted/80" />
+          <div className="space-y-2">
+            <div className="h-3.5 w-full rounded bg-muted/60" />
+            <div className="h-3.5 w-5/6 rounded bg-muted/60" />
+          </div>
+          <div className="pt-4 border-t border-border/40">
+            <div className="h-9 w-full rounded-xl bg-muted/80" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+async function OpeningsList() {
+  const openings = await getPublicOpenings();
+
+  if (openings.length === 0) {
+    return (
+      <EmptyState
+        title="No open positions currently available"
+        description="We do not have active public vacancies at this moment. New cohorts are published regularly, please check back soon."
+        icon={<Briefcase className="h-6 w-6 text-primary" />}
+      />
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {openings.map((opening) => (
+        <Card
+          key={opening.id}
+          className="flex flex-col justify-between rounded-3xl border border-border/80 bg-card/85 hover:border-primary/50 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300"
+        >
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <Badge variant={opening.type === "INTERNSHIP" ? "default" : "secondary"}>
+                {opening.type === "INTERNSHIP" ? "Internship Cohort" : "Full-Time Position"}
+              </Badge>
+              <span className="text-xs text-muted-foreground capitalize flex items-center gap-1">
+                <Building className="h-3 w-3" />
+                {opening.workplaceType.toLowerCase()}
+              </span>
+            </div>
+            <CardTitle className="font-[family-name:var(--font-display)] text-xl font-bold line-clamp-1">
+              {opening.title}
+            </CardTitle>
+          </CardHeader>
+
+          <CardContent className="pb-4">
+            <p className="text-xs sm:text-sm text-muted-foreground line-clamp-3 leading-relaxed">
+              {opening.description}
+            </p>
+          </CardContent>
+
+          <CardFooter className="pt-3 border-t border-border/50">
+            <Link href={`/careers/${opening.slug}`} className="w-full">
+              <Button variant="outline" size="sm" className="w-full justify-between gap-2">
+                <span>View Role & Requirements</span>
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            </Link>
+          </CardFooter>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+export default function CareersPage() {
+  return (
+    <div className="min-h-screen flex flex-col bg-background text-foreground">
+      <Navbar />
+
+      <main className="flex-1 py-12 md:py-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          {/* Page Header */}
+          <div className="text-center max-w-6xl mx-auto mb-12 space-y-3">
+            
+            <h1 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-foreground">
+              Current Openings & Internship Cohorts
+            </h1>
+          </div>
+
+          {/* Openings Grid streamed inside Suspense */}
+          <Suspense fallback={<OpeningsSkeleton />}>
+            <OpeningsList />
+          </Suspense>
+        </div>
+      </main>
+
+      <Footer />
+    </div>
+  );
+}

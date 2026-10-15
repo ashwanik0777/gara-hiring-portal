@@ -1,0 +1,310 @@
+# Open Decisions — GARA Innovation
+
+> This document tracks business and product decisions that have NOT been approved by the product owner.
+> **No engineer may invent, assume, or implement rules for these items.**
+> Each item must be resolved with explicit product-owner approval before implementation.
+>
+> Items are drawn from `docs/PROJECT_BASELINE.md` Section 4 (D-01 through D-20) and supplemented
+> with engineering-identified gaps. Baseline IDs are preserved as cross-references.
+
+---
+
+## OD-001: Internship Evaluation Start Trigger *(Baseline D-01)*
+
+**Question:** What event starts the 7-working-day evaluation countdown? Is it the interview decision, candidate acceptance, supervisor assignment, or another event?
+
+**Why it matters:** The evaluation window determines deadlines for mentor reviews, task completion tracking, and pass/fail determination. Getting this wrong means interns may be evaluated against the wrong timeline.
+
+**Affected modules:** `internship-evaluation`, `progress`, `intern-tasks`, `notifications`
+
+**Safe work that can proceed:** UI scaffolding for evaluation screens, database schema for evaluation records (without trigger logic), notification templates.
+
+**Status Update (Prompt 5):** Implemented `InternshipEnrollment` with `PENDING_TRIGGER` status. The 7-working-day countdown does not start automatically upon candidate acceptance; it requires an explicit manual trigger (`triggerEvaluationStartAction`) by authorized staff (`ADMIN`, `HR`, or assigned supervisor), which stamps `startDate` and schedules the 7 daily checkpoints using the working day calculation engine.
+
+**Blocked until approval:** Automated countdown triggers (if any), automated reminder scheduling.
+
+---
+
+## OD-002: Holiday Calendar for Working-Day Calculation *(Baseline D-02)*
+
+**Question:** Which days count as working days? What weekends/holidays calendar applies? How are absence, paused evaluation, or extensions handled?
+
+**Why it matters:** "7 working days" is meaningless without a defined calendar. Different calendars yield different end dates.
+
+**Affected modules:** `internship-evaluation`, `attendance`, `leave`
+
+**Safe work that can proceed:** Schema for a configurable holiday calendar table. Working-day calculation service that accepts an explicitly configured calendar.
+
+**Status Update (Prompt 5):** Implemented `WorkingDayService` (`src/features/internship-evaluation/services/working-day-service.ts`) accepting a structured `WorkingDayCalendarConfig` (custom working days of week, arbitrary holiday strings `YYYY-MM-DD`, and timezone support). A neutral default configuration is provided, but no official corporate holiday dates were assumed or hardcoded. Full test coverage validates custom calendar handling and weekend/holiday skipping.
+
+**Blocked until approval:** Company-wide official holiday calendar feed/approval, absence and pause handling policies.
+
+---
+
+## OD-003: Evaluation Criteria and Pass/Fail Rules *(Baseline D-03)*
+
+**Question:** What evaluation criteria, minimum outcome, reviewer, and approval authority decide pass/fail? Is extension or re-review possible?
+
+**Why it matters:** Without defined criteria, the system cannot make or support pass/fail decisions. Arbitrary criteria could lead to disputes.
+
+**Affected modules:** `internship-evaluation`, `progress`, `certificates`, `onboarding`
+
+**Safe work that can proceed:** Evaluation form UI (without scoring logic), schema for storing evaluation results.
+
+**Status Update (Prompt 5):** Daily checkpoint feedback and scoring are captured via `EvaluationCheckpoint` records with supervisor notes and scores. Final pass/fail determination is not automated by heuristic algorithms; it strictly requires an authorized human decision via `finalizeEvaluationAction` (with explicit review notes and decision maker attribution).
+
+**Blocked until approval:** Automated threshold scoring rules, programmatic auto-pass/fail conditions, employee conversion rules.
+
+---
+
+## OD-004: Interview Rounds and Decision Authority *(Baseline D-04)*
+
+**Question:** What are the exact interview rounds, their order, required feedback fields, and authorized final decision-makers for each opening type?
+
+**Why it matters:** The recruitment workflow depends on knowing how many rounds exist, what data is captured per round, and who has authority to make the final selection decision. Generic primitives can be built, but production workflows cannot be enabled without this.
+
+**Affected modules:** `interviews`, `recruitment`, `notifications`
+
+**Safe work that can proceed:** Configurable interview round data structures, generic feedback forms, scheduling UI.
+
+**Status Update (Prompt 4):** Configurable interview scheduling (`InterviewSchedule`), round ordering, date/time timezone handling, reschedule/cancellation justification tracking, and structured scorecard feedback (`InterviewFeedback`) are implemented. As required by engineering policy, interviewer recommendations (`STRONG_HIRE`, `HIRE`, `HOLD`, `NO_HIRE`) remain strictly advisory and separated from administrative final stage decisions (which require `ADMIN` or `HR` role authorization). Fixed round workflows and auto-advancement rules remain policy-gated pending business approval.
+
+**Blocked until approval:** Fixed interview workflows, round-specific validation, final decision transitions with authority checks.
+
+---
+
+## OD-005: Candidate Profile and Application Policies *(Baseline D-05)*
+
+**Question:** Which candidate profile fields are required? What happens on duplicate applications, account deletion, email change, and password recovery? Can one account apply to multiple openings?
+
+**Why it matters:** These rules affect data integrity, user experience, and privacy. Allowing or blocking duplicate applications has significant UX and fairness implications.
+
+**Affected modules:** `auth`, `applications`, `openings`
+
+**Safe work that can proceed:** Basic candidate profile, application form rendering, submission record creation.
+
+**Status Update (Prompt 3):** Candidate profiles and dynamic application form rendering are implemented. In accordance with Prompt 3 instructions, no arbitrary restrictions were imposed on applying to multiple openings, and active submissions are recorded with full status history and immutable form version references. Strict duplicate blocking remains policy-gated pending product owner approval.
+
+**Blocked until approval:** Duplicate application enforcement, account deletion workflow, required-field validation rules.
+
+---
+
+## OD-006: Attendance Policies *(Baseline D-10)*
+
+**Question:** What attendance method is needed (manual entries, timesheets, shift/roster, location, biometric, or import)? What are correction and approval rules? What are work hours, grace periods, overtime rules?
+
+**Why it matters:** Attendance directly affects leave calculations, payroll, and compliance. Wrong assumptions create legal and financial risk.
+
+**Affected modules:** `attendance`, `leave`, `payroll`
+
+**Safe work that can proceed:** Schema design for attendance records (clock-in/out timestamps). UI wireframes.
+
+**Status Update (Prompt 8A):** Implemented structural data models (`AttendanceRecord`, `AttendanceRegularization`) and safe operational service under `src/features/attendance/`. Supports timestamp logging and correction requests. Lateness penalties, overtime formulas, and automatic timer inferences are explicitly policy-gated and throw `PolicyBlockedError("OD-006")`. Non-calculating UI placeholder live at `/hrms/attendance`.
+
+**Blocked until approval:** Attendance calculation logic, policy enforcement, overtime computation, correction workflows, hardware/provider integration.
+
+---
+
+## OD-007: Leave Policies *(Baseline D-11)*
+
+**Question:** What leave types exist and their eligibility rules? What are accrual/balance rules, carry-forward limits, holiday calendars, half-day rules, approval chains, and leave-year definitions?
+
+**Why it matters:** Leave policies vary by jurisdiction and organization. Incorrect leave calculations create legal liability.
+
+**Affected modules:** `leave`, `attendance`, `payroll`
+
+**Safe work that can proceed:** Schema for leave types, leave requests, and approval records.
+
+**Status Update (Prompt 8B):** Implemented structural data models (`LeaveType`, `LeaveRequest`) and request/approval service under `src/features/leave/`. Leave balance accruals, encashments, and carry-forward formulas are explicitly policy-gated and throw `PolicyBlockedError("OD-007")`. Non-calculating UI placeholder live at `/hrms/leave`.
+
+**Blocked until approval:** Leave balance calculation, accrual logic, policy enforcement, leave-payroll integration.
+
+---
+
+## OD-008: Payroll Rules and Statutory Requirements *(Baseline D-12)*
+
+**Question:** What does payroll mean for v1 — records/export or calculation engine? What are salary components, pay cycle, deductions, payslip fields, employee classifications, and applicable statutory/tax rules? Who validates the calculations?
+
+**Why it matters:** Payroll errors have direct legal and financial consequences. Every jurisdiction has specific statutory requirements.
+
+**Affected modules:** `payroll`, `attendance`, `leave`, `employees`
+
+**Safe work that can proceed:** Schema for payroll records and salary components. Module boundary documentation. Non-calculating placeholder screens (clearly labeled).
+
+**Status Update (Prompt 8C):** Implemented structural data models (`PayrollPeriod`, `PayrollRecord`) and safe disbursement tracking service under `src/features/payroll/`. Produced comprehensive `docs/PAYROLL_REQUIREMENTS.md` checklist covering scope options (records/export vs calculation engine), salary components, statutory deductions, and legal sign-offs. Salary component calculations and statutory deduction engines are explicitly policy-gated and throw `PolicyBlockedError("OD-008")`. Non-calculating UI placeholder live at `/hrms/payroll`.
+
+**Blocked until approval:** All salary calculations, deduction computations, payslip generation, statutory compliance logic.
+
+---
+
+## OD-009: Certificate Eligibility Rules *(Baseline D-07 partial, D-09)*
+
+**Question:** Who is eligible for an internship certificate? What is the normal internship duration, extension policy, early-exit process, and certificate eligibility checklist? Who is the certificate signatory? What exact fields, issue-number pattern, corrections/reissue process, and public verification data are approved?
+
+**Why it matters:** Certificate eligibility must be clear and defensible. Issuing certificates incorrectly damages credibility. Signatory must be verifiable.
+
+**Affected modules:** `certificates`, `internship-evaluation`
+
+**Safe work that can proceed:** Certificate template design, QR code generation mechanism, verification endpoint scaffolding, PDF service interface.
+
+**Status Update (Prompt 6):** Implemented `InternCompletion` and `Certificate` models, pure TypeScript vector PDF generator (`VectorPdfBuilder` / `CertificatePdfGenerator`), server actions (`recordCompletionChecklistAction`, `issueCertificateAction`, `reissueCertificateAction`), and public verification endpoint (`/verify/[code]`). Certificate generation is strictly policy-gated: requires an authorized `ADMIN` or `HR` role, an approved completion checklist (`status === APPROVED`), and explicit eligibility confirmation (`isEligibleForCertificate: true`). Idempotency is enforced so repeated requests do not duplicate certificates. Public verification strictly redacts all internal evaluation scores, mentor notes, applicant IDs, and candidate contact details. Reissues are tracked with mandatory justification in `CertificateReissueHistory`.
+
+**Blocked until approval:** Official signatory named assignment, final printed certificate layout approval, statutory eligibility duration thresholds.
+
+---
+
+## OD-010: Data Retention and Archival Policy *(Baseline D-06)*
+
+**Question:** What is the retention period and deletion/anonymization policy for rejected applications and candidate documents? Who can access archived records? What about employee data retention after exit?
+
+**Why it matters:** Retaining too much data creates privacy/legal risk. Deleting too early loses legally required records.
+
+**Affected modules:** All modules handling personal data
+
+**Safe work that can proceed:** Schema design supporting soft deletion and archival flags.
+
+**Blocked until approval:** Automated retention enforcement, anonymization procedures, data purge jobs, candidate data deletion workflows.
+
+---
+
+## OD-011: Chatbot AI Provider and Scope *(Baseline D-18)*
+
+**Question:** Which AI provider/model is approved for the chatbot? Which FAQ/policy documents are authoritative? What is the fallback when AI is unavailable? What data types may be sent to the provider?
+
+**Why it matters:** Sending candidate/employee PII to an unapproved AI provider creates privacy and compliance risk.
+
+**Affected modules:** `chatbot`, `infrastructure/ai`
+
+**Safe work that can proceed:** Chatbot UI scaffolding, adapter interface design, approved static FAQ content, FAQ/help foundation.
+
+**Status Update (Prompt 9):** Implemented replaceable `AiProviderAdapter` interface (`src/infrastructure/ai/ai-provider.interface.ts`), versioned approved FAQ knowledge base (`v1.0.0` in `src/infrastructure/ai/faq-knowledge-base.ts`), and `PortalAssistantProvider` (`src/infrastructure/ai/portal-assistant-provider.ts`) with prompt-injection defense, out-of-scope refusal, PII redaction (`sanitizeQueryForAiProvider`), and graceful fallback when an external AI model fails or is unconfigured. Implemented `ChatbotService` (`src/features/chatbot/services/chatbot-service.ts`) with strict server-side authorization (`user.id`) for personal status queries, blocking all cross-candidate status lookups with `ForbiddenError` and never sending resumes, employee files, payroll data, or private evaluation notes to an AI provider. No external paid or free LLM model has been selected or activated without approval.
+
+**Blocked until approval:** External AI model selection/credentials, retention policy for external AI interactions.
+
+---
+
+## OD-012: Email Provider Selection *(Baseline D-15)*
+
+**Question:** Which email provider/domain will be used? What sender/from address is authorized? Nodemailer is confirmed as the transport library.
+
+**Why it matters:** Provider choice affects deliverability, cost, rate limits, and sender reputation. The adapter pattern isolates this, but a provider must be selected for production testing.
+
+**Affected modules:** `infrastructure/email`, `notifications`
+
+**Safe work that can proceed:** Nodemailer adapter with configurable SMTP settings, email templates, delivery-state tracking.
+
+**Blocked until approval:** Production email configuration, deliverability testing, sender domain verification.
+
+---
+
+## OD-013: File Storage Provider *(Baseline D-16)*
+
+**Question:** Which production object-storage provider will be selected? What file limits and retention rules apply?
+
+**Why it matters:** Private documents need secure, access-controlled storage with time-limited URLs. Provider choice affects cost and implementation.
+
+**Affected modules:** `infrastructure/storage`, `applications`, `employees`, `certificates`
+
+**Safe work that can proceed:** Storage adapter interface with upload/download/signed-URL contracts. Safe local development implementation.
+
+**Status Update (Prompt 3):** `StorageService` interface and `LocalStorageService` implemented under `src/infrastructure/storage/`. Files are strictly written to `.storage/private/` outside `public/`. A production runtime assertion throws an error if local storage is invoked in production, preventing accidental deployment without an approved cloud object store.
+
+**Blocked until approval:** Provider-specific implementation, production storage configuration, file retention rules.
+
+---
+
+## OD-014: Onboarding and Intern ID Card *(Baseline D-08)*
+
+**Question:** What onboarding documents, verification checks, ID-card fields/number format, issuer, and validity rules are required?
+
+**Why it matters:** Onboarding checklists and ID cards require specific approved fields. Inventing ID number formats or required documents creates incorrect records.
+
+**Affected modules:** `onboarding`, `employees`, `certificates`
+
+**Safe work that can proceed:** Onboarding checklist data structure, ID card record schema.
+
+**Status Update (Prompt 5):** Implemented `InternOnboarding` and `InternIdCard` models along with UI panels and server actions (`updateOnboardingItemAction`, `issueIdCardAction`). The system strictly gates ID card generation: it requires evaluation status `PASSED`, all required onboarding checklist items verified (`COMPLETED`), and an authorized `ADMIN` or `HR` role. ID cards are never issued prematurely merely because 7 days elapsed.
+
+**Blocked until approval:** Final ID card printable card layout/PDF template, formal ID numbering series specification, digital signature approval.
+
+---
+
+## OD-015: Employee Lifecycle Policies *(Baseline D-13)*
+
+**Question:** What are the department, designation, reporting manager, probation, employee review, transfer, and exit/offboarding policies?
+
+**Why it matters:** Employee lifecycle management requires clear policies for transitions, probation periods, and exit procedures. Inventing these creates incorrect HR workflows.
+
+**Affected modules:** `employees`, `onboarding`
+
+**Safe work that can proceed:** Basic employee profile schema, department/designation data structures, job offer terms tracking without salary deduction engine.
+
+**Status Update (Prompt 7):** Implemented `Employee`, `EmploymentHistory`, `JobOffer`, `EmployeeDocument`, `EmployeePerformanceReview`, and `EmployeeExitRecord` models and service layers under `src/features/employees/`. Full-time recruitment proceeds independently from internship-only 7-working-day evaluation. Gated hiring requires explicit application status `OFFER_ACCEPTED` and `ADMIN` or `HR` authorization. Created employee directory with strict data isolation (confidential phone numbers, emergency contacts, and internal notes are never exposed in public views). Implemented reporting line assignments with circular reporting hierarchy detection. Zero attendance, leave, or payroll calculations were implemented (strictly preserving OD-005, OD-006, and OD-007).
+
+**Blocked until approval:** Formal statutory benefits, performance scoring formulas, statutory deduction formulas, and official clearance sign-off matrices.
+
+---
+
+## OD-016: Configurable Progress Monitoring Settings *(Baseline D-14)*
+
+**Question:** What exact progress reports and task review settings can administrators configure? Which changes apply to an already-running programme?
+
+**Why it matters:** Building a fixed monitoring system may not match organizational needs. Retroactive configuration changes could invalidate in-progress evaluations.
+
+**Affected modules:** `progress`, `intern-tasks`, `reports`
+
+**Safe work that can proceed:** Basic task CRUD, assignment, and status tracking.
+
+**Status Update (Prompt 6):** Implemented `InternTask`, `TaskSubmission` (with incremental versioning and change-request feedback), and `ProgressReport` with configurable cadences (`WEEKLY`, `BIWEEKLY`, `MILESTONE`, `CHECKPOINT`) under `src/features/intern-tasks/`. Interns can submit deliverables and report progress with achievements, learnings, and blockers; supervisors can review submissions and request revisions with change notes. No work-hour metrics or performance calculations were assumed or hardcoded (preserving OD-005).
+
+**Blocked until approval:** Dynamic custom report template builder, programme-level automated cadence reminder schedules.
+
+---
+
+## OD-017: Production Infrastructure *(Baseline D-17)*
+
+**Question:** Which production hosting target, PostgreSQL provider, backup/restore objective, and background worker/scheduler will be used?
+
+**Why it matters:** Production infrastructure choices affect reliability, cost, and operational procedures. Background job processing needs a durable solution (not in-memory).
+
+**Affected modules:** All (deployment), `infrastructure/jobs`
+
+**Safe work that can proceed:** Application development with environment-based configuration. Job adapter interface.
+
+**Blocked until approval:** Production deployment configuration, backup/restore procedures, background worker implementation.
+
+---
+
+## OD-018: GARA Logo and Brand Assets *(Baseline D-19)* — **[RESOLVED ✅]**
+
+**Status:** Resolved on 12 October 2026. The product owner supplied the official GARA logo assets at `public/GARA_LOGO.jpg` and `public/GARA_LOGO.png`.
+
+**Decision & Rule:** Use the exact approved asset without redrawing, recoloring, regenerating, or altering the logo mark. Copy to `public/brand/` as canonical brand assets during foundation initialization.
+
+---
+
+## OD-019: Roles and Permission Matrix *(Baseline D-20)*
+
+**Question:** Confirm exact roles and permission matrix for recruitment staff, interviewers, HR, coordinators, mentors, interns, employees, and super administrators.
+
+**Why it matters:** Authorization is the primary security control. Without a confirmed matrix, role-based access checks may be too permissive or too restrictive.
+
+**Affected modules:** `auth`, all feature modules with authorization
+
+**Safe work that can proceed:** Role constants, auth guard infrastructure, basic candidate/admin distinction.
+
+**Blocked until approval:** Production permission matrix, granular access control per module.
+
+---
+
+## OD-020: Offer Preparation and Acceptance *(Engineering-identified)*
+
+**Question:** What is the offer workflow? What fields appear on an offer? Who authorizes offer creation and extension? What are acceptance/rejection deadlines? Are there salary/compensation fields, and if so, who approves them?
+
+**Why it matters:** Offers are legally and financially significant. The system must not generate offer terms from invented rules.
+
+**Affected modules:** `recruitment`, `employees`, `notifications`
+
+**Safe work that can proceed:** Offer status tracking data structure.
+
+**Blocked until approval:** Offer creation form fields, authorization rules, deadline enforcement, compensation-related fields.
