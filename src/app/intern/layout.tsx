@@ -16,6 +16,12 @@ export default async function InternLayout({
     redirect("/login?callbackUrl=/intern/dashboard");
   }
 
+  const { Role } = await import("@prisma/client");
+  const isIntern = user.roles.includes(Role.INTERN) || user.roles.includes(Role.ADMIN);
+  if (!isIntern) {
+    redirect("/candidate/dashboard");
+  }
+
   const primaryRole = user.roles[0] ?? "INTERN";
 
   return (

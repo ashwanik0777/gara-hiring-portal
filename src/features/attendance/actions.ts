@@ -5,7 +5,7 @@ import { getCurrentUser } from "@/lib/auth/guards";
 import { attendanceService } from "./services/attendance-service";
 import { LogAttendanceSchema } from "./schemas";
 import { prisma } from "@/lib/db";
-import { AttendanceStatus, AttendanceEntryMethod, EmployeeStatus } from "@prisma/client";
+import { AttendanceStatus, AttendanceEntryMethod, EmployeeStatus, Role } from "@prisma/client";
 
 export async function recordAttendanceAction(rawInput: {
   employeeId: string;
@@ -48,6 +48,19 @@ export async function ensureEmployeeForUserAction(userId: string) {
       return { success: false, error: "Authentication required" };
     }
 
+    // Authorization: only ADMIN or HR can create employee profiles
+    const staffRoles: Role[] = [Role.ADMIN, Role.HR, Role.MANAGER];
+    const isStaff = user.roles.some((r) => staffRoles.includes(r as Role));
+    if (!isStaff) {
+      return { success: false, error: "You do not have permission to manage employee profiles." };
+    }
+
+    // Validate userId format to prevent injection
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!userId || !uuidRegex.test(userId)) {
+      return { success: false, error: "Invalid user ID format." };
+    }
+
     // Check if target user has employee profile
     const existing = await prisma.employee.findUnique({
       where: { userId },
@@ -58,20 +71,45 @@ export async function ensureEmployeeForUserAction(userId: string) {
       return { success: true, employeeId: existing.id };
     }
 
-    // Generate new employee code
-    const count = await prisma.employee.count();
-    const employeeCode = `EMP-${String(count + 1).padStart(4, "0")}`;
+    // Verify the target user actually exists
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (!targetUser) {
+      return { success: false, error: "Target user not found." };
+    }
 
-    const newEmp = await prisma.employee.create({
-      data: {
-        userId,
-        employeeCode,
-        designation: "Staff Member",
-        department: "Operations",
-        joiningDate: new Date(),
-        status: EmployeeStatus.ACTIVE,
-      },
-      select: { id: true, employeeCode: true },
+    // Use transaction for race-condition-safe employee code generation
+    const newEmp = await prisma.$transaction(async (tx) => {
+      const count = await tx.employee.count();
+      const employeeCode = `EMP-${String(count + 1).padStart(4, "0")}`;
+
+      const emp = await tx.employee.create({
+        data: {
+          userId,
+          employeeCode,
+          designation: "Staff Member",
+          department: "Operations",
+          joiningDate: new Date(),
+          status: EmployeeStatus.ACTIVE,
+        },
+        select: { id: true, employeeCode: true },
+      });
+
+      // Audit log
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: user.roles[0] || "ADMIN",
+          action: "EMPLOYEE_PROFILE_CREATED",
+          resourceType: "EMPLOYEE",
+          resourceId: emp.id,
+          diffPayload: { targetUserId: userId, employeeCode },
+        },
+      });
+
+      return emp;
     });
 
     revalidatePath("/admin/attendance");

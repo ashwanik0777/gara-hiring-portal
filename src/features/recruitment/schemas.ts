@@ -69,7 +69,7 @@ export const ScheduleInterviewSchema = z.object({
     message: "Valid ISO date/time string is required",
   }),
   durationMinutes: z.coerce.number().int().min(15).max(180).default(45),
-  meetingLink: z.string().url("Please enter a valid meeting URL").or(z.literal("")).optional().nullable(),
+  meetingLink: z.string().url("Please enter a valid meeting URL").refine((u) => u.startsWith("https://") || u.startsWith("http://"), { message: "Meeting link must start with http:// or https://" }).or(z.literal("")).optional().nullable(),
   interviewerId: z.string().uuid("Invalid interviewer ID").optional().nullable(),
 });
 

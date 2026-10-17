@@ -26,7 +26,11 @@ interface AuthSplitScreenProps {
 export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+  const rawCallbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+  // Prevent open redirect: only allow relative paths, disallow protocol-relative URLs
+  const callbackUrl = (rawCallbackUrl.startsWith("/") && !rawCallbackUrl.startsWith("//") && !rawCallbackUrl.includes("://"))
+    ? rawCallbackUrl
+    : "/dashboard";
 
   const [mode, setMode] = useState<"login" | "register" | "forgot">(initialMode);
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import {
   getUniqueVisitorCount,
   trackUniqueVisit,
@@ -39,10 +40,15 @@ export async function POST(req: NextRequest) {
   // Check if visitor already has the persistent cookie
   const existingCookie = req.cookies.get(COOKIE_NAME)?.value || null;
   const ip = getClientIp(req);
+
+  // Validate visitor cookie format if present
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const validatedCookie = (existingCookie && uuidRegex.test(existingCookie)) ? existingCookie : null;
+
   const userAgent = req.headers.get("user-agent") || null;
 
   const result = await trackUniqueVisit({
-    visitorId: existingCookie,
+    visitorId: validatedCookie,
     ip,
     userAgent,
   });

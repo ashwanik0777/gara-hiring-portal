@@ -32,9 +32,9 @@ const CROSS_CANDIDATE_PATTERNS: RegExp[] = [
   /\bstatus\s+of\s+(candidate|applicant|user)\b/i,
 ];
 
-const EMAIL_EXTRACTION_REGEX =
+const EMAIL_EXTRACTION_PATTERN =
   /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const REFERENCE_CODE_REGEX = /\b(?:GARA-APP|APP)-[A-Z0-9-]+\b/gi;
+const REFERENCE_CODE_PATTERN = /\b(?:GARA-APP|APP)-[A-Z0-9-]+\b/gi;
 
 export class ChatbotService {
   private readonly aiProvider: AiProviderAdapter;
@@ -54,8 +54,9 @@ export class ChatbotService {
     if (PERSONAL_STATUS_PATTERNS.some((pattern) => pattern.test(question))) {
       return true;
     }
-    if (REFERENCE_CODE_REGEX.test(question)) {
-      REFERENCE_CODE_REGEX.lastIndex = 0;
+    // Use fresh regex instance to avoid shared lastIndex concurrency race condition
+    const refCodeRegex = new RegExp(REFERENCE_CODE_PATTERN.source, REFERENCE_CODE_PATTERN.flags);
+    if (refCodeRegex.test(question)) {
       return true;
     }
     return false;
@@ -100,7 +101,7 @@ export class ChatbotService {
     }
 
     // 3. Detect email references that belong to another person
-    const mentionedEmails = question.match(EMAIL_EXTRACTION_REGEX) ?? [];
+    const mentionedEmails = question.match(EMAIL_EXTRACTION_PATTERN) ?? [];
     if (mentionedEmails.length > 0) {
       if (!user) {
         throw new UnauthorizedError(
@@ -119,7 +120,7 @@ export class ChatbotService {
     }
 
     // 4. Handle personal status queries server-side using ONLY authenticated user.id
-    const mentionedRefCodes = question.match(REFERENCE_CODE_REGEX) ?? [];
+    const mentionedRefCodes = question.match(new RegExp(REFERENCE_CODE_PATTERN.source, REFERENCE_CODE_PATTERN.flags)) ?? [];
     if (this.isPersonalStatusQuery(question) || mentionedEmails.length > 0) {
       if (!user) {
         throw new UnauthorizedError(

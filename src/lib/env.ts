@@ -82,7 +82,28 @@ function validateEnv(): Env {
       );
     }
   }
-  return result.success ? result.data : envSchema.parse({});
+
+  const parsed = result.success ? result.data : envSchema.parse({});
+
+  // Runtime production safety checks (not during `next build` which also sets NODE_ENV=production)
+  // NEXT_PHASE is set during build; at actual server runtime it's undefined
+  const isActualRuntime = !process.env.NEXT_PHASE;
+  if (parsed.NODE_ENV === "production" && isActualRuntime) {
+    if (parsed.BETTER_AUTH_SECRET === DEV_DEFAULT_AUTH_SECRET) {
+      throw new Error(
+        "CRITICAL: BETTER_AUTH_SECRET is using the development fallback key in production. " +
+        "Set a secure 32+ character secret via environment variable."
+      );
+    }
+    if (parsed.DATABASE_URL.includes("localhost")) {
+      throw new Error(
+        "CRITICAL: DATABASE_URL points to localhost in production. " +
+        "Configure a managed production PostgreSQL connection."
+      );
+    }
+  }
+
+  return parsed;
 }
 
 export const env = validateEnv();

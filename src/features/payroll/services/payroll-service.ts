@@ -108,6 +108,10 @@ export class PayrollService {
       throw new NotFoundError("Payroll record not found.");
     }
 
+    if (record.status === PayrollStatus.PAID) {
+      throw new ValidationError("Disbursement has already been recorded for this payroll record. Duplicate disbursement is not permitted.");
+    }
+
     await prisma.payrollRecord.update({
       where: { id: record.id },
       data: {

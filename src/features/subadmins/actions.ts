@@ -11,7 +11,12 @@ import { z } from "zod";
 const createSubAdminSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   email: z.string().email("Valid email is required"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  password: z.string()
+    .min(10, "Password must be at least 10 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/[0-9]/, "Password must contain at least one number")
+    .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character"),
   role: z.enum([Role.HR, Role.MANAGER, Role.INTERVIEWER, Role.MENTOR]),
   permissions: z.object({
     canApplications: z.boolean().default(true),
@@ -154,6 +159,15 @@ export async function updateSubAdminPermissionsAction(
 
   const { subAdminId, role, permissions } = parsed.data;
 
+  // Prevent modifying accounts that hold the ADMIN role
+  const existingRoles = await prisma.userRole.findMany({
+    where: { userId: subAdminId },
+    select: { role: true },
+  });
+  if (existingRoles.some((r) => r.role === Role.ADMIN)) {
+    return { success: false, error: "Cannot modify a Super Admin's roles or permissions." };
+  }
+
   try {
     await prisma.$transaction(async (tx) => {
       // 1. Update Role
@@ -210,11 +224,44 @@ export async function deleteSubAdminAction(subAdminId: string) {
     return { success: false, error: "Unauthorized. Super Admin access required." };
   }
 
+  // Validate UUID format
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!subAdminId || !uuidRegex.test(subAdminId)) {
+    return { success: false, error: "Invalid sub-admin ID format." };
+  }
+
   if (subAdminId === adminUser.id) {
     return { success: false, error: "Super Admin cannot delete their own account." };
   }
 
+  // Verify target is actually a sub-admin (not an admin or regular user)
+  const targetRoles = await prisma.userRole.findMany({
+    where: { userId: subAdminId },
+    select: { role: true },
+  });
+  const targetHasAdminRole = targetRoles.some((r) => r.role === Role.ADMIN);
+  if (targetHasAdminRole) {
+    return { success: false, error: "Cannot delete a Super Admin account." };
+  }
+  const targetPermission = await prisma.subAdminPermission.findUnique({
+    where: { userId: subAdminId },
+  });
+  if (!targetPermission && targetRoles.length === 0) {
+    return { success: false, error: "Target user is not a sub-admin." };
+  }
+
   try {
+    // Audit log before deletion
+    await prisma.auditLog.create({
+      data: {
+        actorId: adminUser.id,
+        actorRole: "ADMIN",
+        action: "SUBADMIN_DELETED",
+        resourceType: "SUB_ADMIN",
+        resourceId: subAdminId,
+      },
+    });
+
     await prisma.user.delete({
       where: { id: subAdminId },
     });

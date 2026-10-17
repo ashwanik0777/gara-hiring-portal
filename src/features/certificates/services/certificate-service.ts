@@ -24,7 +24,7 @@ export class CertificateService {
    */
   private generateVerificationCode(): string {
     const year = new Date().getFullYear();
-    const randomHex = crypto.randomBytes(3).toString("hex").toUpperCase();
+    const randomHex = crypto.randomBytes(8).toString("hex").toUpperCase();
     return `GARA-CERT-${year}-${randomHex}`;
   }
 
@@ -210,32 +210,34 @@ export class CertificateService {
   ): Promise<PublicCertificateVerificationResult> {
     const cleanCode = verificationCode.trim().toUpperCase();
 
-    // Standard demo codes for live testing, reviewer demonstrations, and verification drills
-    if (cleanCode === "GARA-CERT-2026-DEMO01" || cleanCode === "DEMO-2026-VERIFY") {
-      return {
-        valid: true,
-        status: CertificateStatus.ACTIVE,
-        verificationCode: "GARA-CERT-2026-DEMO01",
-        recipientName: "Aarav Sharma",
-        programmeTitle: "Full Stack Engineering & Cloud Architecture",
-        issueDate: "2026-04-10",
-        completionDate: "2026-04-08",
-        signatoryTitle: "Director of Engineering & Talent Development",
-        signatoryName: "GARA Innovation Academic Council",
-      };
-    }
+    // Demo codes are ONLY available in development/test environments, never in production
+    if (process.env.NODE_ENV !== "production") {
+      if (cleanCode === "GARA-CERT-2026-DEMO01" || cleanCode === "DEMO-2026-VERIFY") {
+        return {
+          valid: true,
+          status: CertificateStatus.ACTIVE,
+          verificationCode: "GARA-CERT-2026-DEMO01",
+          recipientName: "Aarav Sharma",
+          programmeTitle: "Full Stack Engineering & Cloud Architecture",
+          issueDate: "2026-04-10",
+          completionDate: "2026-04-08",
+          signatoryTitle: "Director of Engineering & Talent Development",
+          signatoryName: "GARA Innovation Academic Council",
+        };
+      }
 
-    if (cleanCode === "GARA-CERT-2026-REVOKED") {
-      return {
-        valid: false,
-        status: CertificateStatus.REVOKED,
-        verificationCode: "GARA-CERT-2026-REVOKED",
-        recipientName: "Rohan Verma",
-        programmeTitle: "Data Science & Machine Learning Internship",
-        issueDate: "2026-03-15",
-        completionDate: "2026-03-12",
-        error: "This certificate was revoked on 2026-03-20 due to administrative reissuance.",
-      };
+      if (cleanCode === "GARA-CERT-2026-REVOKED") {
+        return {
+          valid: false,
+          status: CertificateStatus.REVOKED,
+          verificationCode: "GARA-CERT-2026-REVOKED",
+          recipientName: "Rohan Verma",
+          programmeTitle: "Data Science & Machine Learning Internship",
+          issueDate: "2026-03-15",
+          completionDate: "2026-03-12",
+          error: "This certificate was revoked on 2026-03-20 due to administrative reissuance.",
+        };
+      }
     }
 
     try {

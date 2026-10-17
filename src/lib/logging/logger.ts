@@ -20,25 +20,64 @@ const SENSITIVE_KEYS = new Set([
   "ssn",
   "pan",
   "aadhaar",
+  "apikey",
+  "apiKey",
+  "api_key",
+  "jwt",
+  "privatekey",
+  "privateKey",
+  "secretkey",
+  "secretKey",
+  "cvv",
+  "creditcard",
+  "creditCard",
+  "credit_card",
 ]);
+
+const SENSITIVE_KEY_PATTERNS: RegExp[] = [
+  /password/i,
+  /token/i,
+  /secret/i,
+  /authorization/i,
+  /cookie/i,
+  /ssn/i,
+  /pan/i,
+  /aadhaar/i,
+  /api[_-]?key/i,
+  /jwt/i,
+  /private[_-]?key/i,
+  /secret[_-]?key/i,
+  /cvv/i,
+  /credit[_-]?card/i,
+];
+
+function isSensitiveKey(key: string): boolean {
+  if (SENSITIVE_KEYS.has(key) || SENSITIVE_KEYS.has(key.toLowerCase())) {
+    return true;
+  }
+  return SENSITIVE_KEY_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+const MAX_DEPTH = 10;
 
 /**
  * Recursively redacts sensitive fields from log metadata.
  */
-function sanitize(obj: unknown): unknown {
+function sanitize(obj: unknown, depth = 0): unknown {
+  if (depth >= MAX_DEPTH) return "[MAX_DEPTH_EXCEEDED]";
   if (obj === null || obj === undefined) return obj;
   if (typeof obj !== "object") return obj;
 
   if (Array.isArray(obj)) {
-    return obj.map(sanitize);
+    return obj.map((item) => sanitize(item, depth + 1));
   }
 
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-    if (SENSITIVE_KEYS.has(key.toLowerCase())) {
+    if (isSensitiveKey(key)) {
       sanitized[key] = "[REDACTED]";
     } else if (typeof value === "object" && value !== null) {
-      sanitized[key] = sanitize(value);
+      sanitized[key] = sanitize(value, depth + 1);
     } else {
       sanitized[key] = value;
     }

@@ -39,6 +39,11 @@ export async function submitApplicationAction(
 
     let resumeBuffer: Buffer | undefined;
     if (resumeFile && resumeFile.size > 0) {
+      // Enforce file size limit before loading into memory to prevent OOM
+      const MAX_RESUME_SIZE = 5 * 1024 * 1024; // 5MB
+      if (resumeFile.size > MAX_RESUME_SIZE) {
+        return { success: false, error: "Resume file size exceeds the maximum limit of 5MB" };
+      }
       const bytes = await resumeFile.arrayBuffer();
       resumeBuffer = Buffer.from(bytes);
     }

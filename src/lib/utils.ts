@@ -11,10 +11,17 @@ export function cn(...inputs: ClassValue[]): string {
 /**
  * Formats a date into a clean locale date string.
  */
-export function formatDate(date: Date | string | number): string {
+export function formatDate(date: Date | string | number | null | undefined): string {
+  if (!date && date !== 0) {
+    return "N/A";
+  }
+  const d = new Date(date);
+  if (isNaN(d.getTime())) {
+    return "N/A";
+  }
   return new Intl.DateTimeFormat("en-US", {
     year: "numeric",
     month: "short",
     day: "numeric",
-  }).format(new Date(date));
+  }).format(d);
 }

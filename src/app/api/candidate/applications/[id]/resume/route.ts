@@ -38,7 +38,7 @@ export async function GET(
       status: 200,
       headers: {
         "Content-Type": file.mimeType,
-        "Content-Disposition": `inline; filename="${safeFilename}"`,
+        "Content-Disposition": `attachment; filename="${safeFilename}"`,
         "Cache-Control": "private, no-cache, no-store, must-revalidate",
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; sandbox",
@@ -53,7 +53,7 @@ export async function GET(
     }
     return NextResponse.json(
       { error: "Unable to retrieve resume document" },
-      { status: 403 }
+      { status: 500 }
     );
   }
 }

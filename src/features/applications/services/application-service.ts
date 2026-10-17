@@ -167,6 +167,21 @@ export class ApplicationService {
       throw new ValidationError("This opening does not have an active application form configured.");
     }
 
+    // 2.5 Check for existing active application to prevent duplicates
+    const existingApplication = await prisma.application.findFirst({
+      where: {
+        openingId: opening.id,
+        candidateId: profileId,
+        isArchived: false,
+      },
+      select: { id: true, referenceCode: true },
+    });
+    if (existingApplication) {
+      throw new ValidationError(
+        `You have already submitted an application for this opening (Reference: ${existingApplication.referenceCode}). Duplicate applications are not permitted.`
+      );
+    }
+
     const formSchema = activeFormVersion.schemaDefinition as unknown as FormSchemaDefinition;
 
     // 3. Server-side validation of untrusted responses & file
@@ -187,6 +202,15 @@ export class ApplicationService {
     if (!resumeFile) {
       throw new ValidationError("Resume document (PDF) is required", [
         { field: "resume", message: "Please attach your resume in PDF format (up to 5MB)" },
+      ]);
+    }
+
+    // Validate PDF magic bytes to prevent MIME type spoofing
+    const fileHeader = resumeFile.buffer.slice(0, 5);
+    const headerString = Buffer.from(fileHeader).toString("ascii");
+    if (!headerString.startsWith("%PDF-")) {
+      throw new ValidationError("The uploaded file is not a valid PDF document", [
+        { field: "resume", message: "Please upload a genuine PDF file" },
       ]);
     }
 

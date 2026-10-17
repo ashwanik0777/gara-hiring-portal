@@ -20,7 +20,16 @@ export async function recordCompletionChecklistAction(formData: FormData) {
       return { success: false, error: "Enrollment ID and checklist responses are required" };
     }
 
-    const checklistResponses = JSON.parse(checklistJson);
+    let checklistResponses: { id: string; label: string; completed: boolean; verifiedAt?: string }[];
+    try {
+      const parsed = JSON.parse(checklistJson);
+      if (!Array.isArray(parsed)) {
+        return { success: false, error: "Invalid checklist data format: expected an array" };
+      }
+      checklistResponses = parsed;
+    } catch {
+      return { success: false, error: "Invalid checklist data format" };
+    }
 
     const completion = await certificateService.recordCompletionChecklist(
       user.id,

@@ -49,9 +49,23 @@ export async function submitTaskAction(formData: FormData) {
     const taskId = formData.get("taskId") as string;
     const submissionNotes = formData.get("submissionNotes") as string;
     const deliverableUrlsRaw = formData.get("deliverableUrls") as string;
-    const deliverableUrls = deliverableUrlsRaw
+    const rawDeliverableUrls = deliverableUrlsRaw
       ? deliverableUrlsRaw.split(",").map((u) => u.trim()).filter(Boolean)
       : [];
+
+    // Validate URLs to prevent XSS via javascript: or data: schemes
+    const deliverableUrls: string[] = [];
+    for (const url of rawDeliverableUrls) {
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          return { success: false, error: `Invalid URL protocol in deliverable: ${url}. Only http and https are allowed.` };
+        }
+        deliverableUrls.push(url);
+      } catch {
+        return { success: false, error: `Invalid URL format: ${url}` };
+      }
+    }
 
     if (!taskId || !submissionNotes) {
       return { success: false, error: "Task ID and submission notes are required" };

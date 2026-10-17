@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { certificateService } from "@/features/certificates/services/certificate-service";
+import { defaultRateLimiter, RATE_LIMIT_POLICIES } from "@/lib/security/rate-limit";
 
 function getClientIpHash(req: NextRequest): string {
   const forwarded = req.headers.get("x-forwarded-for");
   const ip = forwarded ? forwarded.split(",")[0].trim() : req.headers.get("x-real-ip") || "anonymous";
-  const salt = process.env.BETTER_AUTH_SECRET || "gara-cert-verify-salt";
+  const salt = process.env.BETTER_AUTH_SECRET || "gara-cert-verify-salt-" + (process.env.DATABASE_URL || "").slice(0, 16);
   return crypto.createHash("sha256").update(`${ip}:${salt}`).digest("hex");
 }
 
@@ -29,6 +30,15 @@ export async function POST(req: NextRequest) {
     }
 
     const ipHash = getClientIpHash(req);
+
+    try {
+      await defaultRateLimiter.enforce(ipHash, RATE_LIMIT_POLICIES.CERTIFICATE_VERIFY);
+    } catch {
+      return NextResponse.json(
+        { success: false, error: "Too many verification requests. Please try again later." },
+        { status: 429 }
+      );
+    }
     const userAgent = req.headers.get("user-agent") || undefined;
     const result = await certificateService.verifyCertificatePublic(code, ipHash, userAgent);
 
@@ -67,6 +77,15 @@ export async function GET(req: NextRequest) {
     }
 
     const ipHash = getClientIpHash(req);
+
+    try {
+      await defaultRateLimiter.enforce(ipHash, RATE_LIMIT_POLICIES.CERTIFICATE_VERIFY);
+    } catch {
+      return NextResponse.json(
+        { success: false, error: "Too many verification requests. Please try again later." },
+        { status: 429 }
+      );
+    }
     const userAgent = req.headers.get("user-agent") || undefined;
     const result = await certificateService.verifyCertificatePublic(code, ipHash, userAgent);
 

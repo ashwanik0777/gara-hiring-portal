@@ -68,6 +68,19 @@ export const DEFAULT_INTERVIEWER_PERMISSIONS: SubAdminPermissions = {
   canManageSubAdmins: false,
 };
 
+export const DEFAULT_MENTOR_PERMISSIONS: SubAdminPermissions = {
+  canApplications: false,
+  canOpenings: false,
+  canInterviews: false,
+  canEvaluations: true,
+  canEmployees: false,
+  canAttendance: false,
+  canLeave: false,
+  canPayroll: false,
+  canReports: false,
+  canManageSubAdmins: false,
+};
+
 export const NO_PERMISSIONS: SubAdminPermissions = {
   canApplications: false,
   canOpenings: false,
@@ -142,5 +155,9 @@ export async function getUserPermissions(
     return DEFAULT_INTERVIEWER_PERMISSIONS;
   }
 
-  return DEFAULT_HR_PERMISSIONS;
+  if (roles.includes(Role.MENTOR)) {
+    return DEFAULT_MENTOR_PERMISSIONS;
+  }
+
+  return NO_PERMISSIONS;
 }

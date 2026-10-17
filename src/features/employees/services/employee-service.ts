@@ -506,7 +506,9 @@ export class EmployeeService {
         remarks: h.remarks,
         changedBy: h.changedBy,
       })),
-      secureDocuments: emp.secureDocuments.map((d) => ({
+      secureDocuments: emp.secureDocuments
+        .filter((d) => isStaffAdmin || !d.isConfidential)
+        .map((d) => ({
         id: d.id,
         documentType: d.documentType,
         title: d.title,
@@ -764,13 +766,19 @@ export class EmployeeService {
       throw new ForbiddenError("Not authorized to attach employee documents.");
     }
 
+    // Validate storage key format: must be a plausible file path without traversal
+    const storageKey = input.storageKey.trim();
+    if (!storageKey || storageKey.includes("..") || storageKey.includes("\0") || storageKey.startsWith("/")) {
+      throw new ValidationError("Invalid storage key format.");
+    }
+
     await prisma.$transaction(async (tx) => {
       const doc = await tx.employeeDocument.create({
         data: {
           employeeId: emp.id,
           documentType: input.documentType.trim(),
           title: input.title.trim(),
-          storageKey: input.storageKey.trim(),
+          storageKey,
           mimeType: input.mimeType.trim(),
           fileSizeBytes: input.fileSizeBytes,
           isConfidential: input.isConfidential,

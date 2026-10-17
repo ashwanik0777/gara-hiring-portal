@@ -45,6 +45,21 @@ export class AttendanceService {
       throw new ForbiddenError("Not authorized to record attendance for another employee.");
     }
 
+    // For non-admin self check-ins, enforce server-side date/time to prevent timestamp forgery
+    if (isSelf && !isStaffAdmin) {
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      const inputDate = new Date(input.date);
+      inputDate.setUTCHours(0, 0, 0, 0);
+      if (inputDate.getTime() !== today.getTime()) {
+        throw new ValidationError("You can only record attendance for today's date. Contact your supervisor for corrections.");
+      }
+      // Force server timestamp for check-in
+      input.checkInTime = new Date().toISOString();
+      // Don't allow employees to set their own status
+      input.status = AttendanceStatus.PRESENT;
+    }
+
     const dateOnly = new Date(input.date);
     dateOnly.setUTCHours(0, 0, 0, 0);
 
@@ -216,7 +231,7 @@ export class AttendanceService {
       } else {
         await tx.attendanceRecord.update({
           where: { id: reg.attendanceRecordId },
-          data: { status: AttendanceStatus.PRESENT },
+          data: { status: AttendanceStatus.ABSENT },
         });
       }
     });

@@ -5,7 +5,12 @@ import { CertificatePdfPayload } from "./types";
  * Escapes characters for PDF literal text strings: ( ) \
  */
 function escapePdfString(str: string): string {
-  return str.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  return str
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n");
 }
 
 export class VectorPdfBuilder {
