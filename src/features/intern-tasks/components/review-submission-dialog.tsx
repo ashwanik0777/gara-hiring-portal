@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { reviewSubmissionAction } from "../actions";
-import { SubmissionReviewStatus } from "@prisma/client";
+import { SubmissionReviewStatus } from "@/types/enums";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, RotateCcw, AlertCircle } from "lucide-react";
 

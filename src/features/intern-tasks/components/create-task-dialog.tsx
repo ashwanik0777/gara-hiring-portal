@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { createTaskAction } from "../actions";
-import { TaskPriority } from "@prisma/client";
+import { TaskPriority } from "@/types/enums";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PlusCircle, AlertCircle, CheckCircle2 } from "lucide-react";

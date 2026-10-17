@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { submitProgressReportAction } from "../actions";
-import { ProgressCadence } from "@prisma/client";
+import { ProgressCadence } from "@/types/enums";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FileText, AlertCircle, CheckCircle2 } from "lucide-react";

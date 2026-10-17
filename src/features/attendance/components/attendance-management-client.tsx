@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useTransition, useMemo } from "react";
-import { AttendanceStatus, AttendanceEntryMethod } from "@prisma/client";
+import { AttendanceStatus, AttendanceEntryMethod } from "@/types/enums";
 import { recordAttendanceAction, ensureEmployeeForUserAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

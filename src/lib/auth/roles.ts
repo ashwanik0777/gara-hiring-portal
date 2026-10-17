@@ -1,4 +1,4 @@
-import { Role } from "@prisma/client";
+import { Role } from "@/types/enums";
 
 /**
  * Standard list of sub-administrator roles.

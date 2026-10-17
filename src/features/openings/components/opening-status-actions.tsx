@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { OpeningStatus } from "@prisma/client";
+import { OpeningStatus } from "@/types/enums";
 import { updateOpeningStatusAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

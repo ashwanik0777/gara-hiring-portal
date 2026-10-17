@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { ApplicationStatus } from "@prisma/client";
+import { ApplicationStatus } from "@/types/enums";
 import { VALID_APPLICATION_TRANSITIONS } from "../schemas";
 import { transitionStatusAction } from "../actions";
 import { Button } from "@/components/ui/button";

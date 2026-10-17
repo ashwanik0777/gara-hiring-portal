@@ -17,7 +17,7 @@ import {
   HelpCircle,
   Loader2,
 } from "lucide-react";
-import { Role } from "@prisma/client";
+import { Role } from "@/types/enums";
 import { SUB_ADMIN_ROLES } from "@/lib/auth/roles";
 
 interface UserProfileData {

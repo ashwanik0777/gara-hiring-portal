@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { InterviewRecommendation } from "@prisma/client";
+import { InterviewRecommendation } from "@/types/enums";
 import { submitFeedbackAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
