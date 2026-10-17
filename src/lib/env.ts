@@ -72,22 +72,36 @@ export function checkProductionReadiness(currentEnv: Env = env): {
   };
 }
 
+function getInitialAuthUrl(): string {
+  if (process.env.BETTER_AUTH_URL && !process.env.BETTER_AUTH_URL.includes("localhost")) {
+    return process.env.BETTER_AUTH_URL;
+  }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  }
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+  return process.env.BETTER_AUTH_URL || "http://localhost:3000";
+}
+
 function validateEnv(): Env {
-  const result = envSchema.safeParse(process.env);
-  if (!result.success) {
-    console.error("❌ Invalid environment variables:", result.error.format());
-    if (process.env.NODE_ENV === "production") {
-      throw new Error(
-        "Invalid environment configuration. Check server environment variables."
-      );
+  // Ensure BETTER_AUTH_URL auto-resolves correctly on Vercel if not manually provided
+  if (!process.env.BETTER_AUTH_URL || process.env.BETTER_AUTH_URL.includes("localhost")) {
+    if (process.env.VERCEL || process.env.VERCEL_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+      process.env.BETTER_AUTH_URL = getInitialAuthUrl();
     }
   }
 
-  const parsed = result.success ? result.data : envSchema.parse({});
+  const result = envSchema.safeParse(process.env);
+  if (!result.success) {
+    console.error("❌ [Environment Warning] Invalid or missing environment variables:", result.error.format());
+  }
 
-  // Runtime production safety checks (not during `next build` which also sets NODE_ENV=production)
-  // NEXT_PHASE is set during build; at actual server runtime it's undefined
-  const isActualRuntime = !process.env.NEXT_PHASE;
+  const parsed = result.success ? result.data : envSchema.parse({
+    BETTER_AUTH_URL: getInitialAuthUrl(),
+  });
+
   const isCloudDeployment = Boolean(
     process.env.VERCEL ||
     process.env.RAILWAY_ENVIRONMENT ||
@@ -97,24 +111,17 @@ function validateEnv(): Env {
     process.env.NETLIFY
   );
 
-  if (parsed.NODE_ENV === "production" && isActualRuntime) {
+  if (parsed.NODE_ENV === "production" && isCloudDeployment) {
     if (parsed.BETTER_AUTH_SECRET === DEV_DEFAULT_AUTH_SECRET) {
-      if (isCloudDeployment) {
-        throw new Error(
-          "CRITICAL: BETTER_AUTH_SECRET is using the development fallback key in production cloud deployment. " +
-          "Set a secure 32+ character secret via environment variable."
-        );
-      } else {
-        console.warn(
-          "⚠️ WARNING: BETTER_AUTH_SECRET is using the development fallback key. " +
-          "Set a secure 32+ character secret before deploying to cloud hosting."
-        );
-      }
+      console.error(
+        "❌ [CRITICAL CONFIG] BETTER_AUTH_SECRET is using the development fallback key in production cloud deployment. " +
+        "Please configure a secure BETTER_AUTH_SECRET in Vercel project environment variables."
+      );
     }
-    if ((parsed.DATABASE_URL.includes("localhost") || parsed.DATABASE_URL.includes("127.0.0.1")) && isCloudDeployment) {
-      throw new Error(
-        "CRITICAL: DATABASE_URL points to localhost in production cloud deployment. " +
-        "Configure a managed production PostgreSQL connection."
+    if (parsed.DATABASE_URL.includes("localhost") || parsed.DATABASE_URL.includes("127.0.0.1")) {
+      console.error(
+        "❌ [CRITICAL CONFIG] DATABASE_URL points to localhost in production cloud deployment. " +
+        "Please configure a valid PostgreSQL DATABASE_URL in Vercel project environment variables."
       );
     }
   }

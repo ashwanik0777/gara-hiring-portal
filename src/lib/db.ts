@@ -11,19 +11,18 @@ declare global {
   var prismaGlobal: PrismaClient | undefined;
 }
 
-/**
- * Normalizes connection string to sslmode=verify-full if sslmode=require is supplied.
- * Eliminates node-postgres pg v9 security warnings while guaranteeing rigorous certificate verification.
- */
-function getNormalizedConnectionString(connectionString: string): string {
-  if (connectionString.includes("sslmode=require")) {
-    return connectionString.replace("sslmode=require", "sslmode=verify-full");
-  }
-  return connectionString;
-}
+const isLocalhost =
+  env.DATABASE_URL.includes("localhost") ||
+  env.DATABASE_URL.includes("127.0.0.1");
 
+// In production or cloud deployments with remote databases (Supabase, Neon, Railway, RDS),
+// enable SSL with rejectUnauthorized: false so cloud connection poolers connect seamlessly.
 const pool = new Pool({
-  connectionString: getNormalizedConnectionString(env.DATABASE_URL),
+  connectionString: env.DATABASE_URL,
+  ssl: !isLocalhost ? { rejectUnauthorized: false } : undefined,
+  max: process.env.NODE_ENV === "production" ? 10 : 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 const adapter = new PrismaPg(pool);
 

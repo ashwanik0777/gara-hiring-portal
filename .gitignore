@@ -47,4 +47,6 @@ next-env.d.ts
 /.storage/
 /storage/
 
-tests
+# local tests and scripts (excluded from production repository)
+/scripts/
+/tests/
