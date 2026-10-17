@@ -88,16 +88,32 @@ function validateEnv(): Env {
   // Runtime production safety checks (not during `next build` which also sets NODE_ENV=production)
   // NEXT_PHASE is set during build; at actual server runtime it's undefined
   const isActualRuntime = !process.env.NEXT_PHASE;
+  const isCloudDeployment = Boolean(
+    process.env.VERCEL ||
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.RENDER ||
+    process.env.AWS_EXECUTION_ENV ||
+    process.env.FLY_APP_NAME ||
+    process.env.NETLIFY
+  );
+
   if (parsed.NODE_ENV === "production" && isActualRuntime) {
     if (parsed.BETTER_AUTH_SECRET === DEV_DEFAULT_AUTH_SECRET) {
-      throw new Error(
-        "CRITICAL: BETTER_AUTH_SECRET is using the development fallback key in production. " +
-        "Set a secure 32+ character secret via environment variable."
-      );
+      if (isCloudDeployment) {
+        throw new Error(
+          "CRITICAL: BETTER_AUTH_SECRET is using the development fallback key in production cloud deployment. " +
+          "Set a secure 32+ character secret via environment variable."
+        );
+      } else {
+        console.warn(
+          "⚠️ WARNING: BETTER_AUTH_SECRET is using the development fallback key. " +
+          "Set a secure 32+ character secret before deploying to cloud hosting."
+        );
+      }
     }
-    if (parsed.DATABASE_URL.includes("localhost")) {
+    if ((parsed.DATABASE_URL.includes("localhost") || parsed.DATABASE_URL.includes("127.0.0.1")) && isCloudDeployment) {
       throw new Error(
-        "CRITICAL: DATABASE_URL points to localhost in production. " +
+        "CRITICAL: DATABASE_URL points to localhost in production cloud deployment. " +
         "Configure a managed production PostgreSQL connection."
       );
     }

@@ -50,7 +50,10 @@ export async function getUniqueVisitorCount(): Promise<number> {
     const dbCount = await prisma.siteVisitor.count();
     return BASELINE_OFFSET + dbCount;
   } catch (error) {
-    console.error("[VisitorService] Failed to read visitor count from database:", error);
+    console.error(
+      "[VisitorService] Failed to read visitor count from database:",
+      error instanceof Error ? error.message : error
+    );
     return BASELINE_OFFSET;
   }
 }
@@ -140,10 +143,12 @@ export async function trackUniqueVisit({
       isNewVisitor: true,
     };
   } catch (error) {
-    console.error("[VisitorService] Failed to record unique visitor:", error);
-    const fallbackCount = await getUniqueVisitorCount();
+    console.error(
+      "[VisitorService] Failed to record unique visitor:",
+      error instanceof Error ? error.message : error
+    );
     return {
-      totalUniqueVisitors: fallbackCount,
+      totalUniqueVisitors: BASELINE_OFFSET,
       visitorId: effectiveVisitorId,
       isNewVisitor: false,
     };
