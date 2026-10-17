@@ -29,9 +29,13 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24,     // Refresh session every 24 hours
   },
-  trustedOrigins: [env.BETTER_AUTH_URL],
+  trustedOrigins: [
+    env.BETTER_AUTH_URL,
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+  ],
   advanced: {
-    useSecureCookies: env.NODE_ENV === "production",
+    useSecureCookies: Boolean(env.BETTER_AUTH_URL?.startsWith("https://")),
   },
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
