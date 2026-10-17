@@ -16,6 +16,10 @@ export default async function SubAdminLayout({
     redirect("/login?callbackUrl=/subadmin");
   }
 
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
   // Bar Candidates from accessing Sub-Admin portal
   const hasStaffOrAdminRole = user.roles.some((r) => STAFF_ROLES.includes(r));
 

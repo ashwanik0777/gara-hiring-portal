@@ -19,6 +19,10 @@ export default async function CandidateLayout({
     redirect("/login?callbackUrl=/candidate/dashboard");
   }
 
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
   const isAdmin = user.roles.includes(Role.ADMIN);
   if (isAdmin) {
     redirect("/admin");

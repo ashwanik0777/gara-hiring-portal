@@ -18,6 +18,10 @@ import {
   ArrowLeft,
   MailCheck,
 } from "lucide-react";
+import {
+  forgotPasswordAction,
+  checkUserMustChangePasswordAction,
+} from "@/features/auth/password-actions";
 
 interface AuthSplitScreenProps {
   initialMode: "login" | "register" | "forgot";
@@ -96,6 +100,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotSubmitted, setForgotSubmitted] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
 
   // Password Strength
   const checks = {
@@ -124,6 +129,14 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
       if (error) {
         setLoginError(error.message || "Invalid email or password. Please try again.");
         setLoginLoading(false);
+        return;
+      }
+
+      // Check if user has temporary password active
+      const statusRes = await checkUserMustChangePasswordAction(loginEmail);
+      if (statusRes.mustChangePassword) {
+        router.replace("/set-password");
+        router.refresh();
         return;
       }
 
@@ -205,10 +218,20 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const handleForgotSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setForgotLoading(true);
-    setTimeout(() => {
+    setForgotError(null);
+
+    try {
+      const res = await forgotPasswordAction(forgotEmail);
       setForgotLoading(false);
-      setForgotSubmitted(true);
-    }, 600);
+      if (!res.success) {
+        setForgotError(res.error || "Failed to process password recovery request.");
+      } else {
+        setForgotSubmitted(true);
+      }
+    } catch {
+      setForgotLoading(false);
+      setForgotError("An unexpected error occurred while resetting password. Please try again.");
+    }
   };
 
   const isHeroOnLeft = mode === "login" || mode === "forgot";
@@ -773,10 +796,10 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                       <MailCheck className="h-6 w-6" />
                     </div>
                     <p className="text-sm text-foreground">
-                      If an account matches <span className="font-semibold">{forgotEmail}</span>, we have sent a reset link to your email.
+                      If an account matches <span className="font-semibold">{forgotEmail}</span>, a temporary access password has been sent to your email.
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Please check your inbox and spam folders.
+                      Sign in with the temporary password and you will be prompted to set your new permanent password. Please check your inbox and spam folders.
                     </p>
                     <button
                       type="button"
@@ -791,6 +814,12 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                   </div>
                 ) : (
                   <form onSubmit={handleForgotSubmit} className="space-y-4">
+                    {forgotError && (
+                      <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                        <AlertCircle className="h-4 w-4 shrink-0" />
+                        <span>{forgotError}</span>
+                      </div>
+                    )}
                     <div className="space-y-1.5">
                       <label className="text-xs font-semibold text-foreground">Email Address</label>
                       <div className="relative flex items-center">
@@ -1042,11 +1071,14 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                     <MailCheck className="h-5 w-5" />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Reset link sent to <span className="font-semibold text-foreground">{forgotEmail}</span>
+                    A temporary login password has been sent to <span className="font-semibold text-foreground">{forgotEmail}</span>. Sign in with it to set your new permanent password.
                   </p>
                   <button
                     type="button"
-                    onClick={() => switchMode("login")}
+                    onClick={() => {
+                      setForgotSubmitted(false);
+                      switchMode("login");
+                    }}
                     className="text-xs text-blue-600 hover:underline font-semibold"
                   >
                     Back to sign in
@@ -1054,6 +1086,12 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                 </div>
               ) : (
                 <form onSubmit={handleForgotSubmit} className="space-y-4">
+                  {forgotError && (
+                    <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      <span>{forgotError}</span>
+                    </div>
+                  )}
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-foreground">Email</label>
                     <input

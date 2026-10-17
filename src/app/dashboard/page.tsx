@@ -12,6 +12,10 @@ export default async function DashboardRedirectPage() {
     redirect("/login?callbackUrl=/dashboard");
   }
 
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
   if (user.roles.includes(Role.ADMIN)) {
     redirect("/admin");
   }

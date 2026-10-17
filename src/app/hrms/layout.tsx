@@ -16,6 +16,10 @@ export default async function HrmsLayout({
     redirect("/login?callbackUrl=/hrms/attendance");
   }
 
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
   const { Role } = await import("@prisma/client");
   const HRMS_ROLES: (typeof Role)[keyof typeof Role][] = [Role.ADMIN, Role.HR, Role.MANAGER, Role.INTERN];
   const hasAccess = user.roles.some((r) => HRMS_ROLES.includes(r));

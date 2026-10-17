@@ -9,6 +9,7 @@ export interface AuthenticatedUser {
   email: string;
   name: string;
   roles: Role[];
+  mustChangePassword?: boolean;
 }
 
 /**
@@ -24,13 +25,18 @@ export async function getCurrentUser(): Promise<AuthenticatedUser | null> {
       return null;
     }
 
-    // Fetch user roles from the database
-    const userRoles = await prisma.userRole.findMany({
-      where: { userId: session.user.id },
-      select: { role: true },
+    // Fetch user details and roles from the database
+    const dbUser = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: {
+        mustChangePassword: true,
+        roles: {
+          select: { role: true },
+        },
+      },
     });
 
-    const roles = userRoles.map((r: { role: Role }) => r.role);
+    const roles = dbUser?.roles.map((r: { role: Role }) => r.role) || [];
     // If no roles are explicitly assigned, candidate is default
     if (roles.length === 0) {
       roles.push(Role.CANDIDATE);
@@ -41,6 +47,7 @@ export async function getCurrentUser(): Promise<AuthenticatedUser | null> {
       email: session.user.email,
       name: session.user.name,
       roles,
+      mustChangePassword: dbUser?.mustChangePassword ?? false,
     };
   } catch {
     return null;

@@ -19,6 +19,10 @@ export default async function AdminLayout({
     redirect("/login?callbackUrl=/admin");
   }
 
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
   const isAdmin = user.roles.includes(Role.ADMIN);
   if (!isAdmin) {
     const isSubAdmin = user.roles.some((r) => SUB_ADMIN_ROLES.includes(r));
