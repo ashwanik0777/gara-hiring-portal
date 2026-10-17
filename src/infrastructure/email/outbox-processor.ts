@@ -38,6 +38,15 @@ export class NodemailerEmailAdapter implements EmailTransportAdapter {
   }
 }
 
+import {
+  buildApplicationConfirmationEmail,
+  buildApplicationStageUpdateEmail,
+  buildInterviewInvitationEmail,
+  buildEvaluationSelectionEmail,
+  buildJobOfferEmail,
+  buildGenericNotificationEmail,
+} from "./email-templates";
+
 export interface OutboxProcessingSummary {
   processed: number;
   sent: number;
@@ -59,22 +68,66 @@ export class OutboxProcessorService {
   private renderTemplate(
     templateName: string,
     payload: unknown
-  ): { subject: string; text: string } {
+  ): { subject: string; text: string; html?: string } {
     const data =
       payload && typeof payload === "object"
         ? (payload as Record<string, unknown>)
         : {};
-    const referenceCode =
-      typeof data.referenceCode === "string" ? data.referenceCode : "";
 
-    return {
-      subject: `[GARA Innovation] ${templateName.replace(/_/g, " ")}${
-        referenceCode ? ` (${referenceCode})` : ""
-      }`,
-      text: `GARA Innovation Notification — Template: ${templateName}\nDetails: ${JSON.stringify(
-        data
-      )}`,
-    };
+    switch (templateName) {
+      case "APPLICATION_CONFIRMATION":
+      case "APPLICATION_SUBMITTED":
+        return buildApplicationConfirmationEmail({
+          candidateName: String(data.candidateName || "Candidate"),
+          openingTitle: String(data.openingTitle || "Internship / Job Opening"),
+          referenceCode: String(data.referenceCode || "N/A"),
+          submittedAt: typeof data.submittedAt === "string" ? data.submittedAt : undefined,
+        });
+
+      case "APPLICATION_STAGE_UPDATE":
+        return buildApplicationStageUpdateEmail({
+          candidateName: String(data.candidateName || "Candidate"),
+          openingTitle: String(data.openingTitle || "Position"),
+          referenceCode: String(data.referenceCode || "N/A"),
+          newStatus: String(data.newStatus || "IN_REVIEW"),
+          message: typeof data.message === "string" ? data.message : undefined,
+        });
+
+      case "INTERVIEW_INVITATION":
+      case "INTERVIEW_SCHEDULED":
+        return buildInterviewInvitationEmail({
+          candidateName: String(data.candidateName || "Candidate"),
+          openingTitle: String(data.openingTitle || "Position"),
+          roundName: String(data.roundName || "Interview Round"),
+          scheduledAt: String(data.scheduledAt || new Date().toISOString()),
+          durationMinutes: Number(data.durationMinutes) || 45,
+          meetingLink: typeof data.meetingLink === "string" ? data.meetingLink : null,
+          referenceCode: typeof data.referenceCode === "string" ? data.referenceCode : undefined,
+        });
+
+      case "EVALUATION_SELECTION_NOTIFICATION":
+        return buildEvaluationSelectionEmail({
+          candidateName: String(data.candidateName || "Candidate"),
+          openingTitle: String(data.openingTitle || "Internship Position"),
+          workingDays: Number(data.workingDays) || 7,
+        });
+
+      case "JOB_OFFER_EXTENDED":
+      case "OFFER_EXTENDED":
+        return buildJobOfferEmail({
+          candidateName: String(data.candidateName || "Candidate"),
+          designation: String(data.designation || "Associate Engineer"),
+          department: String(data.department || "Engineering"),
+          expectedJoiningDate: String(data.expectedJoiningDate || new Date().toISOString()),
+          applicationReference: typeof data.applicationReference === "string" ? data.applicationReference : undefined,
+        });
+
+      default:
+        return buildGenericNotificationEmail({
+          templateName,
+          payload: data,
+        });
+    }
   }
 
   /**
@@ -117,6 +170,7 @@ export class OutboxProcessorService {
         to: record.recipientEmail,
         subject: rendered.subject,
         text: rendered.text,
+        html: rendered.html,
       });
 
       await prisma.notificationOutbox.update({

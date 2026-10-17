@@ -7,6 +7,7 @@ import { getCurrentUser } from "@/lib/auth/guards";
 import { Role } from "@prisma/client";
 import { hashPassword } from "better-auth/crypto";
 import { NodemailerEmailAdapter } from "@/infrastructure/email/outbox-processor";
+import { buildSubAdminWelcomeEmail } from "@/infrastructure/email/email-templates";
 import { z } from "zod";
 
 const createSubAdminSchema = z.object({
@@ -126,38 +127,19 @@ export async function createSubAdminAction(formData: z.infer<typeof createSubAdm
       const emailTransport = new NodemailerEmailAdapter();
       const loginUrl = `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/login`;
 
+      const emailPayload = buildSubAdminWelcomeEmail({
+        name,
+        email: email.toLowerCase().trim(),
+        role,
+        temporaryPassword: password,
+        loginUrl,
+      });
+
       await emailTransport.sendEmail({
         to: email.toLowerCase().trim(),
-        subject: "[GARA Innovation] Sub-Admin Account Credentials",
-        text: `Hello ${name},\n\nYou have been provisioned as a Sub-Admin (${role}) at GARA Innovation.\n\nYour Temporary Login Credentials:\nEmail: ${email.toLowerCase().trim()}\nTemporary Password: ${password}\nLogin Portal: ${loginUrl}\n\nPlease sign in with this temporary password. Upon your first login, you will be required to set your own permanent password.\n\n— GARA Innovation Team`,
-        html: `
-          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px 24px; border: 1px solid #e2e8f0; border-radius: 16px; background: #ffffff;">
-            <div style="margin-bottom: 24px;">
-              <h2 style="color: #0f172a; margin: 0 0 6px 0; font-size: 20px;">Welcome to GARA Innovation</h2>
-              <p style="color: #64748b; margin: 0; font-size: 13px;">Sub-Admin Account Credentials</p>
-            </div>
-            <p style="color: #334155; font-size: 14px; line-height: 1.6;">
-              Hello <strong>${name}</strong>,<br/>
-              An administrative staff account with role <strong>${role}</strong> has been configured for you.
-            </p>
-            <div style="margin: 24px 0; padding: 20px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;">
-              <p style="margin: 0 0 10px 0; font-size: 13px; color: #475569;">
-                <strong>Login Email:</strong> <span style="font-family: monospace; color: #0f172a;">${email.toLowerCase().trim()}</span>
-              </p>
-              <p style="margin: 0; font-size: 13px; color: #475569;">
-                <strong>Temporary Password:</strong> <span style="font-family: monospace; font-weight: bold; color: #2563eb;">${password}</span>
-              </p>
-            </div>
-            <p style="color: #334155; font-size: 13px; line-height: 1.6;">
-              Please log in using these temporary credentials. You will be prompted to set your personal permanent password upon your first sign in.
-            </p>
-            <div style="margin: 28px 0; text-align: center;">
-              <a href="${loginUrl}" style="display: inline-block; padding: 12px 32px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 14px; box-shadow: 0 2px 4px rgba(37,99,235,0.2);">
-                Sign In & Set Password
-              </a>
-            </div>
-          </div>
-        `,
+        subject: emailPayload.subject,
+        text: emailPayload.text,
+        html: emailPayload.html,
       });
     } catch (mailErr) {
       console.error("[CreateSubAdmin] Failed to send credentials email:", mailErr);

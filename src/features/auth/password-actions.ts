@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { hashPassword } from "better-auth/crypto";
 import { NodemailerEmailAdapter } from "@/infrastructure/email/outbox-processor";
+import { buildForgotPasswordEmail } from "@/infrastructure/email/email-templates";
 import { z } from "zod";
 
 const setPasswordSchema = z.object({
@@ -188,40 +189,18 @@ export async function forgotPasswordAction(email: string) {
       const emailTransport = new NodemailerEmailAdapter();
       const loginUrl = `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/login`;
 
+      const emailPayload = buildForgotPasswordEmail({
+        name: user.name,
+        email: user.email,
+        temporaryPassword: tempPassword,
+        loginUrl,
+      });
+
       await emailTransport.sendEmail({
         to: user.email,
-        subject: "[GARA Innovation] Temporary Password for Account Sign-In",
-        text: `Hello ${user.name},\n\nA password reset request was initiated for your GARA Innovation account.\n\nYour Temporary Password: ${tempPassword}\nSign In Here: ${loginUrl}\n\nPlease sign in with this temporary password. You will be required to set your own permanent password immediately upon signing in.\n\nIf you did not request this, please contact your administrator.\n\n— GARA Innovation Team`,
-        html: `
-          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px 24px; border: 1px solid #e2e8f0; border-radius: 16px; background: #ffffff;">
-            <div style="margin-bottom: 24px;">
-              <h2 style="color: #0f172a; margin: 0 0 6px 0; font-size: 20px;">Temporary Sign-In Credentials</h2>
-              <p style="color: #64748b; margin: 0; font-size: 13px;">GARA Innovation Security System</p>
-            </div>
-            <p style="color: #334155; font-size: 14px; line-height: 1.6;">
-              Hello <strong>${user.name}</strong>,
-            </p>
-            <p style="color: #334155; font-size: 14px; line-height: 1.6;">
-              A temporary password has been generated for your account. You can log in using this temporary password, and you will be asked to choose your own permanent password upon signing in.
-            </p>
-            <div style="margin: 24px 0; padding: 20px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; text-align: center;">
-              <div style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">
-                Temporary Password
-              </div>
-              <div style="font-family: monospace; font-size: 22px; font-weight: 800; color: #1e293b; letter-spacing: 1.5px;">
-                ${tempPassword}
-              </div>
-            </div>
-            <div style="margin: 28px 0; text-align: center;">
-              <a href="${loginUrl}" style="display: inline-block; padding: 12px 32px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 14px; box-shadow: 0 2px 4px rgba(37,99,235,0.2);">
-                Sign In & Set New Password
-              </a>
-            </div>
-            <p style="color: #64748b; font-size: 12px; margin-top: 32px; border-top: 1px solid #f1f5f9; padding-top: 16px; line-height: 1.5;">
-              If you did not request this temporary password, please secure your account immediately or notify your company administrator.
-            </p>
-          </div>
-        `,
+        subject: emailPayload.subject,
+        text: emailPayload.text,
+        html: emailPayload.html,
       });
     } catch (mailErr) {
       console.error("[ForgotPassword] Failed to dispatch temporary password email:", mailErr);
