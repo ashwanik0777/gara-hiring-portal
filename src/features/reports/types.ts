@@ -72,3 +72,120 @@ export interface ReportCsvExportResult {
   generatedAt: Date;
   appliedFilters: AppliedReportMetadata["filters"];
 }
+
+// ─── Executive Analytics & Dashboard Types ─────────────────────────────────────
+
+export interface ExecutiveKpiSummary {
+  totalApplications: number;
+  totalHired: number;
+  activeOpenings: number;
+  totalEmployees: number;
+  activeEmployees: number;
+  fullTimeCount: number;
+  internCount: number;
+  paidWorkforceCount: number;
+  unpaidWorkforceCount: number;
+  payrollDisbursedAmount: number;
+  activePayrollCycle: string;
+  payrollCompletionRate: number;
+  todayAttendancePresent: number;
+  todayOnLeave: number;
+  pendingLeavesCount: number;
+  totalVisitors: number;
+}
+
+export interface FunnelStage {
+  stage: string;
+  count: number;
+  percentage: number;
+  color: string;
+}
+
+export interface AttendanceAnalytics {
+  totalLogs: number;
+  byStatus: Record<string, number>;
+  pendingRegularizations: number;
+}
+
+export interface LeaveAnalytics {
+  totalRequests: number;
+  pendingCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  byCategory: Array<{ category: string; count: number }>;
+}
+
+export interface PayrollAnalytics {
+  activeCycleCode: string;
+  cycleStatus: string;
+  totalEnrolled: number;
+  paidCount: number;
+  pendingCount: number;
+  disbursedAmount: number;
+  paidWorkforce: number;
+  unpaidWorkforce: number;
+}
+
+export interface PlatformTelemetry {
+  uniqueVisitors: number;
+  totalApplications: number;
+  conversionRate: number;
+}
+
+export interface MonthlyRecruitmentTrend {
+  month: string;
+  year: number;
+  label: string;
+  applications: number;
+  interviews: number;
+  hired: number;
+}
+
+export interface DepartmentChartData {
+  department: string;
+  count: number;
+  percentage: number;
+  color: string;
+}
+
+export interface AttendanceDailyTrend {
+  day: string;
+  dateStr: string;
+  present: number;
+  onLeave: number;
+  attendanceRate: number;
+}
+
+export interface PayrollCycleTrend {
+  cycle: string;
+  disbursedAmount: number;
+  paidCount: number;
+  unpaidCount: number;
+}
+
+export interface AnalyticsChartsData {
+  monthlyRecruitmentTrends: MonthlyRecruitmentTrend[];
+  departmentDistribution: DepartmentChartData[];
+  employmentTypeDistribution: Array<{
+    type: string;
+    count: number;
+    percentage: number;
+    color: string;
+  }>;
+  attendanceDailyTrends: AttendanceDailyTrend[];
+  payrollCycleTrends: PayrollCycleTrend[];
+}
+
+export interface ComprehensiveAnalyticsDashboardData {
+  metadata: AppliedReportMetadata;
+  kpis: ExecutiveKpiSummary;
+  funnelStages: FunnelStage[];
+  charts: AnalyticsChartsData;
+  recruitment: RecruitmentFunnelReport;
+  internship: InternshipLifecycleReport;
+  employees: EmployeeHeadcountReport;
+  attendance: AttendanceAnalytics;
+  leaves: LeaveAnalytics;
+  payroll: PayrollAnalytics;
+  telemetry: PlatformTelemetry;
+}

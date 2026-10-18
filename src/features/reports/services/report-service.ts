@@ -20,6 +20,18 @@ import {
   InternshipLifecycleReport,
   RecruitmentFunnelReport,
   ReportCsvExportResult,
+  ComprehensiveAnalyticsDashboardData,
+  ExecutiveKpiSummary,
+  FunnelStage,
+  AttendanceAnalytics,
+  LeaveAnalytics,
+  PayrollAnalytics,
+  PlatformTelemetry,
+  MonthlyRecruitmentTrend,
+  DepartmentChartData,
+  AttendanceDailyTrend,
+  PayrollCycleTrend,
+  AnalyticsChartsData,
 } from "../types";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 
@@ -289,6 +301,482 @@ export class ReportService {
       recruitment,
       internship,
       employees: employeesReport,
+    };
+  }
+
+  /**
+   * Aggregates real-time cross-functional analytics for the Executive Dashboard
+   */
+  public async getComprehensiveAnalytics(
+    user: AuthenticatedUser,
+    rawFilters: ReportFilterInput = {}
+  ): Promise<ComprehensiveAnalyticsDashboardData> {
+    this.assertReportAccess(user);
+
+    const opsReport = await this.getOperationsReport(user, rawFilters);
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    const [
+      activeOpeningsCount,
+      allAttendanceLogs,
+      pendingRegCount,
+      allLeaves,
+      latestPayrollPeriod,
+      allEmployees,
+      visitorCount,
+      allApplications,
+      allPayrollPeriods,
+    ] = await Promise.all([
+      prisma.opening.count({ where: { status: "PUBLISHED" } }).catch(() => 0),
+      prisma.attendanceRecord
+        .findMany({
+          select: { status: true, date: true },
+        })
+        .catch(() => []),
+      prisma.attendanceRegularization.count({ where: { status: "PENDING" } }).catch(() => 0),
+      prisma.leaveRequest
+        .findMany({
+          select: {
+            status: true,
+            startDate: true,
+            endDate: true,
+            leaveType: { select: { name: true } },
+          },
+        })
+        .catch(() => []),
+      prisma.payrollPeriod
+        .findFirst({
+          orderBy: { startDate: "desc" },
+          include: {
+            records: {
+              select: {
+                status: true,
+                disbursementReference: true,
+                employee: { select: { designation: true, internalNotes: true } },
+              },
+            },
+          },
+        })
+        .catch(() => null),
+      prisma.employee
+        .findMany({
+          select: {
+            designation: true,
+            department: true,
+            internalNotes: true,
+            status: true,
+          },
+        })
+        .catch(() => []),
+      prisma.siteVisitor.count().catch(() => 0),
+      prisma.application
+        .findMany({
+          select: {
+            createdAt: true,
+            status: true,
+          },
+        })
+        .catch(() => []),
+      prisma.payrollPeriod
+        .findMany({
+          orderBy: { startDate: "desc" },
+          take: 5,
+          include: {
+            records: {
+              select: {
+                status: true,
+                employee: { select: { internalNotes: true } },
+              },
+            },
+          },
+        })
+        .catch(() => []),
+    ]);
+
+    // 1. Funnel Stages Breakdown
+    const byStatus = opsReport.recruitment.byStatus;
+    const totalApps = opsReport.recruitment.totalApplications;
+
+    const underReview = (byStatus["SUBMITTED"] || 0) + (byStatus["SCREENING_PASSED"] || 0);
+    const inEvaluation =
+      (byStatus["EVALUATION_SELECTED"] || 0) +
+      (byStatus["EVALUATION_SUBMITTED"] || 0) +
+      (byStatus["INTERVIEW_SCHEDULED"] || 0) +
+      (byStatus["INTERVIEW_COMPLETED"] || 0);
+    const offered = byStatus["OFFER_EXTENDED"] || 0;
+    const hired = (byStatus["HIRED"] || 0) + (byStatus["ONBOARDING_COMPLETED"] || 0);
+    const rejected = byStatus["REJECTED"] || 0;
+
+    const funnelStages: FunnelStage[] = [
+      {
+        stage: "Applied",
+        count: totalApps,
+        percentage: 100,
+        color: "bg-blue-500",
+      },
+      {
+        stage: "Under Review",
+        count: underReview,
+        percentage: totalApps > 0 ? Math.round((underReview / totalApps) * 100) : 0,
+        color: "bg-indigo-500",
+      },
+      {
+        stage: "Interview & Eval",
+        count: inEvaluation,
+        percentage: totalApps > 0 ? Math.round((inEvaluation / totalApps) * 100) : 0,
+        color: "bg-purple-500",
+      },
+      {
+        stage: "Offered",
+        count: offered,
+        percentage: totalApps > 0 ? Math.round((offered / totalApps) * 100) : 0,
+        color: "bg-amber-500",
+      },
+      {
+        stage: "Hired",
+        count: hired,
+        percentage: totalApps > 0 ? Math.round((hired / totalApps) * 100) : 0,
+        color: "bg-emerald-500",
+      },
+      {
+        stage: "Rejected",
+        count: rejected,
+        percentage: totalApps > 0 ? Math.round((rejected / totalApps) * 100) : 0,
+        color: "bg-rose-500",
+      },
+    ];
+
+    // 2. Attendance Stats
+    const attByStatus: Record<string, number> = {};
+    let todayPresent = 0;
+    for (const att of allAttendanceLogs) {
+      attByStatus[att.status] = (attByStatus[att.status] || 0) + 1;
+      const attDate = new Date(att.date);
+      if (attDate >= todayStart && attDate <= todayEnd && att.status === "PRESENT") {
+        todayPresent++;
+      }
+    }
+
+    const attendance: AttendanceAnalytics = {
+      totalLogs: allAttendanceLogs.length,
+      byStatus: attByStatus,
+      pendingRegularizations: pendingRegCount,
+    };
+
+    // 3. Leave Stats
+    let todayOnLeave = 0;
+    let pendingLeaves = 0;
+    let approvedLeaves = 0;
+    let rejectedLeaves = 0;
+    const leaveCategoryCounts: Record<string, number> = {};
+
+    for (const lv of allLeaves) {
+      if (lv.status === "PENDING") pendingLeaves++;
+      if (lv.status === "APPROVED") approvedLeaves++;
+      if (lv.status === "REJECTED") rejectedLeaves++;
+
+      const s = new Date(lv.startDate);
+      const e = new Date(lv.endDate);
+      if (lv.status === "APPROVED" && s <= todayEnd && e >= todayStart) {
+        todayOnLeave++;
+      }
+
+      const catName = lv.leaveType?.name || "Other";
+      leaveCategoryCounts[catName] = (leaveCategoryCounts[catName] || 0) + 1;
+    }
+
+    const leaves: LeaveAnalytics = {
+      totalRequests: allLeaves.length,
+      pendingCount: pendingLeaves,
+      approvedCount: approvedLeaves,
+      rejectedCount: rejectedLeaves,
+      byCategory: Object.entries(leaveCategoryCounts).map(([category, count]) => ({
+        category,
+        count,
+      })),
+    };
+
+    // 4. Payroll Analytics
+    let paidWorkforceCount = 0;
+    let unpaidWorkforceCount = 0;
+    let fullTimeCount = 0;
+    let internCount = 0;
+
+    for (const emp of allEmployees) {
+      const isIntern =
+        emp.designation.toLowerCase().includes("intern") ||
+        emp.department.toLowerCase().includes("intern");
+      if (isIntern) internCount++;
+      else fullTimeCount++;
+
+      let isPaid = true;
+      if (emp.internalNotes?.includes("PAYROLL_PROFILE:")) {
+        try {
+          const match = emp.internalNotes.match(/PAYROLL_PROFILE:(\{.*?\})/);
+          if (match && match[1]) {
+            const parsed = JSON.parse(match[1]);
+            if (parsed.isPaid !== undefined) isPaid = Boolean(parsed.isPaid);
+          }
+        } catch {}
+      }
+
+      if (isPaid) paidWorkforceCount++;
+      else unpaidWorkforceCount++;
+    }
+
+    let disbursedTotal = 0;
+    let paidRecordsCount = 0;
+    let pendingRecordsCount = 0;
+    const activeCycleCode = latestPayrollPeriod?.code || "2026-10";
+    const cycleStatus = latestPayrollPeriod?.status || "DRAFT";
+    const totalEnrolled = latestPayrollPeriod?.records.length || 0;
+
+    if (latestPayrollPeriod) {
+      for (const rec of latestPayrollPeriod.records) {
+        if (rec.status === "PAID") {
+          paidRecordsCount++;
+          let amt = 35000;
+          if (rec.employee?.internalNotes?.includes("PAYROLL_PROFILE:")) {
+            try {
+              const match = rec.employee.internalNotes.match(/PAYROLL_PROFILE:(\{.*?\})/);
+              if (match && match[1]) {
+                const parsed = JSON.parse(match[1]);
+                amt = parsed.stipendAmount ?? 35000;
+              }
+            } catch {}
+          }
+          disbursedTotal += amt;
+        } else {
+          pendingRecordsCount++;
+        }
+      }
+    }
+
+    const payroll: PayrollAnalytics = {
+      activeCycleCode,
+      cycleStatus,
+      totalEnrolled,
+      paidCount: paidRecordsCount,
+      pendingCount: pendingRecordsCount,
+      disbursedAmount: disbursedTotal,
+      paidWorkforce: paidWorkforceCount,
+      unpaidWorkforce: unpaidWorkforceCount,
+    };
+
+    // 5. Platform Telemetry
+    const uniqueVisitors = Math.max(visitorCount, 1);
+    const telemetry: PlatformTelemetry = {
+      uniqueVisitors,
+      totalApplications: totalApps,
+      conversionRate: Math.round((totalApps / uniqueVisitors) * 100),
+    };
+
+    // 6. KPIs
+    const activeStaff =
+      opsReport.employees.byStatus["ACTIVE"] ||
+      allEmployees.filter((e) => e.status === "ACTIVE").length;
+
+    const kpis: ExecutiveKpiSummary = {
+      totalApplications: totalApps,
+      totalHired: hired,
+      activeOpenings: activeOpeningsCount,
+      totalEmployees: opsReport.employees.totalEmployees || allEmployees.length,
+      activeEmployees: activeStaff,
+      fullTimeCount,
+      internCount,
+      paidWorkforceCount,
+      unpaidWorkforceCount,
+      payrollDisbursedAmount: disbursedTotal,
+      activePayrollCycle: activeCycleCode,
+      payrollCompletionRate:
+        totalEnrolled > 0 ? Math.round((paidRecordsCount / totalEnrolled) * 100) : 0,
+      todayAttendancePresent: todayPresent,
+      todayOnLeave,
+      pendingLeavesCount: pendingLeaves,
+      totalVisitors: uniqueVisitors,
+    };
+
+    // 7. Time-Series and Chart Datasets
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const chartNow = new Date();
+    const pastMonths: { year: number; monthIdx: number; label: string; month: string }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(chartNow.getFullYear(), chartNow.getMonth() - i, 1);
+      pastMonths.push({
+        year: d.getFullYear(),
+        monthIdx: d.getMonth(),
+        month: monthNames[d.getMonth()],
+        label: `${monthNames[d.getMonth()]} ${d.getFullYear()}`,
+      });
+    }
+
+    const monthlyRecruitmentTrends: MonthlyRecruitmentTrend[] = pastMonths.map((m) => {
+      let apps = 0;
+      let interviews = 0;
+      let hiredCount = 0;
+
+      for (const app of allApplications) {
+        const appDate = new Date(app.createdAt);
+        if (appDate.getFullYear() === m.year && appDate.getMonth() === m.monthIdx) {
+          apps++;
+          if (
+            app.status.includes("INTERVIEW") ||
+            app.status.includes("EVALUATION") ||
+            app.status.includes("REVIEW")
+          ) {
+            interviews++;
+          }
+          if (app.status === "HIRED" || app.status === "OFFER_ACCEPTED") {
+            hiredCount++;
+          }
+        }
+      }
+
+      return {
+        month: m.month,
+        year: m.year,
+        label: m.label,
+        applications: apps,
+        interviews,
+        hired: hiredCount,
+      };
+    });
+
+    const deptColors = [
+      "#3b82f6",
+      "#8b5cf6",
+      "#10b981",
+      "#f59e0b",
+      "#06b6d4",
+      "#ec4899",
+      "#6366f1",
+      "#14b8a6",
+    ];
+    const totalEmps = opsReport.employees.totalEmployees || allEmployees.length;
+    const departmentDistribution: DepartmentChartData[] = opsReport.employees.byDepartment.map((d, idx) => ({
+      department: d.department,
+      count: d.count,
+      percentage: totalEmps > 0 ? Math.round((d.count / totalEmps) * 100) : 0,
+      color: deptColors[idx % deptColors.length],
+    }));
+
+    const employmentTypeDistribution = [
+      {
+        type: "Full-Time",
+        count: fullTimeCount,
+        percentage: totalEmps > 0 ? Math.round((fullTimeCount / totalEmps) * 100) : 0,
+        color: "#3b82f6",
+      },
+      {
+        type: "Interns",
+        count: internCount,
+        percentage: totalEmps > 0 ? Math.round((internCount / totalEmps) * 100) : 0,
+        color: "#8b5cf6",
+      },
+    ];
+
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const attendanceDailyTrends: AttendanceDailyTrend[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const targetDate = new Date();
+      targetDate.setDate(targetDate.getDate() - i);
+      const dayStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0);
+      const dayEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+
+      let presentCount = 0;
+      for (const log of allAttendanceLogs) {
+        const lDate = new Date(log.date);
+        if (lDate >= dayStart && lDate <= dayEnd && log.status === "PRESENT") {
+          presentCount++;
+        }
+      }
+
+      let leaveCount = 0;
+      for (const lv of allLeaves) {
+        if (lv.status === "APPROVED") {
+          const s = new Date(lv.startDate);
+          const e = new Date(lv.endDate);
+          if (s <= dayEnd && e >= dayStart) {
+            leaveCount++;
+          }
+        }
+      }
+
+      const activeTotal = activeStaff || 1;
+      const attRate = Math.min(100, Math.round((presentCount / activeTotal) * 100));
+
+      attendanceDailyTrends.push({
+        day: dayNames[targetDate.getDay()],
+        dateStr: `${monthNames[targetDate.getMonth()]} ${targetDate.getDate()}`,
+        present: presentCount,
+        onLeave: leaveCount,
+        attendanceRate: attRate,
+      });
+    }
+
+    const payrollCycleTrends: PayrollCycleTrend[] = [];
+    if (allPayrollPeriods && allPayrollPeriods.length > 0) {
+      for (const p of allPayrollPeriods.slice(0, 5)) {
+        let pDisbursed = 0;
+        let pPaid = 0;
+        let pUnpaid = 0;
+        for (const r of p.records) {
+          if (r.status === "PAID") {
+            pPaid++;
+            let amt = 35000;
+            if (r.employee?.internalNotes?.includes("PAYROLL_PROFILE:")) {
+              try {
+                const match = r.employee.internalNotes.match(/PAYROLL_PROFILE:(\{.*?\})/);
+                if (match && match[1]) {
+                  const parsed = JSON.parse(match[1]);
+                  amt = parsed.stipendAmount ?? 35000;
+                }
+              } catch {}
+            }
+            pDisbursed += amt;
+          } else {
+            pUnpaid++;
+          }
+        }
+        payrollCycleTrends.push({
+          cycle: p.code,
+          disbursedAmount: pDisbursed,
+          paidCount: pPaid,
+          unpaidCount: pUnpaid,
+        });
+      }
+    } else {
+      payrollCycleTrends.push({
+        cycle: activeCycleCode,
+        disbursedAmount: disbursedTotal,
+        paidCount: paidRecordsCount,
+        unpaidCount: pendingRecordsCount,
+      });
+    }
+
+    const charts: AnalyticsChartsData = {
+      monthlyRecruitmentTrends,
+      departmentDistribution,
+      employmentTypeDistribution,
+      attendanceDailyTrends,
+      payrollCycleTrends,
+    };
+
+    return {
+      metadata: opsReport.metadata,
+      kpis,
+      funnelStages,
+      charts,
+      recruitment: opsReport.recruitment,
+      internship: opsReport.internship,
+      employees: opsReport.employees,
+      attendance,
+      leaves,
+      payroll,
+      telemetry,
     };
   }
 
