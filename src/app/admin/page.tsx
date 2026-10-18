@@ -18,80 +18,128 @@ import {
   Clock,
   CalendarDays,
   ShieldCheck,
-  Eye,
+  CreditCard,
+  BarChart3,
   ArrowRight,
   Plus,
+  CheckCircle2,
+  AlertCircle,
+  Building,
+  TrendingUp,
   UserCheck,
-  Activity,
-  Layers,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 
 export const instant = false;
 
+function formatRelativeTime(date: Date) {
+  const diffMs = Date.now() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
+function getInitials(name?: string | null) {
+  if (!name) return "CA";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+function getApplicationStatusBadge(status: ApplicationStatus) {
+  switch (status) {
+    case ApplicationStatus.HIRED:
+    case ApplicationStatus.OFFER_ACCEPTED:
+      return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20";
+    case ApplicationStatus.OFFERED:
+      return "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20";
+    case ApplicationStatus.INTERVIEW_SCHEDULED:
+    case ApplicationStatus.INTERVIEWED:
+      return "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20";
+    case ApplicationStatus.EVALUATION_SELECTED:
+      return "bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20";
+    case ApplicationStatus.REJECTED:
+      return "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/20";
+    default:
+      return "bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-500/20";
+  }
+}
+
 export default async function AdminOverviewPage() {
-  // 1. Query live database counts for all primary workforce & recruitment modules
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+  // 1. Parallel database queries for real-time counts and operational feeds
   const [
     totalApplications,
     activeOpenings,
     scheduledInterviews,
     activeEvaluations,
-    totalEmployees,
+    allEmployees,
     pendingLeaves,
-    attendanceCount,
+    todayAttendance,
+    todayOnLeave,
+    pendingRegularizations,
     totalVisitors,
     subAdminCount,
-  ] = await Promise.all([
-    prisma.application.count().catch(() => 0),
-    prisma.opening
-      .count({ where: { status: OpeningStatus.PUBLISHED } })
-      .catch(() => 0),
-    prisma.interviewSchedule
-      .count({ where: { status: InterviewStatus.SCHEDULED } })
-      .catch(() => 0),
-    prisma.internshipEnrollment
-      .count({ where: { status: EvaluationStatus.IN_PROGRESS } })
-      .catch(() => 0),
-    prisma.employee.count().catch(() => 0),
-    prisma.leaveRequest
-      .count({ where: { status: LeaveRequestStatus.PENDING } })
-      .catch(() => 0),
-    prisma.attendanceRecord.count().catch(() => 0),
-    getUniqueVisitorCount().catch(() => 0),
-    prisma.userRole
-      .count({ where: { role: { in: ["HR", "MANAGER", "INTERVIEWER", "MENTOR"] } } })
-      .catch(() => 0),
-  ]);
-
-  // 2. Query application pipeline breakdown for funnel analytics
-  const [
     submittedCount,
-    underReviewCount,
+    screeningCount,
     shortlistedCount,
+    interviewingCount,
     inEvaluationCount,
     hiredCount,
+    recentApplications,
+    recentOpenings,
+    pendingLeaveItems,
+    latestPayroll,
   ] = await Promise.all([
-    prisma.application
-      .count({ where: { status: ApplicationStatus.SUBMITTED } })
+    prisma.application.count().catch(() => 0),
+    prisma.opening.count({ where: { status: OpeningStatus.PUBLISHED } }).catch(() => 0),
+    prisma.interviewSchedule.count({ where: { status: InterviewStatus.SCHEDULED } }).catch(() => 0),
+    prisma.internshipEnrollment.count({ where: { status: EvaluationStatus.IN_PROGRESS } }).catch(() => 0),
+    prisma.employee
+      .findMany({
+        select: { id: true, designation: true, department: true, status: true },
+      })
+      .catch(() => []),
+    prisma.leaveRequest.count({ where: { status: LeaveRequestStatus.PENDING } }).catch(() => 0),
+    prisma.attendanceRecord
+      .count({
+        where: { date: { gte: todayStart, lte: todayEnd }, status: "PRESENT" },
+      })
       .catch(() => 0),
-    prisma.application
-      .count({ where: { status: ApplicationStatus.SCREENING } })
+    prisma.leaveRequest
+      .count({
+        where: {
+          status: LeaveRequestStatus.APPROVED,
+          startDate: { lte: todayEnd },
+          endDate: { gte: todayStart },
+        },
+      })
       .catch(() => 0),
+    prisma.attendanceRegularization.count({ where: { status: "PENDING" } }).catch(() => 0),
+    getUniqueVisitorCount().catch(() => 0),
+    prisma.userRole
+      .count({ where: { role: { in: ["HR", "MANAGER", "INTERVIEWER", "MENTOR", "ADMIN"] } } })
+      .catch(() => 0),
+    prisma.application.count({ where: { status: ApplicationStatus.SUBMITTED } }).catch(() => 0),
+    prisma.application.count({ where: { status: ApplicationStatus.SCREENING } }).catch(() => 0),
+    prisma.application.count({ where: { status: ApplicationStatus.SHORTLISTED } }).catch(() => 0),
     prisma.application
       .count({
         where: {
           status: {
-            in: [
-              ApplicationStatus.SHORTLISTED,
-              ApplicationStatus.INTERVIEW_SCHEDULED,
-              ApplicationStatus.INTERVIEWED,
-            ],
+            in: [ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.INTERVIEWED],
           },
         },
       })
       .catch(() => 0),
-    prisma.application
-      .count({ where: { status: ApplicationStatus.EVALUATION_SELECTED } })
-      .catch(() => 0),
+    prisma.application.count({ where: { status: ApplicationStatus.EVALUATION_SELECTED } }).catch(() => 0),
     prisma.application
       .count({
         where: {
@@ -105,329 +153,348 @@ export default async function AdminOverviewPage() {
         },
       })
       .catch(() => 0),
+    prisma.application
+      .findMany({
+        take: 5,
+        orderBy: { createdAt: "desc" },
+        include: {
+          opening: { select: { title: true, department: true, type: true } },
+          candidate: { include: { user: { select: { name: true, email: true } } } },
+        },
+      })
+      .catch(() => []),
+    prisma.opening
+      .findMany({
+        take: 4,
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          title: true,
+          department: true,
+          status: true,
+          type: true,
+          _count: { select: { applications: true } },
+        },
+      })
+      .catch(() => []),
+    prisma.leaveRequest
+      .findMany({
+        where: { status: LeaveRequestStatus.PENDING },
+        take: 2,
+        include: {
+          employee: { include: { user: { select: { name: true, email: true } } } },
+          leaveType: { select: { name: true } },
+        },
+        orderBy: { createdAt: "desc" },
+      })
+      .catch(() => []),
+    prisma.payrollPeriod
+      .findFirst({
+        orderBy: { startDate: "desc" },
+        select: { code: true, status: true },
+      })
+      .catch(() => null),
   ]);
 
-  // 3. Query real recent applications
-  const recentApplications = await prisma.application
-    .findMany({
-      take: 4,
-      orderBy: { createdAt: "desc" },
-      include: {
-        opening: {
-          select: { title: true, department: true },
-        },
-        candidate: {
-          include: {
-            user: { select: { name: true, email: true } },
-          },
-        },
-      },
-    })
-    .catch(() => []);
+  // Derived Workforce metrics
+  const totalEmployees = allEmployees.length;
+  let fullTimeCount = 0;
+  let internCount = 0;
+  const deptCounts: Record<string, number> = {};
 
-  // 4. Query recently published or created job openings
-  const recentOpenings = await prisma.opening
-    .findMany({
-      take: 3,
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        title: true,
-        department: true,
-        status: true,
-        type: true,
-        createdAt: true,
-        _count: { select: { applications: true } },
-      },
-    })
-    .catch(() => []);
+  for (const emp of allEmployees) {
+    const isIntern =
+      emp.designation.toLowerCase().includes("intern") ||
+      emp.department.toLowerCase().includes("intern");
+    if (isIntern) internCount++;
+    else fullTimeCount++;
+
+    const dept = emp.department || "General";
+    deptCounts[dept] = (deptCounts[dept] || 0) + 1;
+  }
+
+  const topDepartments = Object.entries(deptCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
+
+  const activeStaffTotal = Math.max(totalEmployees, 1);
+  const todayTurnoutRate = Math.min(100, Math.round((todayAttendance / activeStaffTotal) * 100));
+
+  // Funnel Stage Aggregates
+  const stageReview = submittedCount + screeningCount;
+  const stageInterview = shortlistedCount + interviewingCount;
 
   return (
-    <div className="space-y-6">
-      {/* Row 1: 4 Primary Recruitment & Evaluation KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Total Applications */}
-        <Link
-          href="/admin/applications"
-          className="bg-card border border-border/70 border-l-4 border-l-blue-600 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-all flex items-center justify-between group"
-        >
-          <div>
-            <p className="text-[11px] font-bold text-muted-foreground tracking-wider uppercase">
-              Total Applications
-            </p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">
-              {totalApplications}
-            </p>
-            <p className="text-[11px] font-medium text-muted-foreground mt-1 flex items-center gap-1 group-hover:text-blue-600 dark:group-hover:text-blue-400">
-              <span>Candidate Pipeline</span>
-              <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-            </p>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400 flex items-center justify-center shrink-0">
-            <FileText className="h-5 w-5" />
-          </div>
-        </Link>
-
-        {/* Card 2: Active Job Openings */}
-        <Link
-          href="/admin/openings"
-          className="bg-card border border-border/70 border-l-4 border-l-emerald-600 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-all flex items-center justify-between group"
-        >
-          <div>
-            <p className="text-[11px] font-bold text-muted-foreground tracking-wider uppercase">
-              Active Openings
-            </p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">
-              {activeOpenings}
-            </p>
-            <p className="text-[11px] font-medium text-muted-foreground mt-1 flex items-center gap-1 group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
-              <span>Published on Careers</span>
-              <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-            </p>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <Briefcase className="h-5 w-5" />
-          </div>
-        </Link>
-
-        {/* Card 3: Interviews Scheduled */}
-        <Link
-          href="/admin/interviews"
-          className="bg-card border border-border/70 border-l-4 border-l-amber-600 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-all flex items-center justify-between group"
-        >
-          <div>
-            <p className="text-[11px] font-bold text-muted-foreground tracking-wider uppercase">
-              Interviews Scheduled
-            </p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">
-              {scheduledInterviews}
-            </p>
-            <p className="text-[11px] font-medium text-muted-foreground mt-1 flex items-center gap-1 group-hover:text-amber-600 dark:group-hover:text-amber-400">
-              <span>Upcoming Panels</span>
-              <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-            </p>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 flex items-center justify-center shrink-0">
-            <Calendar className="h-5 w-5" />
-          </div>
-        </Link>
-
-        {/* Card 4: 7-Day Supervised Evaluations */}
-        <Link
-          href="/admin/evaluations"
-          className="bg-card border border-border/70 border-l-4 border-l-purple-600 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-all flex items-center justify-between group"
-        >
-          <div>
-            <p className="text-[11px] font-bold text-muted-foreground tracking-wider uppercase">
-              7-Day Evaluations
-            </p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">
-              {activeEvaluations}
-            </p>
-            <p className="text-[11px] font-medium text-muted-foreground mt-1 flex items-center gap-1 group-hover:text-purple-600 dark:group-hover:text-purple-400">
-              <span>Supervised Period</span>
-              <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-            </p>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-950/60 dark:text-purple-400 flex items-center justify-center shrink-0">
-            <Award className="h-5 w-5" />
-          </div>
-        </Link>
-      </div>
-
-      {/* Row 2: Secondary Operational HRMS & Workforce Health Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Metric 1: Active Employees & Interns */}
-        <Link
-          href="/admin/employees"
-          className="bg-card border border-border/70 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between group"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-muted-foreground">
-              Employees & Interns
-            </p>
-            <div className="h-8 w-8 rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400 flex items-center justify-center shrink-0">
-              <UserCheck className="h-4 w-4" />
+    <div className="w-full space-y-6">
+      {/* ─── Operational Attention Notice Bar ─── */}
+      {(pendingLeaves > 0 || pendingRegularizations > 0 || scheduledInterviews > 0) ? (
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="h-8 w-8 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
+              <AlertCircle className="h-4 w-4" />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-bold text-amber-900 dark:text-amber-200">
+                Action Items Awaiting Admin
+              </span>
+              <span className="text-muted-foreground hidden sm:inline">•</span>
+              <div className="flex flex-wrap gap-1.5 font-mono">
+                {pendingLeaves > 0 && (
+                  <Badge variant="outline" className="bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30">
+                    {pendingLeaves} Leave Requests
+                  </Badge>
+                )}
+                {pendingRegularizations > 0 && (
+                  <Badge variant="outline" className="bg-blue-500/15 text-blue-800 dark:text-blue-300 border-blue-500/30">
+                    {pendingRegularizations} Attendance Regularizations
+                  </Badge>
+                )}
+                {scheduledInterviews > 0 && (
+                  <Badge variant="outline" className="bg-purple-500/15 text-purple-800 dark:text-purple-300 border-purple-500/30">
+                    {scheduledInterviews} Interviews Scheduled
+                  </Badge>
+                )}
+              </div>
             </div>
           </div>
-          <div className="mt-2">
-            <p className="text-2xl font-bold font-mono text-foreground">
-              {totalEmployees}
-            </p>
-            <p className="text-[11px] font-medium text-blue-600 dark:text-blue-400 flex items-center gap-1 mt-1">
-              <span>Active workforce records</span>
-            </p>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {pendingLeaves > 0 && (
+              <Link
+                href="/admin/leave"
+                className="h-8 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold flex items-center gap-1 transition-all shadow-2xs"
+              >
+                <span>Review Leaves</span>
+                <ArrowRight className="h-3 w-3" />
+              </Link>
+            )}
+            {scheduledInterviews > 0 && (
+              <Link
+                href="/admin/interviews"
+                className="h-8 px-3 rounded-xl border border-amber-500/30 bg-background hover:bg-muted text-foreground font-semibold flex items-center gap-1 transition-all"
+              >
+                <span>Schedules</span>
+                <ArrowRight className="h-3 w-3" />
+              </Link>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-xs shadow-2xs">
+          <div className="flex items-center gap-2.5 text-emerald-800 dark:text-emerald-300">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span className="font-semibold">All Operations Normal — Operational inboxes cleared</span>
+          </div>
+          <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
+            Real-Time Verified
+          </span>
+        </div>
+      )}
+
+      {/* ─── 5 TOP EXECUTIVE METRIC CARDS ─── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
+        {/* 1. Applications Pipeline */}
+        <Link
+          href="/admin/applications"
+          className="bg-card border border-border/80 border-l-4 border-l-blue-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
+        >
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
+              Applications
+            </span>
+            <div className="h-8 w-8 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <FileText className="h-4 w-4" />
+            </div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
+            {totalApplications}
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
+            <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20">
+              {hiredCount} Hired
+            </Badge>
+            <span className="text-muted-foreground">
+              • {totalApplications ? Math.round((hiredCount / totalApplications) * 100) : 0}% Conv
+            </span>
           </div>
         </Link>
 
-        {/* Metric 2: Today's Attendance Entries */}
+        {/* 2. Total Workforce */}
+        <Link
+          href="/admin/employees"
+          className="bg-card border border-border/80 border-l-4 border-l-purple-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
+        >
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
+              Workforce
+            </span>
+            <div className="h-8 w-8 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Users className="h-4 w-4" />
+            </div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
+            {totalEmployees}
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
+            <span className="font-semibold text-purple-700 dark:text-purple-300">
+              {fullTimeCount} FT
+            </span>
+            <span className="text-muted-foreground">•</span>
+            <span className="text-muted-foreground">{internCount} Interns</span>
+          </div>
+        </Link>
+
+        {/* 3. Published Job Openings */}
+        <Link
+          href="/admin/openings"
+          className="bg-card border border-border/80 border-l-4 border-l-emerald-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
+        >
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
+              Job Openings
+            </span>
+            <div className="h-8 w-8 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Briefcase className="h-4 w-4" />
+            </div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
+            {activeOpenings}
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
+            <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20">
+              {topDepartments.length} Active Depts
+            </Badge>
+          </div>
+        </Link>
+
+        {/* 4. Attendance Today */}
         <Link
           href="/admin/attendance"
-          className="bg-card border border-border/70 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between group"
+          className="bg-card border border-border/80 border-l-4 border-l-amber-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
         >
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-muted-foreground">
-              Attendance Logged
-            </p>
-            <div className="h-8 w-8 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 flex items-center justify-center shrink-0">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
+              Attendance Today
+            </span>
+            <div className="h-8 w-8 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
               <Clock className="h-4 w-4" />
             </div>
           </div>
-          <div className="mt-2">
-            <p className="text-2xl font-bold font-mono text-foreground">
-              {attendanceCount}
-            </p>
-            <p className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1 mt-1">
-              <span>Clock-in verified entries</span>
-            </p>
+          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
+            {todayAttendance}
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
+            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+              {todayTurnoutRate}% Turnout
+            </span>
+            <span className="text-muted-foreground">•</span>
+            <span className="text-amber-600 dark:text-amber-400">{todayOnLeave} on Leave</span>
           </div>
         </Link>
 
-        {/* Metric 3: Pending Leave Requests */}
+        {/* 5. Evaluations & Interviews */}
         <Link
-          href="/admin/leave"
-          className="bg-card border border-border/70 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex flex-col justify-between group"
+          href="/admin/evaluations"
+          className="col-span-2 sm:col-span-1 bg-card border border-border/80 border-l-4 border-l-cyan-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
         >
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-muted-foreground">
-              Leave Requests
-            </p>
-            <div className="h-8 w-8 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 flex items-center justify-center shrink-0">
-              <CalendarDays className="h-4 w-4" />
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
+              7-Day Evaluations
+            </span>
+            <div className="h-8 w-8 rounded-xl bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Award className="h-4 w-4" />
             </div>
           </div>
-          <div className="mt-2">
-            <p className="text-2xl font-bold font-mono text-foreground">
-              {pendingLeaves}
-            </p>
-            <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400 flex items-center gap-1 mt-1">
-              <span>Awaiting admin review</span>
-            </p>
+          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
+            {activeEvaluations}
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
+            <Badge variant="outline" className="text-[10px] bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border-cyan-500/20">
+              {scheduledInterviews} Scheduled Panels
+            </Badge>
           </div>
         </Link>
-
-        {/* Metric 4: Verified Portal Visitors */}
-        <div className="bg-card border border-border/70 rounded-xl p-4 shadow-2xs flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-muted-foreground">
-              Verified Visitors
-            </p>
-            <div className="h-8 w-8 rounded-lg bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 flex items-center justify-center shrink-0">
-              <Eye className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="mt-2">
-            <p className="text-2xl font-bold font-mono text-foreground">
-              {totalVisitors}
-            </p>
-            <p className="text-[11px] font-medium text-muted-foreground flex items-center gap-1 mt-1">
-              <span>Unique portal traffic</span>
-            </p>
-          </div>
-        </div>
       </div>
 
-      {/* Row 3: Pipeline Breakdown Funnel & Recent System Activity */}
+      {/* ─── ROW 2: HIRING FUNNEL BREAKDOWN & WORKFORCE TURNOUT ─── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Hiring Pipeline & Evaluation Funnel (7 cols) */}
-        <div className="lg:col-span-7 bg-card border border-border/70 rounded-2xl p-5 shadow-2xs flex flex-col justify-between">
+        {/* Left 7 Cols: Recruitment Funnel Progression */}
+        <div className="lg:col-span-7 bg-card border border-border/80 rounded-2xl p-5 shadow-2xs flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between gap-2 mb-4">
-              <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
-                <Layers className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                <span>Candidate Pipeline & Funnel Breakdown</span>
-              </h2>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                {totalApplications} Total
+            <div className="flex items-center justify-between pb-3 border-b border-border/60 mb-4">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-bold text-foreground">
+                  Recruitment Pipeline Funnel
+                </h2>
+              </div>
+              <span className="font-mono text-xs text-muted-foreground">
+                Total: {totalApplications} Applicants
               </span>
             </div>
 
             {totalApplications === 0 ? (
-              <div className="py-12 px-4 text-center rounded-xl border border-dashed border-border/70 bg-muted/10 my-4">
+              <div className="py-12 text-center rounded-xl border border-dashed border-border/70 bg-muted/20 my-2">
                 <FileText className="h-8 w-8 text-muted-foreground/60 mx-auto mb-2" />
-                <p className="text-sm font-semibold text-foreground">
-                  No Applications in Pipeline Yet
-                </p>
-                <p className="text-xs text-muted-foreground max-w-sm mx-auto mt-1 mb-4">
-                  Candidates who apply through the public Careers portal will automatically appear in this pipeline breakdown.
-                </p>
+                <span className="text-xs font-semibold text-foreground block">
+                  No Applications in Pipeline
+                </span>
                 <Link
                   href="/admin/openings/new"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-all shadow-2xs"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  <span>Create First Job Opening</span>
+                  Create First Opening
                 </Link>
               </div>
             ) : (
-              <div className="space-y-4 my-2">
-                {/* Stage 1: Received / Submitted */}
-                <div>
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
+              <div className="space-y-3.5 my-2">
+                {/* 1. Screening */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-foreground flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-slate-400" />
                       Submitted & Screening
                     </span>
                     <span className="font-mono text-muted-foreground font-semibold">
-                      {submittedCount} ({totalApplications ? Math.round((submittedCount / totalApplications) * 100) : 0}%)
+                      {stageReview} ({totalApplications ? Math.round((stageReview / totalApplications) * 100) : 0}%)
                     </span>
                   </div>
-                  <div className="w-full h-2.5 rounded-full bg-muted/50 overflow-hidden">
+                  <div className="w-full h-2 rounded-full bg-muted/60 overflow-hidden">
                     <div
-                      className="h-full bg-slate-500 rounded-full"
+                      className="h-full bg-slate-500 rounded-full transition-all duration-300"
                       style={{
-                        width: `${totalApplications ? (submittedCount / totalApplications) * 100 : 0}%`,
+                        width: `${totalApplications ? Math.max((stageReview / totalApplications) * 100, 3) : 0}%`,
                       }}
                     />
                   </div>
                 </div>
 
-                {/* Stage 2: Under Review */}
-                <div>
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
-                      <span className="h-2 w-2 rounded-full bg-blue-500" />
-                      Under HR Review
-                    </span>
-                    <span className="font-mono text-muted-foreground font-semibold">
-                      {underReviewCount} ({totalApplications ? Math.round((underReviewCount / totalApplications) * 100) : 0}%)
-                    </span>
-                  </div>
-                  <div className="w-full h-2.5 rounded-full bg-muted/50 overflow-hidden">
-                    <div
-                      className="h-full bg-blue-500 rounded-full"
-                      style={{
-                        width: `${totalApplications ? (underReviewCount / totalApplications) * 100 : 0}%`,
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {/* Stage 3: Shortlisted & Interviewing */}
-                <div>
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
+                {/* 2. Shortlisted & Interviewing */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-foreground flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-amber-500" />
-                      Shortlisted / Interviewing
+                      Shortlisted & Interviews
                     </span>
                     <span className="font-mono text-muted-foreground font-semibold">
-                      {shortlistedCount} ({totalApplications ? Math.round((shortlistedCount / totalApplications) * 100) : 0}%)
+                      {stageInterview} ({totalApplications ? Math.round((stageInterview / totalApplications) * 100) : 0}%)
                     </span>
                   </div>
-                  <div className="w-full h-2.5 rounded-full bg-muted/50 overflow-hidden">
+                  <div className="w-full h-2 rounded-full bg-muted/60 overflow-hidden">
                     <div
-                      className="h-full bg-amber-500 rounded-full"
+                      className="h-full bg-amber-500 rounded-full transition-all duration-300"
                       style={{
-                        width: `${totalApplications ? (shortlistedCount / totalApplications) * 100 : 0}%`,
+                        width: `${totalApplications ? Math.max((stageInterview / totalApplications) * 100, 3) : 0}%`,
                       }}
                     />
                   </div>
                 </div>
 
-                {/* Stage 4: 7-Day Supervised Evaluation */}
-                <div>
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
+                {/* 3. 7-Day Supervised Evaluation */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-foreground flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-purple-500" />
                       7-Day Supervised Evaluation
                     </span>
@@ -435,32 +502,32 @@ export default async function AdminOverviewPage() {
                       {inEvaluationCount} ({totalApplications ? Math.round((inEvaluationCount / totalApplications) * 100) : 0}%)
                     </span>
                   </div>
-                  <div className="w-full h-2.5 rounded-full bg-muted/50 overflow-hidden">
+                  <div className="w-full h-2 rounded-full bg-muted/60 overflow-hidden">
                     <div
-                      className="h-full bg-purple-500 rounded-full"
+                      className="h-full bg-purple-500 rounded-full transition-all duration-300"
                       style={{
-                        width: `${totalApplications ? (inEvaluationCount / totalApplications) * 100 : 0}%`,
+                        width: `${totalApplications ? Math.max((inEvaluationCount / totalApplications) * 100, 3) : 0}%`,
                       }}
                     />
                   </div>
                 </div>
 
-                {/* Stage 5: Offered & Onboarded */}
-                <div>
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
+                {/* 4. Offered & Hired */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-foreground flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                      Offered & Onboarded
+                      Offered & Hired
                     </span>
-                    <span className="font-mono text-muted-foreground font-semibold">
+                    <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">
                       {hiredCount} ({totalApplications ? Math.round((hiredCount / totalApplications) * 100) : 0}%)
                     </span>
                   </div>
-                  <div className="w-full h-2.5 rounded-full bg-muted/50 overflow-hidden">
+                  <div className="w-full h-2 rounded-full bg-muted/60 overflow-hidden">
                     <div
-                      className="h-full bg-emerald-500 rounded-full"
+                      className="h-full bg-emerald-500 rounded-full transition-all duration-300"
                       style={{
-                        width: `${totalApplications ? (hiredCount / totalApplications) * 100 : 0}%`,
+                        width: `${totalApplications ? Math.max((hiredCount / totalApplications) * 100, 3) : 0}%`,
                       }}
                     />
                   </div>
@@ -469,11 +536,11 @@ export default async function AdminOverviewPage() {
             )}
           </div>
 
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground mt-4 pt-3 border-t border-border/50">
-            <span>Configured Policy: 7-Working-Day Evaluation Gate</span>
+          <div className="pt-3 border-t border-border/60 mt-4 flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-mono">7-Working-Day Evaluation Policy Active</span>
             <Link
               href="/admin/applications"
-              className="font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+              className="font-semibold text-primary hover:underline flex items-center gap-1 cursor-pointer"
             >
               <span>Manage Candidates</span>
               <ArrowRight className="h-3 w-3" />
@@ -481,200 +548,385 @@ export default async function AdminOverviewPage() {
           </div>
         </div>
 
-        {/* Right Column: Recent Applications & System Activity (5 cols) */}
-        <div className="lg:col-span-5 bg-card border border-border/70 rounded-2xl p-5 shadow-2xs flex flex-col justify-between">
+        {/* Right 5 Cols: Workforce Departments & Today's Attendance Gauge */}
+        <div className="lg:col-span-5 bg-card border border-border/80 rounded-2xl p-5 shadow-2xs flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
-                <Activity className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                <span>Recent Candidate Applications</span>
-              </h2>
+            <div className="flex items-center justify-between pb-3 border-b border-border/60 mb-3">
+              <div className="flex items-center gap-2">
+                <Building className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-bold text-foreground">
+                  Workforce & Turnout
+                </h2>
+              </div>
+              <Badge variant="outline" className="font-mono text-xs">
+                {totalEmployees} Staff
+              </Badge>
+            </div>
+
+            {/* Department Breakdown */}
+            <div className="space-y-2.5 my-2">
+              {topDepartments.length === 0 ? (
+                <div className="py-8 text-center text-xs text-muted-foreground">
+                  No department records found.
+                </div>
+              ) : (
+                topDepartments.map(([deptName, cnt]) => {
+                  const pct = totalEmployees > 0 ? Math.round((cnt / totalEmployees) * 100) : 0;
+                  return (
+                    <div key={deptName} className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="font-medium text-foreground truncate pr-2">{deptName}</span>
+                        <span className="font-mono font-bold text-muted-foreground">
+                          {cnt} ({pct}%)
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full bg-muted/60 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary rounded-full transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-border/60 mt-4 flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-mono">Turnout: {todayTurnoutRate}% Present Today</span>
+            <Link
+              href="/admin/reports"
+              className="font-semibold text-primary hover:underline flex items-center gap-1 cursor-pointer"
+            >
+              <span>Analytics & Reports</span>
+              <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* ─── ROW 3: RECENT CANDIDATE APPLICATIONS & JOB OPENINGS ─── */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left 7 Cols: Recent Candidate Applications Feed */}
+        <div className="lg:col-span-7 bg-card border border-border/80 rounded-2xl p-5 shadow-2xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-border/60 mb-3">
+              <div className="flex items-center gap-2">
+                <FileText className="h-4 w-4 text-primary" />
+                <h3 className="text-sm font-bold text-foreground">
+                  Recent Applications
+                </h3>
+              </div>
               <Link
                 href="/admin/applications"
-                className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                className="text-xs font-semibold text-primary hover:underline"
               >
-                View All
+                View All →
               </Link>
             </div>
 
             {recentApplications.length === 0 ? (
-              <div className="py-10 px-4 text-center rounded-xl border border-dashed border-border/70 bg-muted/10 my-2">
-                <Users className="h-7 w-7 text-muted-foreground/60 mx-auto mb-1.5" />
-                <p className="text-xs font-semibold text-foreground">
-                  No Submissions Recorded Yet
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">
-                  Latest applicant activities and candidate records will appear here in real-time.
-                </p>
+              <div className="py-8 text-center text-xs text-muted-foreground">
+                No recent submissions recorded yet.
               </div>
             ) : (
-              <div className="space-y-2.5 my-2">
+              <div className="divide-y divide-border/60">
                 {recentApplications.map((app) => (
                   <div
                     key={app.id}
-                    className="p-3 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/40 transition-colors"
+                    className="py-3 flex items-center justify-between gap-3 hover:bg-muted/20 px-2 rounded-xl transition-colors"
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-semibold text-foreground truncate">
-                          {app.candidate?.user?.name || "Candidate"}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground truncate">
-                          Applied for {app.opening?.title || "Role"}
-                        </p>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-9 w-9 rounded-xl bg-primary/10 text-primary font-bold text-xs flex items-center justify-center shrink-0 border border-primary/20">
+                        {getInitials(app.candidate?.user?.name)}
                       </div>
-                      <span className="shrink-0 text-[10px] font-mono px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 font-semibold uppercase">
+                      <div className="min-w-0">
+                        <span className="text-xs font-bold text-foreground block truncate">
+                          {app.candidate?.user?.name || "Candidate"}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground block truncate">
+                          {app.opening?.title || "Role"} • {formatRelativeTime(app.createdAt)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] font-mono font-semibold ${getApplicationStatusBadge(
+                          app.status
+                        )}`}
+                      >
                         {app.status.replace(/_/g, " ")}
-                      </span>
+                      </Badge>
+                      <Link
+                        href={`/admin/applications/${app.id}`}
+                        className="text-xs font-semibold text-primary hover:underline px-1.5 py-0.5"
+                      >
+                        View
+                      </Link>
                     </div>
                   </div>
                 ))}
               </div>
             )}
-            {/* Active Job Openings Summary */}
-            <div className="mt-4 pt-3 border-t border-border/50">
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <h3 className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                  <Briefcase className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>Recent Job Openings</span>
-                </h3>
-                <Link
-                  href="/admin/openings"
-                  className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline"
-                >
-                  Manage
-                </Link>
-              </div>
-
-              {recentOpenings.length === 0 ? (
-                <p className="text-[11px] text-muted-foreground">No active openings published yet.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {recentOpenings.map((opening) => (
-                    <div
-                      key={opening.id}
-                      className="p-2 rounded-lg border border-border/60 bg-muted/15 flex items-center justify-between text-xs"
-                    >
-                      <div className="min-w-0 flex-1 pr-2">
-                        <span className="font-semibold text-foreground truncate block">
-                          {opening.title}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground">
-                          {opening.department} • {opening._count.applications} applied
-                        </span>
-                      </div>
-                      <span className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 font-semibold uppercase">
-                        {opening.status}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-border/50">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Sub-Admin Staff: {subAdminCount} provisioned</span>
+          <div className="pt-3 border-t border-border/60 mt-4 flex items-center justify-between text-xs text-muted-foreground">
+            <span>Platform Visitors: {totalVisitors} unique</span>
+            <Link
+              href="/admin/applications"
+              className="text-primary font-semibold hover:underline"
+            >
+              Candidate Pipeline →
+            </Link>
+          </div>
+        </div>
+
+        {/* Right 5 Cols: Active Vacancies & Sub-Admins */}
+        <div className="lg:col-span-5 bg-card border border-border/80 rounded-2xl p-5 shadow-2xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-border/60 mb-3">
+              <div className="flex items-center gap-2">
+                <Briefcase className="h-4 w-4 text-primary" />
+                <h3 className="text-sm font-bold text-foreground">
+                  Active Vacancies
+                </h3>
+              </div>
               <Link
-                href="/admin/subadmins"
-                className="font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+                href="/admin/openings"
+                className="text-xs font-semibold text-primary hover:underline"
               >
-                Manage Staff <ArrowRight className="h-3 w-3" />
+                Manage →
               </Link>
             </div>
+
+            {recentOpenings.length === 0 ? (
+              <div className="py-8 text-center text-xs text-muted-foreground">
+                No active openings published yet.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {recentOpenings.map((opening) => (
+                  <div
+                    key={opening.id}
+                    className="p-3 rounded-xl border border-border/60 bg-muted/20 hover:bg-muted/40 transition-colors flex items-center justify-between text-xs"
+                  >
+                    <div className="min-w-0 flex-1 pr-2">
+                      <span className="font-bold text-foreground block truncate">
+                        {opening.title}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground block truncate">
+                        {opening.department} • {opening.type}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Badge variant="outline" className="font-mono text-[10px]">
+                        {opening._count.applications} applied
+                      </Badge>
+                      <Link
+                        href={`/admin/openings/${opening.id}`}
+                        className="text-primary hover:underline text-xs font-semibold"
+                      >
+                        Edit
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-border/60 mt-4 flex items-center justify-between text-xs text-muted-foreground">
+            <span>Sub-Admin Staff: {subAdminCount} provisioned</span>
+            <Link
+              href="/admin/subadmins"
+              className="text-primary font-semibold hover:underline inline-flex items-center gap-1"
+            >
+              Manage Staff <ArrowRight className="h-3 w-3" />
+            </Link>
           </div>
         </div>
       </div>
 
-      {/* Row 4: Core Administrative Operational Hub */}
-      <div className="border border-border/70 rounded-2xl p-5 bg-card shadow-2xs">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-4">
-          Core Platform Management Modules
-        </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {/* Applications */}
+      {/* ─── ROW 4: DIRECT PLATFORM MODULE LAUNCHER (ZERO SUBTITLES) ─── */}
+      <div className="border border-border/80 rounded-2xl p-5 bg-card shadow-2xs">
+        <div className="flex items-center justify-between pb-3 border-b border-border/60 mb-4">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground font-mono">
+            Platform Management Modules
+          </h3>
+          <span className="text-xs font-mono text-muted-foreground">
+            10 Operations Portals
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {/* 1. Applications */}
           <Link
             href="/admin/applications"
-            className="p-3.5 rounded-xl border border-border/70 bg-muted/15 hover:bg-muted/50 transition-colors flex flex-col justify-between group"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-blue-500/40 transition-all flex items-center justify-between group"
           >
-            <div className="h-8 w-8 rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400 flex items-center justify-center mb-2.5">
-              <FileText className="h-4 w-4 group-hover:scale-110 transition-transform" />
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <FileText className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">Applications</span>
             </div>
-            <div>
-              <div className="text-xs font-bold text-foreground">Applications</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">Screen candidates</div>
-            </div>
+            <Badge variant="outline" className="font-mono text-[10px] shrink-0">
+              {totalApplications}
+            </Badge>
           </Link>
 
-          {/* Job Openings */}
+          {/* 2. Job Openings */}
           <Link
             href="/admin/openings"
-            className="p-3.5 rounded-xl border border-border/70 bg-muted/15 hover:bg-muted/50 transition-colors flex flex-col justify-between group"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-emerald-500/40 transition-all flex items-center justify-between group"
           >
-            <div className="h-8 w-8 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 flex items-center justify-center mb-2.5">
-              <Briefcase className="h-4 w-4 group-hover:scale-110 transition-transform" />
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <Briefcase className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">Job Openings</span>
             </div>
-            <div>
-              <div className="text-xs font-bold text-foreground">Job Openings</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">Manage positions</div>
-            </div>
+            <Badge variant="outline" className="font-mono text-[10px] shrink-0">
+              {activeOpenings}
+            </Badge>
           </Link>
 
-          {/* Interviews */}
+          {/* 3. Interviews */}
           <Link
             href="/admin/interviews"
-            className="p-3.5 rounded-xl border border-border/70 bg-muted/15 hover:bg-muted/50 transition-colors flex flex-col justify-between group"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-amber-500/40 transition-all flex items-center justify-between group"
           >
-            <div className="h-8 w-8 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 flex items-center justify-center mb-2.5">
-              <Calendar className="h-4 w-4 group-hover:scale-110 transition-transform" />
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <Calendar className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">Interviews</span>
             </div>
-            <div>
-              <div className="text-xs font-bold text-foreground">Interviews</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">Panels & schedules</div>
-            </div>
+            <Badge variant="outline" className="font-mono text-[10px] shrink-0">
+              {scheduledInterviews}
+            </Badge>
           </Link>
 
-          {/* Evaluations */}
+          {/* 4. Evaluations */}
           <Link
             href="/admin/evaluations"
-            className="p-3.5 rounded-xl border border-border/70 bg-muted/15 hover:bg-muted/50 transition-colors flex flex-col justify-between group"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-purple-500/40 transition-all flex items-center justify-between group"
           >
-            <div className="h-8 w-8 rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-950/60 dark:text-purple-400 flex items-center justify-center mb-2.5">
-              <Award className="h-4 w-4 group-hover:scale-110 transition-transform" />
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <Award className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">7-Day Eval</span>
             </div>
-            <div>
-              <div className="text-xs font-bold text-foreground">7-Day Eval</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">Cockpit & scores</div>
-            </div>
+            <Badge variant="outline" className="font-mono text-[10px] shrink-0">
+              {activeEvaluations}
+            </Badge>
           </Link>
 
-          {/* Attendance */}
+          {/* 5. Employees */}
+          <Link
+            href="/admin/employees"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-blue-500/40 transition-all flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <Users className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">Employees</span>
+            </div>
+            <Badge variant="outline" className="font-mono text-[10px] shrink-0">
+              {totalEmployees}
+            </Badge>
+          </Link>
+
+          {/* 6. Attendance */}
           <Link
             href="/admin/attendance"
-            className="p-3.5 rounded-xl border border-border/70 bg-muted/15 hover:bg-muted/50 transition-colors flex flex-col justify-between group"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-cyan-500/40 transition-all flex items-center justify-between group"
           >
-            <div className="h-8 w-8 rounded-lg bg-cyan-50 text-cyan-600 dark:bg-cyan-950/60 dark:text-cyan-400 flex items-center justify-center mb-2.5">
-              <Clock className="h-4 w-4 group-hover:scale-110 transition-transform" />
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <Clock className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">Attendance</span>
             </div>
-            <div>
-              <div className="text-xs font-bold text-foreground">Attendance</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">Clock-in records</div>
-            </div>
+            <Badge variant="outline" className="font-mono text-[10px] shrink-0">
+              {todayAttendance} Present
+            </Badge>
           </Link>
 
-          {/* Sub-Admins */}
+          {/* 7. Leave Management */}
+          <Link
+            href="/admin/leave"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-amber-500/40 transition-all flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <CalendarDays className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">Leaves</span>
+            </div>
+            <Badge
+              variant="outline"
+              className={`font-mono text-[10px] shrink-0 ${
+                pendingLeaves > 0
+                  ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30"
+                  : ""
+              }`}
+            >
+              {pendingLeaves > 0 ? `${pendingLeaves} Pending` : "Normal"}
+            </Badge>
+          </Link>
+
+          {/* 8. Payroll */}
+          <Link
+            href="/admin/payroll"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-emerald-500/40 transition-all flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <CreditCard className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">Payroll</span>
+            </div>
+            <Badge variant="outline" className="font-mono text-[10px] shrink-0">
+              {latestPayroll?.code || "Active"}
+            </Badge>
+          </Link>
+
+          {/* 9. Analytics & Reports */}
+          <Link
+            href="/admin/reports"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-primary/40 transition-all flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-primary/15 text-primary flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <BarChart3 className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">Analytics</span>
+            </div>
+            <Badge variant="outline" className="font-mono text-[10px] text-emerald-600 dark:text-emerald-400 shrink-0">
+              Live DB
+            </Badge>
+          </Link>
+
+          {/* 10. Sub-Admins */}
           <Link
             href="/admin/subadmins"
-            className="p-3.5 rounded-xl border border-border/70 bg-muted/15 hover:bg-muted/50 transition-colors flex flex-col justify-between group"
+            className="p-3.5 rounded-xl border border-border/70 bg-muted/20 hover:bg-muted/50 hover:border-rose-500/40 transition-all flex items-center justify-between group"
           >
-            <div className="h-8 w-8 rounded-lg bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 flex items-center justify-center mb-2.5">
-              <ShieldCheck className="h-4 w-4 group-hover:scale-110 transition-transform" />
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <ShieldCheck className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-bold text-foreground truncate">Sub-Admins</span>
             </div>
-            <div>
-              <div className="text-xs font-bold text-foreground">Sub-Admins</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">Role permissions</div>
-            </div>
+            <Badge variant="outline" className="font-mono text-[10px] shrink-0">
+              {subAdminCount} Staff
+            </Badge>
           </Link>
         </div>
       </div>
