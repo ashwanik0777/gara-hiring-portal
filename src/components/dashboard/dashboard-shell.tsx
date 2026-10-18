@@ -526,12 +526,15 @@ export function DashboardShell({
                 <h1 className="text-base sm:text-lg font-bold tracking-tight text-foreground truncate">
                   {pathname === "/admin" ? "Administrator Command Center" : displayTitle}
                 </h1>
-                {/* {pathname === "/admin" && (
-                  <span className="hidden md:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 shrink-0">
+                {(pathname === "/admin/reports" || pathname === "/subadmin/reports") && (
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] font-mono gap-1 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20 px-2 py-0.5 shrink-0"
+                  >
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    Live Operations
-                  </span>
-                )} */}
+                    Live DB
+                  </Badge>
+                )}
               </div>
             </div>
           </div>
