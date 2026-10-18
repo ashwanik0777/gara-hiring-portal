@@ -36,6 +36,7 @@ import {
   X,
   Plus,
   ArrowLeft,
+  SlidersHorizontal,
   LucideIcon,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
@@ -158,25 +159,15 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
     },
   },
   "/admin/leave": {
-    label: "Leave Management",
+    label: "Leave & Time-Off Management",
     iconName: "CalendarDays",
-    action: {
-      label: "Request Leave",
-      onClickEvent: "request-leave",
-      iconName: "Plus",
-    },
   },
   "/hrms/leave": {
-    label: "Leave Management",
+    label: "Leave & Time-Off Management",
     iconName: "CalendarDays",
-    action: {
-      label: "Request Leave",
-      onClickEvent: "request-leave",
-      iconName: "Plus",
-    },
   },
-  "/admin/payroll": { label: "Payroll", iconName: "CreditCard" },
-  "/hrms/payroll": { label: "Payroll", iconName: "CreditCard" },
+  "/admin/payroll": { label: "Payroll & Compensation", iconName: "CreditCard" },
+  "/hrms/payroll": { label: "Payroll & Compensation", iconName: "CreditCard" },
   "/admin/reports": { label: "Analytics & Reports", iconName: "BarChart3" },
   "/candidate/dashboard": {
     label: "Dashboard",
@@ -247,15 +238,10 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
     },
   },
   "/subadmin/leave": {
-    label: "Leave Management",
+    label: "Leave & Time-Off Management",
     iconName: "CalendarDays",
-    action: {
-      label: "Request Leave",
-      onClickEvent: "request-leave",
-      iconName: "Plus",
-    },
   },
-  "/subadmin/payroll": { label: "Payroll", iconName: "CreditCard" },
+  "/subadmin/payroll": { label: "Payroll & Compensation", iconName: "CreditCard" },
   "/subadmin/reports": { label: "Analytics & Reports", iconName: "BarChart3" },
   "/admin/chatbot": {
     label: "Chatbot Support",
@@ -593,6 +579,29 @@ export function DashboardShell({
                   <ShieldCheck className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
                   <span className="hidden sm:inline">Manage Staff</span>
                 </Link>
+              </div>
+            ) : pathname === "/admin/leave" || pathname === "/subadmin/leave" || pathname === "/hrms/leave" ? (
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent("open-leave-category-modal"));
+                  }}
+                  className="h-8 px-3 rounded-xl border border-border/80 bg-background hover:bg-muted text-foreground text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs shrink-0 cursor-pointer"
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <span className="hidden sm:inline">New Category</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent("open-apply-leave-tab"));
+                  }}
+                  className="h-8 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs shrink-0 cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Grant / Apply Leave</span>
+                </button>
               </div>
             ) : currentAction ? (
               currentAction.href ? (
