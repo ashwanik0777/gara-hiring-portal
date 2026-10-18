@@ -15,10 +15,16 @@ const isLocalhost =
   env.DATABASE_URL.includes("localhost") ||
   env.DATABASE_URL.includes("127.0.0.1");
 
+// Standardize sslmode to avoid pg-connection-string security warnings when connecting to cloud DBs
+const poolConnectionString = env.DATABASE_URL.replace(
+  "sslmode=require",
+  "sslmode=verify-full"
+);
+
 // In production or cloud deployments with remote databases (Supabase, Neon, Railway, RDS),
 // enable SSL with rejectUnauthorized: false so cloud connection poolers connect seamlessly.
 const pool = new Pool({
-  connectionString: env.DATABASE_URL,
+  connectionString: poolConnectionString,
   ssl: !isLocalhost ? { rejectUnauthorized: false } : undefined,
   max: process.env.NODE_ENV === "production" ? 10 : 20,
   idleTimeoutMillis: 30000,
