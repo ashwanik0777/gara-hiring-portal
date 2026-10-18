@@ -32,7 +32,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Search,
-  Bell,
   Menu,
   X,
   Plus,
@@ -41,6 +40,7 @@ import {
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Badge } from "@/components/ui/badge";
+import { DashboardNotifications } from "./dashboard-notifications";
 
 export interface DashboardNavItem {
   label: string;
@@ -536,9 +536,17 @@ export function DashboardShell({
               <div className="h-8 w-8 rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-200/60 dark:border-blue-900/60 shadow-2xs">
                 <HeaderIcon className="h-4 w-4" />
               </div>
-              <h1 className="text-base sm:text-lg font-bold tracking-tight text-foreground truncate">
-                {displayTitle}
-              </h1>
+              <div className="flex items-center gap-2 min-w-0">
+                <h1 className="text-base sm:text-lg font-bold tracking-tight text-foreground truncate">
+                  {pathname === "/admin" ? "Administrator Command Center" : displayTitle}
+                </h1>
+                {/* {pathname === "/admin" && (
+                  <span className="hidden md:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 shrink-0">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Live Operations
+                  </span>
+                )} */}
+              </div>
             </div>
           </div>
 
@@ -563,21 +571,29 @@ export function DashboardShell({
             {/* Segmented Theme Toggle */}
             <ThemeToggle />
 
-            {/* Notifications Bell */}
-            <div className="relative">
-              <button
-                type="button"
-                title="Notifications"
-                className="h-8 w-8 rounded-xl border border-border/70 bg-background hover:bg-muted text-muted-foreground hover:text-foreground flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
-              >
-                <Bell className="h-3.5 w-3.5" />
-              </button>
-              <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-blue-500 ring-2 ring-card" />
-            </div>
+            {/* Fully Functional Notifications Bell Popover */}
+            <DashboardNotifications />
 
-            {/* Tab Action Button (Rightmost, right after the notification bell) */}
+            {/* Tab Action Buttons (Rightmost, right after the notification bell) */}
             {headerAction ? (
               headerAction
+            ) : pathname === "/admin" ? (
+              <div className="flex items-center gap-2 shrink-0">
+                <Link
+                  href="/admin/openings/new"
+                  className="h-8 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs shrink-0 cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Create Opening</span>
+                </Link>
+                <Link
+                  href="/admin/subadmins"
+                  className="h-8 px-3 rounded-xl border border-border/80 bg-background hover:bg-muted text-foreground text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs shrink-0 cursor-pointer"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+                  <span className="hidden sm:inline">Manage Staff</span>
+                </Link>
+              </div>
             ) : currentAction ? (
               currentAction.href ? (
                 <Link
