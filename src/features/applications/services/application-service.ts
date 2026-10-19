@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
-import { getStorageService } from "@/infrastructure/storage";
 import { validateFormResponses, FileMetadataInput } from "@/features/application-forms/services/form-validator";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
 import {
@@ -215,6 +214,7 @@ export class ApplicationService {
     }
 
     // 4. Secure upload to isolated private storage
+    const { getStorageService } = await import("@/infrastructure/storage");
     const storageService = getStorageService();
     const uploadResult = await storageService.upload(
       resumeFile.buffer,
@@ -444,6 +444,7 @@ export class ApplicationService {
       throw new ForbiddenError("You are not authorized to download this document");
     }
 
+    const { getStorageService } = await import("@/infrastructure/storage");
     const storage = getStorageService();
     const file = await storage.get(application.resumeStorageKey);
     if (!file) {

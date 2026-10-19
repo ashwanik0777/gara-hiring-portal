@@ -25,9 +25,9 @@ export class LocalStorageService implements StorageService {
   private readonly baseDir: string;
 
   constructor(customBaseDir?: string) {
-    this.baseDir = path.resolve(
-      customBaseDir ?? path.join(process.cwd(), ".storage", "private")
-    );
+    this.baseDir = customBaseDir
+      ? path.resolve(/*turbopackIgnore: true*/ customBaseDir)
+      : path.join(/*turbopackIgnore: true*/ process.cwd(), ".storage", "private");
   }
 
   private assertSafeEnvironment(): void {
@@ -55,7 +55,10 @@ export class LocalStorageService implements StorageService {
     if (!storageKey || storageKey.includes("\0")) {
       throw new ValidationError("Invalid storage key.");
     }
-    const resolved = path.resolve(this.baseDir, storageKey);
+    const resolved = path.resolve(
+      /*turbopackIgnore: true*/ this.baseDir,
+      storageKey
+    );
     const baseWithSep = this.baseDir.endsWith(path.sep)
       ? this.baseDir
       : `${this.baseDir}${path.sep}`;

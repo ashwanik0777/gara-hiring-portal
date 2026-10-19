@@ -1,5 +1,6 @@
 import React from "react";
 import Link from "next/link";
+import { connection } from "next/server";
 import { prisma } from "@/lib/db";
 import { getUniqueVisitorCount } from "@/features/analytics/services/visitor-service";
 import {
@@ -70,6 +71,7 @@ function getApplicationStatusBadge(status: ApplicationStatus) {
 }
 
 export default async function AdminOverviewPage() {
+  await connection();
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
   const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);

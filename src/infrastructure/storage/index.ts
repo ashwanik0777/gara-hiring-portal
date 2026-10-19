@@ -11,4 +11,4 @@ export function getStorageService(): StorageService {
 }
 
 export * from "./types";
-export * from "./local-storage-service";
+export { LocalStorageService } from "./local-storage-service";
