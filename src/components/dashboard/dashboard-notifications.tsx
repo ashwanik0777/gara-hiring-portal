@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -18,6 +18,9 @@ import {
 } from "lucide-react";
 import {
   getDashboardNotificationsAction,
+  markNotificationAsReadAction,
+  markAllNotificationsAsReadAction,
+  dismissNotificationAction,
   SystemNotification,
 } from "@/features/notifications/actions";
 
@@ -82,36 +85,46 @@ const TYPE_CONFIG = {
   },
 };
 
-export function DashboardNotifications() {
+interface DashboardNotificationsProps {
+  userId?: string;
+}
+
+export function DashboardNotifications({ userId }: DashboardNotificationsProps) {
   const router = useRouter();
+  const [, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"all" | "unread">("all");
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
   const [loading, setLoading] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Lazy state initialization from localStorage to prevent cascading render effects
-  const [readIds, setReadIds] = useState<Set<string>>(() => {
-    if (typeof window === "undefined") return new Set();
-    try {
-      const stored = localStorage.getItem("gara_notifications_read");
-      return stored ? new Set(JSON.parse(stored)) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
 
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => {
-    if (typeof window === "undefined") return new Set();
+  // 1. Client mount effect: load persisted read & dismissed IDs from localStorage immediately
+  useEffect(() => {
+    setMounted(true);
     try {
-      const stored = localStorage.getItem("gara_notifications_dismissed");
-      return stored ? new Set(JSON.parse(stored)) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
+      const userRead = userId ? localStorage.getItem(`gara_notifications_read_${userId}`) : null;
+      const globalRead = localStorage.getItem("gara_notifications_read");
+      const readRaw = userRead || globalRead;
+      if (readRaw) {
+        setReadIds(new Set(JSON.parse(readRaw)));
+      }
 
-  // Fetch notifications on mount and when popover opens
+      const userDismissed = userId ? localStorage.getItem(`gara_notifications_dismissed_${userId}`) : null;
+      const globalDismissed = localStorage.getItem("gara_notifications_dismissed");
+      const dismissedRaw = userDismissed || globalDismissed;
+      if (dismissedRaw) {
+        setDismissedIds(new Set(JSON.parse(dismissedRaw)));
+      }
+    } catch {
+      // Ignore parsing errors
+    }
+  }, [userId]);
+
+  // 2. Fetch notifications on mount and when popover opens
   useEffect(() => {
     let isMounted = true;
     async function loadData() {
@@ -120,6 +133,24 @@ export function DashboardNotifications() {
         const data = await getDashboardNotificationsAction();
         if (isMounted) {
           setNotifications(data);
+
+          // Merge server-persisted read statuses into client state & localStorage
+          const serverRead = data.filter((n) => n.read).map((n) => n.id);
+          if (serverRead.length > 0) {
+            setReadIds((prev) => {
+              const merged = new Set([...Array.from(prev), ...serverRead]);
+              try {
+                const payload = JSON.stringify(Array.from(merged));
+                if (userId) {
+                  localStorage.setItem(`gara_notifications_read_${userId}`, payload);
+                }
+                localStorage.setItem("gara_notifications_read", payload);
+              } catch {
+                // Ignore storage errors
+              }
+              return merged;
+            });
+          }
         }
       } catch (err) {
         console.error("Failed to fetch notifications:", err);
@@ -132,9 +163,9 @@ export function DashboardNotifications() {
     return () => {
       isMounted = false;
     };
-  }, [open]);
+  }, [open, userId]);
 
-  // Handle outside click & Escape key to close popover
+  // 3. Handle outside click & Escape key to close popover
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
@@ -159,57 +190,90 @@ export function DashboardNotifications() {
     };
   }, [open]);
 
-  // Compute active visible notifications
+  // Active visible notifications (not dismissed)
   const visibleNotifications = notifications.filter(
     (n) => !dismissedIds.has(n.id)
   );
 
-  const unreadCount = visibleNotifications.filter(
-    (n) => !readIds.has(n.id)
-  ).length;
+  // Compute unread count (if item is marked read either in state or from server)
+  const isItemUnread = (n: SystemNotification) => {
+    return !n.read && !readIds.has(n.id);
+  };
+
+  const unreadCount = mounted
+    ? visibleNotifications.filter(isItemUnread).length
+    : visibleNotifications.filter((n) => !n.read).length;
 
   const displayedNotifications = visibleNotifications.filter((n) => {
     if (activeTab === "unread") {
-      return !readIds.has(n.id);
+      return isItemUnread(n);
     }
     return true;
   });
 
-  // Mark single notification as read
+  // Mark single notification as read (client + localStorage + server cookie)
   const markAsRead = (id: string) => {
     const next = new Set(readIds);
     next.add(id);
     setReadIds(next);
+
     try {
-      localStorage.setItem("gara_notifications_read", JSON.stringify(Array.from(next)));
+      const payload = JSON.stringify(Array.from(next));
+      if (userId) {
+        localStorage.setItem(`gara_notifications_read_${userId}`, payload);
+      }
+      localStorage.setItem("gara_notifications_read", payload);
     } catch {
       // Ignore
     }
+
+    startTransition(async () => {
+      await markNotificationAsReadAction(id);
+    });
   };
 
-  // Mark all visible notifications as read
+  // Mark all visible notifications as read (client + localStorage + server cookie)
   const markAllAsRead = () => {
     const next = new Set(readIds);
     visibleNotifications.forEach((n) => next.add(n.id));
     setReadIds(next);
+
+    const idsArray = Array.from(next);
     try {
-      localStorage.setItem("gara_notifications_read", JSON.stringify(Array.from(next)));
+      const payload = JSON.stringify(idsArray);
+      if (userId) {
+        localStorage.setItem(`gara_notifications_read_${userId}`, payload);
+      }
+      localStorage.setItem("gara_notifications_read", payload);
     } catch {
       // Ignore
     }
+
+    startTransition(async () => {
+      await markAllNotificationsAsReadAction(visibleNotifications.map((n) => n.id));
+    });
   };
 
-  // Dismiss a notification
+  // Dismiss a notification so it never shows up again
   const dismissNotification = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     const next = new Set(dismissedIds);
     next.add(id);
     setDismissedIds(next);
+
     try {
-      localStorage.setItem("gara_notifications_dismissed", JSON.stringify(Array.from(next)));
+      const payload = JSON.stringify(Array.from(next));
+      if (userId) {
+        localStorage.setItem(`gara_notifications_dismissed_${userId}`, payload);
+      }
+      localStorage.setItem("gara_notifications_dismissed", payload);
     } catch {
       // Ignore
     }
+
+    startTransition(async () => {
+      await dismissNotificationAction(id);
+    });
   };
 
   // Handle click on a notification item
@@ -238,7 +302,7 @@ export function DashboardNotifications() {
       >
         <Bell className="h-4 w-4" />
         {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white font-mono text-[10px] font-bold flex items-center justify-center ring-2 ring-card shadow-xs">
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white font-mono text-[10px] font-bold flex items-center justify-center ring-2 ring-card shadow-xs animate-in fade-in-50 zoom-in-75 duration-200">
             {unreadCount > 9 ? "9+" : unreadCount}
           </span>
         )}
@@ -322,7 +386,7 @@ export function DashboardNotifications() {
               </div>
             ) : (
               displayedNotifications.map((n) => {
-                const isUnread = !readIds.has(n.id);
+                const unread = isItemUnread(n);
                 const conf = TYPE_CONFIG[n.type] || TYPE_CONFIG.system;
                 const IconComponent = conf.icon;
 
@@ -331,7 +395,7 @@ export function DashboardNotifications() {
                     key={n.id}
                     onClick={() => handleItemClick(n)}
                     className={`p-3.5 transition-colors cursor-pointer flex items-start gap-3 relative group ${
-                      isUnread
+                      unread
                         ? "bg-blue-50/40 dark:bg-blue-950/20 hover:bg-blue-50/70 dark:hover:bg-blue-950/40"
                         : "hover:bg-muted/40"
                     }`}
@@ -357,7 +421,7 @@ export function DashboardNotifications() {
                       </div>
                       <p
                         className={`text-xs leading-snug truncate ${
-                          isUnread ? "font-bold text-foreground" : "font-medium text-foreground/90"
+                          unread ? "font-bold text-foreground" : "font-medium text-foreground/90"
                         }`}
                       >
                         {n.title}
@@ -369,7 +433,7 @@ export function DashboardNotifications() {
 
                     {/* Right Unread Indicator & Dismiss Button */}
                     <div className="absolute right-3 top-3.5 flex items-center gap-1.5">
-                      {isUnread && (
+                      {unread && (
                         <span
                           title="Unread"
                           className="h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-500 shrink-0"
@@ -377,7 +441,7 @@ export function DashboardNotifications() {
                       )}
                       <button
                         type="button"
-                        title="Dismiss"
+                        title="Dismiss notification"
                         onClick={(e) => dismissNotification(e, n.id)}
                         className="opacity-0 group-hover:opacity-100 h-5 w-5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground flex items-center justify-center transition-all cursor-pointer"
                       >

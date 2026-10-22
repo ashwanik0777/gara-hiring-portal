@@ -99,7 +99,7 @@ export function RecruitmentTrendChart({ data }: RecruitmentTrendChartProps) {
         <div className="flex items-center gap-2">
           <TrendingUp className="h-4 w-4 text-primary" />
           <CardTitle className="text-sm font-bold text-foreground">
-            Recruitment Velocity Trends
+            Recruitment Trends
           </CardTitle>
           <Badge variant="outline" className="text-[10px] font-mono">
             Past 6 Months

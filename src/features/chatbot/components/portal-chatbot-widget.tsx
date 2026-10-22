@@ -151,14 +151,14 @@ export function PortalChatbotWidget({
           <div className="py-2 space-y-4">
             {/* Friendly Greeting */}
             <div className="rounded-2xl bg-muted/40 border border-border/50 p-4 text-center space-y-1.5">
-              <div className="mx-auto h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+              {/* <div className="mx-auto h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
                 <Sparkles className="h-5 w-5 text-primary" />
-              </div>
+              </div> */}
               <h4 className="text-xs sm:text-sm font-semibold text-foreground">
                 How can I help you today?
               </h4>
-              <p className="text-[11px] text-muted-foreground max-w-xs mx-auto leading-relaxed">
-                Ask anything about GARA internships, the 7-working-day evaluation, certificates, or application tracking.
+              <p className="text-[11px] text-muted-foreground max-w-md mx-auto leading-relaxed">
+              Ask about GARA internships, evaluations, certificates, or application status.
               </p>
             </div>
 
@@ -321,13 +321,13 @@ export function PortalChatbotWidget({
             <Send className="h-3.5 w-3.5" />
           </button>
         </form>
-        <div className="flex items-center justify-between px-1 text-[10px] text-muted-foreground/75">
+        {/* <div className="flex items-center justify-between px-1 text-[10px] text-muted-foreground/75">
           <span className="flex items-center gap-1">
             <ShieldCheck className="h-3 w-3 text-emerald-500" />
             PII-Protected Policy Grounded
           </span>
           <span>Verified Knowledge Base</span>
-        </div>
+        </div> */}
       </div>
     </div>
   );

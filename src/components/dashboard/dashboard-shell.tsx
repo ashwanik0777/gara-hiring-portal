@@ -52,6 +52,7 @@ export interface DashboardNavItem {
 }
 
 export interface DashboardUser {
+  id?: string;
   name: string;
   email: string;
   role?: string;
@@ -561,7 +562,7 @@ export function DashboardShell({
             <ThemeToggle />
 
             {/* Fully Functional Notifications Bell Popover */}
-            <DashboardNotifications />
+            <DashboardNotifications userId={user.id || user.email} />
 
             {/* Tab Action Buttons (Rightmost, right after the notification bell) */}
             {headerAction ? (

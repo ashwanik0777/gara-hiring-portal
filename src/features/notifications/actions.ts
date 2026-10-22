@@ -1,5 +1,6 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth/guards";
 
@@ -10,16 +11,42 @@ export interface SystemNotification {
   type: "application" | "interview" | "evaluation" | "leave" | "security" | "system";
   link: string;
   createdAt: string;
-  read?: boolean;
+  read: boolean;
+}
+
+function parseIdsCookie(value?: string): Set<string> {
+  if (!value) return new Set();
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? new Set(parsed) : new Set();
+  } catch {
+    return new Set();
+  }
 }
 
 /**
  * Server action to fetch real platform notifications for the dashboard header.
+ * Persistently respects read & dismissed states per authenticated user.
  */
 export async function getDashboardNotificationsAction(): Promise<SystemNotification[]> {
   try {
     const user = await getCurrentUser();
     if (!user) return [];
+
+    const cookieStore = await cookies();
+    const userReadCookie = cookieStore.get(`gara_notifications_read_${user.id}`)?.value;
+    const globalReadCookie = cookieStore.get("gara_notifications_read")?.value;
+    const readSet = new Set<string>([
+      ...Array.from(parseIdsCookie(userReadCookie)),
+      ...Array.from(parseIdsCookie(globalReadCookie)),
+    ]);
+
+    const userDismissedCookie = cookieStore.get(`gara_notifications_dismissed_${user.id}`)?.value;
+    const globalDismissedCookie = cookieStore.get("gara_notifications_dismissed")?.value;
+    const dismissedSet = new Set<string>([
+      ...Array.from(parseIdsCookie(userDismissedCookie)),
+      ...Array.from(parseIdsCookie(globalDismissedCookie)),
+    ]);
 
     const notifications: SystemNotification[] = [];
 
@@ -43,6 +70,7 @@ export async function getDashboardNotificationsAction(): Promise<SystemNotificat
         type: "application",
         link: "/admin/applications",
         createdAt: app.createdAt.toISOString(),
+        read: readSet.has(`app-${app.id}`),
       });
     }
 
@@ -67,6 +95,7 @@ export async function getDashboardNotificationsAction(): Promise<SystemNotificat
         type: "leave",
         link: "/admin/leave",
         createdAt: leave.createdAt.toISOString(),
+        read: readSet.has(`leave-${leave.id}`),
       });
     }
 
@@ -95,6 +124,7 @@ export async function getDashboardNotificationsAction(): Promise<SystemNotificat
         type: "interview",
         link: "/admin/interviews",
         createdAt: interview.scheduledAt.toISOString(),
+        read: readSet.has(`interview-${interview.id}`),
       });
     }
 
@@ -106,6 +136,7 @@ export async function getDashboardNotificationsAction(): Promise<SystemNotificat
       type: "security",
       link: "/admin/subadmins",
       createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+      read: readSet.has("sys-subadmin-raghav"),
     });
 
     notifications.push({
@@ -115,12 +146,13 @@ export async function getDashboardNotificationsAction(): Promise<SystemNotificat
       type: "system",
       link: "/admin",
       createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
+      read: readSet.has("sys-cloud-db"),
     });
 
-    // Sort by timestamp descending
-    return notifications.sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    // Filter out dismissed notifications and sort by timestamp descending
+    return notifications
+      .filter((n) => !dismissedSet.has(n.id))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   } catch (error) {
     console.error("[NotificationsAction] Failed to query notifications:", error);
     return [
@@ -131,7 +163,103 @@ export async function getDashboardNotificationsAction(): Promise<SystemNotificat
         type: "system",
         link: "/admin",
         createdAt: new Date().toISOString(),
+        read: true,
       },
     ];
+  }
+}
+
+/**
+ * Server action to mark a single notification as read persistently.
+ */
+export async function markNotificationAsReadAction(notificationId: string): Promise<void> {
+  try {
+    const user = await getCurrentUser();
+    const cookieStore = await cookies();
+    const key = user ? `gara_notifications_read_${user.id}` : "gara_notifications_read";
+    const existing = cookieStore.get(key)?.value;
+    const ids = Array.from(parseIdsCookie(existing));
+    if (!ids.includes(notificationId)) {
+      ids.push(notificationId);
+    }
+    cookieStore.set(key, JSON.stringify(ids), {
+      path: "/",
+      maxAge: 365 * 24 * 3600, // 1 year
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+    // Also sync the generic cookie for maximum cross-session safety
+    cookieStore.set("gara_notifications_read", JSON.stringify(ids), {
+      path: "/",
+      maxAge: 365 * 24 * 3600,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+  } catch (err) {
+    console.error("[markNotificationAsReadAction] Error persisting read status:", err);
+  }
+}
+
+/**
+ * Server action to mark all notifications as read persistently.
+ */
+export async function markAllNotificationsAsReadAction(notificationIds: string[]): Promise<void> {
+  try {
+    const user = await getCurrentUser();
+    const cookieStore = await cookies();
+    const key = user ? `gara_notifications_read_${user.id}` : "gara_notifications_read";
+    const existing = cookieStore.get(key)?.value;
+    const ids = Array.from(parseIdsCookie(existing));
+    for (const id of notificationIds) {
+      if (!ids.includes(id)) {
+        ids.push(id);
+      }
+    }
+    const payload = JSON.stringify(ids);
+    cookieStore.set(key, payload, {
+      path: "/",
+      maxAge: 365 * 24 * 3600,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+    cookieStore.set("gara_notifications_read", payload, {
+      path: "/",
+      maxAge: 365 * 24 * 3600,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+  } catch (err) {
+    console.error("[markAllNotificationsAsReadAction] Error persisting read status:", err);
+  }
+}
+
+/**
+ * Server action to dismiss a notification so it never shows up again.
+ */
+export async function dismissNotificationAction(notificationId: string): Promise<void> {
+  try {
+    const user = await getCurrentUser();
+    const cookieStore = await cookies();
+    const key = user ? `gara_notifications_dismissed_${user.id}` : "gara_notifications_dismissed";
+    const existing = cookieStore.get(key)?.value;
+    const ids = Array.from(parseIdsCookie(existing));
+    if (!ids.includes(notificationId)) {
+      ids.push(notificationId);
+    }
+    const payload = JSON.stringify(ids);
+    cookieStore.set(key, payload, {
+      path: "/",
+      maxAge: 365 * 24 * 3600,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+    cookieStore.set("gara_notifications_dismissed", payload, {
+      path: "/",
+      maxAge: 365 * 24 * 3600,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+  } catch (err) {
+    console.error("[dismissNotificationAction] Error persisting dismiss status:", err);
   }
 }
