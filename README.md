@@ -13,7 +13,7 @@ Enterprise full-stack recruitment, internship evaluation, and human resource man
 - **Styling:** Tailwind CSS v4 + GARA Design Tokens (restrained palette, zero gradients)
 - **Icons:** [Lucide React](https://lucide.dev/)
 - **Validation:** [Zod](https://zod.dev/) + React Hook Form
-- **Testing:** [Vitest](https://vitest.dev/) unit tests with mocked persistence (`tests/unit/`). Integration and end-to-end suites are not set up yet (see `docs/SECURITY_REMEDIATION_CHECKLIST.md`, ENG-07).
+- **Testing:** [Vitest](https://vitest.dev/) unit tests with mocked persistence in `tests/unit/` (kept local, not committed). Integration and end-to-end suites are not set up yet (see `docs/SECURITY_REMEDIATION_CHECKLIST.md`, ENG-07).
 
 ---
 

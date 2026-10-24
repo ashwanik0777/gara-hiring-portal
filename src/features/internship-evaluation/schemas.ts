@@ -7,11 +7,6 @@ const recordId = (label: string) => z.string().trim().uuid(`Invalid ${label}`);
 const optionalText = <T extends z.ZodTypeAny>(schema: T) =>
   z.preprocess((value) => (value === "" || value === null ? undefined : value), schema.optional());
 
-export const EnrollCandidateSchema = z.object({
-  applicationId: recordId("application ID"),
-  supervisorId: optionalText(recordId("supervisor ID")),
-});
-
 export const TriggerEvaluationStartSchema = z.object({
   enrollmentId: recordId("enrollment ID"),
   startDate: z

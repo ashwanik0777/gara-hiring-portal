@@ -3,7 +3,7 @@
 > Source: full-project audit performed on 2026-10-23 (core layer reviewed directly; feature modules traced end to end).
 > Product-owner decisions recorded on 2026-10-24:
 > - Business rules that were implemented without approval are **policy-gated** (removed or replaced with `PolicyBlockedError` / "Not configured"), and tracked in `docs/OPEN_DECISIONS.md`.
-> - `tests/` is tracked in Git so CI can run the suite.
+> - `tests/` is kept local only (excluded from Git by product-owner decision on 2026-10-24, after briefly being tracked).
 >
 > Legend: `[ ]` open · `[x]` fixed in code (see "Verification" at the bottom for evidence) · `[!]` requires a manual owner action outside the codebase · `[~]` deferred, needs a product decision
 
@@ -53,7 +53,7 @@
 - [x] **SEC-24 Forced password change not enforced server-side**, and `setNewPasswordAction` accepts a new password without the current one and keeps other sessions alive. → Guards reject users with `mustChangePassword`; the action only works for that state and revokes other sessions.
 - [x] **SEC-25 Open redirect via `callbackUrl`** (e.g. `/\evil.com`). → Strict same-origin path validation.
 - [x] **SEC-26 Resume download ignores `canApplications`.** → Enforced.
-- [x] **SEC-27 Attendance falsification and employee creation.** Employees control their own checkout/notes/entry method; managers can turn any user into an active employee. → Self check-in/out uses server time only; `ensureEmployeeForUserAction` requires `canEmployees`.
+- [x] **SEC-27 Attendance falsification and employee creation.** Employees control their own checkout/notes/entry method; managers can turn any user into an active employee. → Self check-in/out uses server time only; the unused `ensureEmployeeForUserAction` (which could turn any user into an employee) was removed.
 - [x] **SEC-28 Visitor tracking** is unauthenticated, unthrottled and shows a fabricated 1,480 baseline. → Rate limited, baseline removed.
 - [x] **SEC-29 CSV formula-injection guard incomplete** (leading tab / carriage return). → Fixed.
 - [x] **SEC-30 Employee directory service has no authorization.** → Requires `canEmployees`.
@@ -122,14 +122,15 @@
 ## 7. Engineering hygiene
 
 - [x] **ENG-01** No versioned migrations (`prisma/migrations` missing) → `20261024000000_baseline` + `20261024000100_security_hardening` created. **Not applied** — see OPS-05.
-- [x] **ENG-02** `tests/` excluded by `.gitignore` → tracked.
+- [~] **ENG-02** `tests/` excluded by `.gitignore`. → Product-owner decision (2026-10-24): tests stay local only; they were untracked again with `git rm --cached` (files kept). CI cannot run them.
 - [x] **ENG-03** `.env.example` missing although README references it → per product-owner decision (2026-10-24) a single gitignored `.env` holds every variable; README/RUNBOOK point to the variable table in `docs/RUNBOOK.md` §2.
 - [x] **ENG-04** README / release report claim Playwright and outdated results → corrected.
 - [x] **ENG-05** Missing index on `verifications.identifier`; Better Auth rate-limit table → added.
 - [x] **ENG-06** `User → Employee` and `User → InternshipEnrollment` cascade deletes → `Restrict`.
 - [~] **ENG-07** No integration or end-to-end tests (only mocked unit tests).
 - [~] **ENG-08** Nonce-based CSP to remove `'unsafe-inline'` (requires dynamic rendering for every page).
-- [~] **ENG-09** Remove the unreachable `/recruitment/*` route tree once HR/sub-admin screens fully replace it.
+- [x] **ENG-09** Remove the unreachable `/recruitment/*` route tree once HR/sub-admin screens fully replace it. → Removed (13 files) together with the unreachable `src/app/candidate/page.tsx`; the `next.config.ts` redirects keep old links working.
+- [x] **ENG-10** Unused code and assets (2026-10-24, verified with `knip@5.88.1` plus manual checks against `src/` and the local tests): 16 dead symbols (9 Server Actions without callers, 3 schemas, `requireOwnership`, `hasSubAdminAccess`, `isSubAdminRole`, `CardDescription`), `src/features/openings/types.ts`, five Next.js template SVGs, two duplicate root logo files, and the unused devDependencies `@tailwindcss/turbopack` and `@testing-library/jest-dom`. Kept on purpose: `prisma7.config.ts` (loaded by the Prisma CLI), `@testing-library/react` (local tests), symbols used inside their own module or by local tests, and unused official brand variants in `public/brand/`.
 
 ---
 
@@ -141,7 +142,7 @@ Commands run against the working tree after all fixes (no database was touched; 
 |---|---|---|
 | TypeScript | `npx tsc --noEmit` | Pass — 0 errors |
 | ESLint | `npm run lint` | Pass — 0 errors, 0 warnings (was 2 errors, 30 warnings) |
-| Unit tests | `npx vitest run` | Pass — 16 files, 454/454 tests (was 131) |
+| Unit tests | `npx vitest run` (local only) | Pass — 16 files, 454/454 tests (was 131) |
 | Dependencies | `npm audit` | 0 vulnerabilities (was 1 critical: `next@16.4.0`) |
 | Production build | `npm run build` | Pass — 79 routes |
 
@@ -151,4 +152,4 @@ What this does **not** prove:
 - Email delivery, Google OAuth and Vercel Cron have not been exercised against live providers.
 - Production readiness still depends on the owner actions in section 0 and the product decisions in `docs/OPEN_DECISIONS.md`.
 
-Summary: 88 items fixed or verified, 7 deferred pending product decisions (`[~]`), 3 owner actions outstanding (`[!]`).
+Summary: 89 items fixed or verified, 7 deferred pending product decisions (`[~]`), 3 owner actions outstanding (`[!]`).

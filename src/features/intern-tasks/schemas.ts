@@ -84,7 +84,3 @@ export const SubmitProgressReportSchema = z.object({
   blockers: optional(z.string().trim().max(5000)),
 });
 
-export const ReviewProgressReportSchema = z.object({
-  reportId: recordId("report ID"),
-  supervisorFeedback: z.string().trim().min(1, "Supervisor feedback is required").max(5000),
-});

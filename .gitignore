@@ -47,5 +47,6 @@ next-env.d.ts
 /.storage/
 /storage/
 
-# local operational scripts (excluded from the repository; tests are tracked so CI can run them)
+# local tests and operational scripts (excluded from the repository by product-owner decision, 2026-10-24)
 /scripts/
+/tests/

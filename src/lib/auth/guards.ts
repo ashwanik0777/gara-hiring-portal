@@ -105,23 +105,6 @@ export async function requireRole(allowedRoles: Role[]): Promise<AuthenticatedUs
 }
 
 /**
- * Server-side guard requiring that the current user owns the resource or is an Admin/HR.
- */
-export async function requireOwnership(
-  resourceOwnerId: string,
-  allowedStaffRoles: Role[] = [Role.ADMIN, Role.HR]
-): Promise<AuthenticatedUser> {
-  const user = await requireAuth();
-  const isOwner = user.id === resourceOwnerId;
-  const isStaff = user.roles.some((r) => allowedStaffRoles.includes(r));
-
-  if (!isOwner && !isStaff) {
-    throw new ForbiddenError("You are not authorized to view or edit this resource");
-  }
-  return user;
-}
-
-/**
  * Returns true when the user holds the given granular module permission.
  * ADMIN always passes; staff roles are resolved through SubAdminPermission
  * records (or role defaults when no record exists); everyone else fails.

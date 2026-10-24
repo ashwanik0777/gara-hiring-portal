@@ -5,7 +5,6 @@ import { toActionError } from "@/lib/errors";
 import { taskService } from "./services/task-service";
 import {
   CreateTaskSchema,
-  ReviewProgressReportSchema,
   ReviewSubmissionSchema,
   SubmitProgressReportSchema,
   SubmitTaskSchema,
@@ -112,22 +111,5 @@ export async function submitProgressReportAction(formData: FormData): Promise<Ta
     return { success: true, data: null };
   } catch (error: unknown) {
     return { success: false, error: toActionError(error, "Failed to submit progress report") };
-  }
-}
-
-export async function reviewProgressReportAction(formData: FormData): Promise<TaskActionResult> {
-  try {
-    const user = await requireAuth();
-    const input = parseInput(
-      ReviewProgressReportSchema,
-      readFormFields(formData, ["reportId", "supervisorFeedback"])
-    );
-
-    const report = await taskService.reviewProgressReport(user, input.reportId, input.supervisorFeedback);
-
-    revalidateEvaluationViews(report.enrollmentId);
-    return { success: true, data: null };
-  } catch (error: unknown) {
-    return { success: false, error: toActionError(error, "Failed to review progress report") };
   }
 }

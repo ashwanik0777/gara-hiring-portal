@@ -71,8 +71,6 @@ export const ReviewRegularizationSchema = z.object({
   reviewNotes: z.string().trim().max(1000).optional().nullable(),
 });
 
-export const EnsureEmployeeForUserSchema = z.string().uuid("Invalid user ID format.");
-
 export type LogAttendanceInput = z.infer<typeof LogAttendanceSchema>;
 export type RequestRegularizationInput = z.infer<typeof RequestRegularizationSchema>;
 export type ReviewRegularizationInput = z.infer<typeof ReviewRegularizationSchema>;

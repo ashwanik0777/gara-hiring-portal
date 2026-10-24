@@ -5,7 +5,6 @@ import { toActionError } from "@/lib/errors";
 import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
 import { evaluationService, type IssueIdCardResult } from "./services/evaluation-service";
 import {
-  EnrollCandidateSchema,
   FinalizeEvaluationSchema,
   IssueIdCardSchema,
   ReviewCheckpointSchema,
@@ -19,28 +18,6 @@ import { revalidateEvaluationViews } from "./revalidate";
 export type EvaluationActionResult<T = unknown> =
   | { success: true; data: T }
   | { success: false; error: string };
-
-export async function enrollCandidateAction(
-  formData: FormData
-): Promise<EvaluationActionResult<{ enrollmentId: string }>> {
-  try {
-    const user = await requireAuth();
-    const input = parseInput(
-      EnrollCandidateSchema,
-      readFormFields(formData, ["applicationId", "supervisorId"])
-    );
-
-    const result = await evaluationService.enrollCandidate(user, input.applicationId, input.supervisorId);
-    if (result.created) {
-      scheduleOutboxFlush();
-    }
-    revalidateEvaluationViews(result.enrollmentId);
-
-    return { success: true, data: { enrollmentId: result.enrollmentId } };
-  } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to enroll candidate") };
-  }
-}
 
 export async function triggerEvaluationStartAction(
   formData: FormData

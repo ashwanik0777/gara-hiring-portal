@@ -11,10 +11,3 @@ export const SUB_ADMIN_ROLES: Role[] = [
   Role.MENTOR,
 ];
 
-export function isSubAdminRole(role: Role | string): boolean {
-  return (SUB_ADMIN_ROLES as readonly (Role | string)[]).includes(role as Role);
-}
-
-export function hasSubAdminAccess(roles: (Role | string)[] = []): boolean {
-  return roles.some((r) => isSubAdminRole(r));
-}

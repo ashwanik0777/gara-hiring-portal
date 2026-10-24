@@ -279,7 +279,7 @@
 
 **Status:** Resolved on 12 October 2026. The product owner supplied the official GARA logo assets at `public/GARA_LOGO.jpg` and `public/GARA_LOGO.png`.
 
-**Decision & Rule:** Use the exact approved asset without redrawing, recoloring, regenerating, or altering the logo mark. Copy to `public/brand/` as canonical brand assets during foundation initialization.
+**Decision & Rule:** Use the exact approved asset without redrawing, recoloring, regenerating, or altering the logo mark. Copy to `public/brand/` as canonical brand assets during foundation initialization. (2026-10-24: the root-level `public/GARA_LOGO.*` files were removed as byte-identical duplicates of `public/brand/gara-logo.*`, which remain the canonical copies.)
 
 ---
 
@@ -352,7 +352,7 @@
 6. **MENTOR application access (OD-019):** the recruitment service does not support MENTOR even when `canApplications` is granted; the page shows an "unavailable" notice.
 7. **Default catalogues (POL-13):** the onboarding checklist, the completion checklist and the seeded leave-type catalogue were defined by engineering and need approval.
 8. **Certificate presentation (OD-009):** the `GARA-CERT-YYYY-` code prefix and the "GARA Innovation Authority" label on the PDF need approval.
-9. **Missing flow:** no UI calls `enrollCandidateAction` (recruitment → internship enrolment). (Intern checkpoint submission was added on the intern dashboard.) Should finalizing an evaluation require every checkpoint to be reviewed (OD-003)?
+9. **Missing flow:** no screen enrols a selected candidate into the internship evaluation (`evaluationService.enrollCandidate` exists; its unused Server Action was removed on 2026-10-24 and should be re-added together with the screen). The same applies to recruiter assignment, interview reschedule/cancel, progress-report review and direct employee creation, whose services remain but whose unused actions were removed. (Intern checkpoint submission was added on the intern dashboard.) Should finalizing an evaluation require every checkpoint to be reviewed (OD-003)?
 10. **Optional resume (OD-005 / OD-013):** when a form does not require a document, `resumeStorageKey` is stored as an empty string because the column is required; a nullable column needs a migration.
 11. **Overlapping payroll periods (OD-008):** period creation only enforces a unique code; two periods with overlapping dates could each enrol and pay the same employee. Should overlaps be rejected?
 12. **Per-record payroll voiding (OD-008):** a FINALIZED period cannot complete if an employee is switched to Unpaid before disbursement. Should staff be able to void a single record?
@@ -362,5 +362,6 @@
 
 ### Resolved by the product owner (2026-10-24)
 
+- **Tests stay local:** `tests/` is excluded from Git again (`.gitignore`), reversing the earlier inclusion; the suite runs locally with `npm test` and is not available to CI.
 - **Single environment file:** keep one gitignored `.env` with every variable; no `.env.example`. This overrides the `.env.example` instruction in `docs/PROJECT_BASELINE.md` (rules 12 and the Prompt 0 checklist). The variable reference is `docs/RUNBOOK.md` section 2.
 

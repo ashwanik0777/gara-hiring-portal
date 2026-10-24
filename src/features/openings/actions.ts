@@ -6,15 +6,12 @@ import { requirePermission } from "@/lib/auth/guards";
 import { OpeningStatus } from "@prisma/client";
 import {
   createOpening,
-  updateOpening,
   updateOpeningStatus,
   saveOpeningFormVersion,
 } from "./services/opening-service";
 import {
   CreateOpeningInput,
-  UpdateOpeningInput,
   createOpeningSchema,
-  updateOpeningSchema,
   openingIdSchema,
   openingStatusSchema,
 } from "./schemas";
@@ -56,22 +53,6 @@ export async function createOpeningAction(
     return { success: true, data: { id: opening.id, slug: opening.slug } };
   } catch (error) {
     return { success: false, error: toActionError(error, "The opening could not be created.") };
-  }
-}
-
-export async function updateOpeningAction(
-  id: string,
-  data: UpdateOpeningInput
-): Promise<OpeningActionResult<{ id: string; slug: string }>> {
-  try {
-    const user = await requirePermission("canOpenings");
-    const openingId = parseArgument(openingIdSchema, id, "Invalid opening identifier");
-    const input = parseArgument(updateOpeningSchema, data, "Invalid opening details");
-    const opening = await updateOpening(openingId, input, user);
-    revalidateOpeningPaths(opening.slug);
-    return { success: true, data: { id: opening.id, slug: opening.slug } };
-  } catch (error) {
-    return { success: false, error: toActionError(error, "The opening could not be updated.") };
   }
 }
 

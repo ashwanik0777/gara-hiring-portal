@@ -14,11 +14,9 @@ import {
   RevokeJobOfferSchema,
   CandidateOfferDecisionSchema,
   CreateEmployeeFromApplicationSchema,
-  DirectCreateEmployeeSchema,
   UpdateEmployeeStatusSchema,
   AssignManagerSchema,
   UpdateOnboardingChecklistSchema,
-  UploadEmployeeDocumentSchema,
   ProcessExitSchema,
 } from "./schemas";
 
@@ -207,37 +205,6 @@ export async function hireEmployeeFromApplicationAction(
   }
 }
 
-export async function directCreateEmployeeAction(
-  formData: FormData
-): Promise<EmployeeActionResult> {
-  try {
-    // Bypasses the application/offer gate: ADMIN only (pending product decision).
-    const user = await requirePermission("canEmployees", { roles: [Role.ADMIN] });
-
-    const validated = DirectCreateEmployeeSchema.safeParse({
-      userId: readText(formData, "userId"),
-      justification: readText(formData, "justification"),
-      employeeCode: readText(formData, "employeeCode"),
-      department: readText(formData, "department"),
-      designation: readText(formData, "designation"),
-      joiningDate: readText(formData, "joiningDate"),
-      managerId: readOptionalText(formData, "managerId"),
-      personalPhone: readOptionalText(formData, "personalPhone"),
-      internalNotes: readOptionalText(formData, "internalNotes"),
-    });
-    if (!validated.success) {
-      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
-    }
-
-    const employee = await employeeService.createDirectEmployee(user, validated.data);
-
-    revalidateEmployeeViews(employee.id);
-    return { success: true, data: employee };
-  } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Direct employee creation failed.") };
-  }
-}
-
 export async function updateEmployeeStatusAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
@@ -309,36 +276,6 @@ export async function updateEmployeeChecklistAction(
     return { success: true, data: null };
   } catch (err: unknown) {
     return { success: false, error: toActionError(err, "Checklist update failed.") };
-  }
-}
-
-export async function addEmployeeDocumentAction(
-  formData: FormData
-): Promise<EmployeeActionResult> {
-  try {
-    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
-
-    const rawSize = readText(formData, "fileSizeBytes");
-    const validated = UploadEmployeeDocumentSchema.safeParse({
-      employeeId: readText(formData, "employeeId"),
-      documentType: readText(formData, "documentType"),
-      title: readText(formData, "title"),
-      storageKey: readText(formData, "storageKey"),
-      mimeType: readText(formData, "mimeType"),
-      fileSizeBytes: rawSize === undefined ? undefined : Number(rawSize),
-      isConfidential: true,
-    });
-    if (!validated.success) {
-      return { success: false, error: "Document metadata invalid" };
-    }
-
-    // Policy-gated in the service (OD-013): always rejected until storage is approved.
-    await employeeService.addEmployeeDocument(user, validated.data);
-
-    revalidateEmployeeViews(validated.data.employeeId);
-    return { success: true, data: null };
-  } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Document upload failed.") };
   }
 }
 

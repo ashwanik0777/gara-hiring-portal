@@ -9,10 +9,7 @@ import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
 import { recruitmentService } from "./services/recruitment-service";
 import {
   TransitionStatusSchema,
-  AssignRecruiterSchema,
   ScheduleInterviewSchema,
-  RescheduleInterviewSchema,
-  CancelInterviewSchema,
   SubmitFeedbackSchema,
 } from "./schemas";
 import type { InterviewerOption } from "./types";
@@ -88,29 +85,6 @@ export async function transitionStatusAction(
   }
 }
 
-export async function assignRecruiterAction(
-  formData: FormData
-): Promise<RecruitmentActionResult> {
-  try {
-    const user = await requirePermission("canApplications", { roles: DECISION_ROLES });
-
-    const validated = AssignRecruiterSchema.safeParse({
-      applicationId: readText(formData, "applicationId"),
-      recruiterId: readOptionalText(formData, "recruiterId"),
-    });
-    if (!validated.success) {
-      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
-    }
-
-    await recruitmentService.assignRecruiter(user, validated.data);
-
-    revalidateApplicationViews(validated.data.applicationId);
-    return { success: true, data: null };
-  } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to assign recruiter.") };
-  }
-}
-
 export async function listInterviewerOptionsAction(): Promise<
   RecruitmentActionResult<InterviewerOption[]>
 > {
@@ -150,57 +124,6 @@ export async function scheduleInterviewAction(
     return { success: true, data: { scheduleId: result.scheduleId } };
   } catch (err: unknown) {
     return { success: false, error: toActionError(err, "Failed to schedule interview.") };
-  }
-}
-
-export async function rescheduleInterviewAction(
-  formData: FormData
-): Promise<RecruitmentActionResult> {
-  try {
-    const user = await requirePermission("canInterviews", { roles: DECISION_ROLES });
-
-    const validated = RescheduleInterviewSchema.safeParse({
-      scheduleId: readText(formData, "scheduleId"),
-      newScheduledAt: readText(formData, "newScheduledAt"),
-      rescheduleReason: readText(formData, "rescheduleReason"),
-    });
-    if (!validated.success) {
-      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
-    }
-
-    const result = await recruitmentService.rescheduleInterview(user, validated.data);
-    scheduleOutboxFlush();
-
-    revalidateApplicationViews(result.applicationId);
-    revalidateInterviewViews();
-    return { success: true, data: null };
-  } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to reschedule interview.") };
-  }
-}
-
-export async function cancelInterviewAction(
-  formData: FormData
-): Promise<RecruitmentActionResult> {
-  try {
-    const user = await requirePermission("canInterviews", { roles: DECISION_ROLES });
-
-    const validated = CancelInterviewSchema.safeParse({
-      scheduleId: readText(formData, "scheduleId"),
-      cancellationReason: readText(formData, "cancellationReason"),
-    });
-    if (!validated.success) {
-      return { success: false, error: "Cancellation reason is required", fieldErrors: toFieldErrors(validated.error) };
-    }
-
-    const result = await recruitmentService.cancelInterview(user, validated.data);
-    scheduleOutboxFlush();
-
-    revalidateApplicationViews(result.applicationId);
-    revalidateInterviewViews();
-    return { success: true, data: null };
-  } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to cancel interview.") };
   }
 }
 
