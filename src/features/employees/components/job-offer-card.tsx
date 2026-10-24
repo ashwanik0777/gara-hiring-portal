@@ -54,7 +54,7 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
     setIsSubmitting(true);
     setError(null);
     try {
-      const res = await extendJobOfferAction(offer.id, offer.applicationId);
+      const res = await extendJobOfferAction(offer.id);
       if (!res.success) {
         setError(res.error);
       }
@@ -69,7 +69,7 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
     setIsSubmitting(true);
     setError(null);
     try {
-      const res = await revokeJobOfferAction(offer.id, offer.applicationId, reason);
+      const res = await revokeJobOfferAction(offer.id, reason);
       if (!res.success) {
         setError(res.error);
       }
@@ -142,7 +142,8 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
               )}
               {offer.declineReason && (
                 <div className="text-destructive mt-0.5 italic">
-                  Reason: {offer.declineReason}
+                  {offer.status === OfferStatus.REVOKED ? "Revocation reason (internal)" : "Decline reason"}:{" "}
+                  {offer.declineReason}
                 </div>
               )}
             </div>

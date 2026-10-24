@@ -90,3 +90,60 @@ export function toSafeErrorResponse(error: unknown) {
     },
   };
 }
+
+/**
+ * Maps well-known Prisma request errors (detected structurally so this module stays
+ * free of database imports) to operational errors with safe messages.
+ */
+function fromPrismaKnownError(error: unknown): AppError | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return null;
+  }
+  const code = (error as { code: unknown }).code;
+  if (code === "P2002") {
+    return new ConflictError("A record with these details already exists.");
+  }
+  if (code === "P2025" || code === "P2001") {
+    return new NotFoundError("The requested record no longer exists.");
+  }
+  if (code === "P2003") {
+    return new ValidationError("A referenced record does not exist.");
+  }
+  return null;
+}
+
+/**
+ * Converts any thrown value into a message that is safe to return from a Server Action.
+ * Only operational AppError messages reach the client; everything else is logged
+ * server-side and replaced with the provided generic fallback.
+ */
+export function toActionError(
+  error: unknown,
+  fallback = "An unexpected error occurred. Please try again later."
+): string {
+  if (error instanceof AppError && error.isOperational) {
+    return error.message;
+  }
+
+  const prismaError = fromPrismaKnownError(error);
+  if (prismaError) {
+    return prismaError.message;
+  }
+
+  console.error(
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "ERROR",
+      message: "Unhandled Server Action error",
+      error:
+        error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+            }
+          : String(error),
+    })
+  );
+  return fallback;
+}

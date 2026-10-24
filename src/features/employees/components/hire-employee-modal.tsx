@@ -25,7 +25,8 @@ export function HireEmployeeModal({
   onClose,
 }: HireEmployeeModalProps) {
   const router = useRouter();
-  const [employeeCode, setEmployeeCode] = useState("GARA-EMP-001");
+  // No pre-filled code: the employee numbering series is not defined.
+  const [employeeCode, setEmployeeCode] = useState("");
   const [department, setDepartment] = useState(defaultDepartment);
   const [designation, setDesignation] = useState(defaultDesignation);
   const [joiningDate, setJoiningDate] = useState(defaultJoiningDate);
@@ -57,10 +58,12 @@ export function HireEmployeeModal({
     try {
       const res = await hireEmployeeFromApplicationAction(formData);
       if (!res.success) {
-        setError(res.error);
+        const details = Object.values(res.fieldErrors ?? {});
+        setError(details.length > 0 ? `${res.error}: ${details.join(" ")}` : res.error);
       } else {
         onClose();
-        router.push("/recruitment/employees");
+        // Stay on the current portal page; it re-renders with the HIRED status.
+        router.refresh();
       }
     } finally {
       setIsSubmitting(false);
@@ -98,7 +101,7 @@ export function HireEmployeeModal({
             <div className="p-2.5 rounded bg-muted/40 border border-border/40 text-[11px] text-muted-foreground flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-success shrink-0" />
               <span>
-                Gated transition: This operation requires verified OFFER_ACCEPTED status. Creating an employee record will assign the official EMPLOYEE role, initiate the onboarding checklist, and transition recruitment to HIRED.
+                Gated transition: This operation requires an offer the candidate has accepted (OFFER_ACCEPTED). Creating an employee record will assign the official EMPLOYEE role, initiate the onboarding checklist, and transition recruitment to HIRED.
               </span>
             </div>
 
@@ -112,7 +115,7 @@ export function HireEmployeeModal({
                   required
                   value={employeeCode}
                   onChange={(e) => setEmployeeCode(e.target.value)}
-                  placeholder="e.g. GARA-EMP-001"
+                  placeholder="Uppercase letters, digits, - or _"
                   className="w-full px-3 py-2 rounded-md border border-input bg-background font-mono uppercase"
                 />
               </div>

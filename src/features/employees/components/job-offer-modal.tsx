@@ -24,10 +24,9 @@ export function JobOfferModal({
   const [department, setDepartment] = useState(defaultDepartment);
   const [designation, setDesignation] = useState(defaultDesignation);
   const [expectedJoiningDate, setExpectedJoiningDate] = useState("");
-  const [location, setLocation] = useState("Bangalore / Hybrid");
-  const [termsSummary, setTermsSummary] = useState(
-    "Standard full-time employment agreement. Reporting hours: 9:30 AM - 6:30 PM (Mon-Fri). Initial probation period: 3 months. Standard company IP & confidentiality agreement applies."
-  );
+  // No pre-filled location or terms: offer terms must come from the approved offer (OD-020).
+  const [location, setLocation] = useState("");
+  const [termsSummary, setTermsSummary] = useState("");
   const [notes, setNotes] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +48,8 @@ export function JobOfferModal({
     try {
       const res = await createJobOfferAction(formData);
       if (!res.success) {
-        setError(res.error);
+        const details = Object.values(res.fieldErrors ?? {});
+        setError(details.length > 0 ? `${res.error}: ${details.join(" ")}` : res.error);
       } else {
         onClose();
       }
@@ -145,7 +145,7 @@ export function JobOfferModal({
                   type="text"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
-                  placeholder="e.g. Remote, Bangalore, Hybrid"
+                  placeholder="Leave blank if not specified"
                   className="w-full px-3 py-2 rounded-md border border-input bg-background"
                 />
               </div>
@@ -160,7 +160,7 @@ export function JobOfferModal({
                 required
                 value={termsSummary}
                 onChange={(e) => setTermsSummary(e.target.value)}
-                placeholder="High-level terms summary..."
+                placeholder="Summary of the terms agreed with the candidate (as approved)"
                 className="w-full px-3 py-2 rounded-md border border-input bg-background resize-y"
               />
             </div>

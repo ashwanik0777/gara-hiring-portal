@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { Role } from "@prisma/client";
@@ -14,13 +15,20 @@ export const instant = false;
 
 export default async function NewOpeningPage() {
   const user = await getCurrentUser();
+  if (!user) {
+    redirect("/login?callbackUrl=/admin/openings/new");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
 
-  if (!user || (!user.roles.includes(Role.ADMIN) && !user.roles.includes(Role.HR))) {
+  // Legacy /recruitment route (redirected to /admin by next.config.ts): same guard as /admin.
+  if (!user.roles.includes(Role.ADMIN)) {
     return (
       <div className="min-h-screen flex flex-col bg-background">
         <Navbar />
         <div className="flex-1 flex items-center justify-center p-8">
-          <UnauthorizedState message="You require Administrator or HR credentials to create openings." />
+          <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />
         </div>
       </div>
     );
@@ -33,7 +41,7 @@ export default async function NewOpeningPage() {
       <main className="flex-1 py-10">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
           <Link
-            href="/recruitment/openings"
+            href="/admin/openings"
             className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
@@ -44,7 +52,7 @@ export default async function NewOpeningPage() {
             <h1 className="text-2xl font-bold tracking-tight">Create New Program Vacancy</h1>
           </div>
 
-          <OpeningForm />
+          <OpeningForm basePath="/admin/openings" />
         </div>
       </main>
     </div>

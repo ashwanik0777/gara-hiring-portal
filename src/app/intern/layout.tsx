@@ -1,6 +1,8 @@
 import React from "react";
 import { redirect } from "next/navigation";
+import { Role } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth/guards";
+import { prisma } from "@/lib/db";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import { INTERN_NAV_ITEMS } from "@/config/dashboard-nav";
 
@@ -16,13 +18,21 @@ export default async function InternLayout({
     redirect("/login?callbackUrl=/intern/dashboard");
   }
 
-  const { Role } = await import("@prisma/client");
-  const isIntern = user.roles.includes(Role.INTERN) || user.roles.includes(Role.ADMIN);
-  if (!isIntern) {
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
+  // The workspace only shows the signed-in user's own enrollment. Evaluation outcomes no longer
+  // grant the INTERN role automatically (POL-07), so owning an enrollment also grants access.
+  const hasInternRole = user.roles.includes(Role.INTERN) || user.roles.includes(Role.ADMIN);
+  const hasOwnEnrollment = hasInternRole
+    ? true
+    : (await prisma.internshipEnrollment.count({ where: { userId: user.id } })) > 0;
+  if (!hasOwnEnrollment) {
     redirect("/candidate/dashboard");
   }
 
-  const primaryRole = user.roles[0] ?? "INTERN";
+  const primaryRole = user.roles.includes(Role.INTERN) ? Role.INTERN : user.roles[0] ?? Role.INTERN;
 
   return (
     <DashboardShell

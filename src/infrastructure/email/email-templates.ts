@@ -10,6 +10,34 @@
  * 6. Responsive layout (max-width 580px) tested across web, desktop, and mobile email clients.
  */
 
+/**
+ * Escapes a value for safe interpolation into HTML text or a quoted attribute.
+ */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Returns the URL only when it is an absolute http(s) URL, otherwise null.
+ * Prevents javascript:, data: and other schemes from reaching email links.
+ */
+export function safeHttpUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim() === "") {
+    return null;
+  }
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function getAppBaseUrl(): string {
   if (process.env.BETTER_AUTH_URL && !process.env.BETTER_AUTH_URL.includes("localhost")) {
     return process.env.BETTER_AUTH_URL.replace(/\/$/, "");
@@ -30,9 +58,13 @@ export interface EmailShellOptions {
     textColor: string;
     borderColor?: string;
   };
+  /** Plain text; escaped by the shell. */
   title: string;
+  /** Plain text; escaped by the shell. */
   salutation?: string;
+  /** Trusted HTML; callers must escape every interpolated value. */
   leadParagraph?: string;
+  /** Trusted HTML; callers must escape every interpolated value. */
   contentHtml: string;
   ctaButton?: {
     text: string;
@@ -61,19 +93,20 @@ export function renderEmailShell(options: EmailShellOptions): string {
     ? `
       <div style="margin-bottom: 16px;">
         <span style="display: inline-block; padding: 4px 12px; background-color: ${options.categoryBadge.bgColor}; color: ${options.categoryBadge.textColor}; border: 1px solid ${options.categoryBadge.borderColor || options.categoryBadge.bgColor}; border-radius: 9999px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;">
-          ${options.categoryBadge.text}
+          ${escapeHtml(options.categoryBadge.text)}
         </span>
       </div>
     `
     : "";
 
-  const ctaHtml = options.ctaButton
+  const ctaUrl = options.ctaButton ? safeHttpUrl(options.ctaButton.url) : null;
+  const ctaHtml = options.ctaButton && ctaUrl
     ? `
       <table cellpadding="0" cellspacing="0" border="0" style="margin: 32px 0 28px 0; width: 100%;">
         <tr>
           <td align="center">
-            <a href="${options.ctaButton.url}" target="_blank" style="display: inline-block; padding: 13px 36px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; line-height: 1; letter-spacing: -0.01em;">
-              ${options.ctaButton.text}
+            <a href="${escapeHtml(ctaUrl)}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 13px 36px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; line-height: 1; letter-spacing: -0.01em;">
+              ${escapeHtml(options.ctaButton.text)}
             </a>
           </td>
         </tr>
@@ -84,9 +117,9 @@ export function renderEmailShell(options: EmailShellOptions): string {
   const secondaryNoteHtml = options.secondaryNote
     ? `
       <div style="margin-top: 24px; padding: 14px 18px; background-color: ${options.secondaryNote.bgColor || "#f8fafc"}; border-left: 3px solid ${options.secondaryNote.borderColor || "#2563eb"}; border-radius: 0 8px 8px 0;">
-        ${options.secondaryNote.title ? `<p style="margin: 0 0 4px 0; font-size: 13px; font-weight: 700; color: ${options.secondaryNote.textColor || "#0f172a"};">${options.secondaryNote.title}</p>` : ""}
+        ${options.secondaryNote.title ? `<p style="margin: 0 0 4px 0; font-size: 13px; font-weight: 700; color: ${options.secondaryNote.textColor || "#0f172a"};">${escapeHtml(options.secondaryNote.title)}</p>` : ""}
         <p style="margin: 0; font-size: 12px; color: ${options.secondaryNote.textColor || "#475569"}; line-height: 1.5;">
-          ${options.secondaryNote.text}
+          ${escapeHtml(options.secondaryNote.text)}
         </p>
       </div>
     `
@@ -97,7 +130,7 @@ export function renderEmailShell(options: EmailShellOptions): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${options.title}</title>
+  <title>${escapeHtml(options.title)}</title>
 </head>
 <body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; color: #1e293b;">
   <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f1f5f9; padding: 40px 16px;">
@@ -138,10 +171,10 @@ export function renderEmailShell(options: EmailShellOptions): string {
               ${badgeHtml}
               
               <h1 style="margin: 0 0 16px 0; font-size: 22px; font-weight: 700; color: #0f172a; line-height: 1.3; letter-spacing: -0.01em;">
-                ${options.title}
+                ${escapeHtml(options.title)}
               </h1>
 
-              ${options.salutation ? `<p style="margin: 0 0 16px 0; font-size: 14px; font-weight: 600; color: #0f172a;">${options.salutation}</p>` : ""}
+              ${options.salutation ? `<p style="margin: 0 0 16px 0; font-size: 14px; font-weight: 600; color: #0f172a;">${escapeHtml(options.salutation)}</p>` : ""}
 
               ${options.leadParagraph ? `<p style="margin: 0 0 20px 0; font-size: 14px; color: #334155; line-height: 1.6;">${options.leadParagraph}</p>` : ""}
 
@@ -157,7 +190,7 @@ export function renderEmailShell(options: EmailShellOptions): string {
           <tr>
             <td style="padding: 24px 32px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; line-height: 1.5;">
               <p style="margin: 0 0 8px 0;">
-                ${options.footerNotice || "This is an automated notification from the GARA Innovation Talent Portal. Please do not reply directly to this email."}
+                ${escapeHtml(options.footerNotice || "This is an automated notification from the GARA Innovation Talent Portal. Please do not reply directly to this email.")}
               </p>
               <div style="border-top: 1px solid #e2e8f0; margin-top: 12px; padding-top: 12px; display: flex; justify-content: space-between;">
                 <span style="font-size: 11px; color: #94a3b8;">&copy; ${year} GARA Innovation. All rights reserved.</span>
@@ -193,17 +226,17 @@ export function buildSubAdminWelcomeEmail(params: {
       <table width="100%" cellpadding="6" cellspacing="0" border="0" style="font-size: 13px;">
         <tr>
           <td width="35%" style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Assigned Role</td>
-          <td style="color: #0f172a; font-weight: 700;">${params.role}</td>
+          <td style="color: #0f172a; font-weight: 700;">${escapeHtml(params.role)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Login Email</td>
-          <td style="color: #0f172a; font-family: monospace; font-size: 13px;">${params.email}</td>
+          <td style="color: #0f172a; font-family: monospace; font-size: 13px;">${escapeHtml(params.email)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Temporary Password</td>
           <td>
             <span style="display: inline-block; padding: 6px 12px; background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; font-family: monospace; font-size: 14px; font-weight: 700; color: #1d4ed8; letter-spacing: 0.5px;">
-              ${params.temporaryPassword}
+              ${escapeHtml(params.temporaryPassword)}
             </span>
           </td>
         </tr>
@@ -239,28 +272,21 @@ export function buildSubAdminWelcomeEmail(params: {
 }
 
 /**
- * 2. Temporary Password / Forgot Password Email
+ * 2. Password Reset Link Email
  */
-export function buildForgotPasswordEmail(params: {
+export function buildPasswordResetEmail(params: {
   name: string;
-  email: string;
-  temporaryPassword: string;
-  loginUrl?: string;
+  resetUrl: string;
+  expiresInMinutes: number;
 }): { subject: string; text: string; html: string } {
-  const loginUrl = params.loginUrl || `${getAppBaseUrl()}/login`;
-
-  const subject = `[GARA Innovation] Temporary Access Password`;
-  const text = `Hello ${params.name},\n\nA temporary password was generated for your GARA Innovation account.\n\nTemporary Password: ${params.temporaryPassword}\nLogin Portal: ${loginUrl}\n\nPlease sign in with this temporary password and update your permanent password immediately.\n\n— GARA Innovation Security`;
+  const subject = `[GARA Innovation] Reset Your Password`;
+  const text = `Hello ${params.name},\n\nA password reset was requested for your GARA Innovation account.\n\nReset your password using this link (valid for ${params.expiresInMinutes} minutes, single use):\n${params.resetUrl}\n\nIf you did not request this, you can ignore this email — your current password stays unchanged.\n\n— GARA Innovation Security`;
 
   const contentHtml = `
-    <div style="margin: 24px 0; padding: 24px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; text-align: center;">
-      <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px;">
-        Temporary Access Password
-      </div>
-      <div style="font-family: monospace; font-size: 22px; font-weight: 800; color: #0f172a; letter-spacing: 2px;">
-        ${params.temporaryPassword}
-      </div>
-    </div>
+    <p style="margin: 0 0 12px 0; font-size: 13px; color: #334155; line-height: 1.6;">
+      This link is valid for <strong>${escapeHtml(params.expiresInMinutes)} minutes</strong> and can be used once.
+      Your current password keeps working until you choose a new one.
+    </p>
   `;
 
   const html = renderEmailShell({
@@ -270,17 +296,17 @@ export function buildForgotPasswordEmail(params: {
       textColor: "#991b1b",
       borderColor: "#fecaca",
     },
-    title: "Temporary Sign-In Credentials",
+    title: "Password Reset Request",
     salutation: `Hello ${params.name},`,
-    leadParagraph: "A request was received to access your GARA Innovation account. Use the temporary password below to log in.",
+    leadParagraph: "We received a request to reset the password for your GARA Innovation account.",
     contentHtml,
     ctaButton: {
-      text: "Sign In & Set New Password",
-      url: loginUrl,
+      text: "Choose a New Password",
+      url: params.resetUrl,
     },
     secondaryNote: {
-      title: "Security Notice",
-      text: "You will be prompted to create your own permanent password right after signing in. If you did not request this reset, please contact your administrator immediately.",
+      title: "Didn't request this?",
+      text: "You can safely ignore this email. Nobody can change your password without this link.",
       bgColor: "#fef2f2",
       borderColor: "#dc2626",
       textColor: "#991b1b",
@@ -310,11 +336,11 @@ export function buildApplicationConfirmationEmail(params: {
       <table width="100%" cellpadding="6" cellspacing="0" border="0" style="font-size: 13px;">
         <tr>
           <td width="35%" style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Position Applied</td>
-          <td style="color: #0f172a; font-weight: 700;">${params.openingTitle}</td>
+          <td style="color: #0f172a; font-weight: 700;">${escapeHtml(params.openingTitle)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Reference Code</td>
-          <td style="color: #0f172a; font-family: monospace; font-weight: 700;">${params.referenceCode}</td>
+          <td style="color: #0f172a; font-family: monospace; font-weight: 700;">${escapeHtml(params.referenceCode)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Submission Date</td>
@@ -333,7 +359,7 @@ export function buildApplicationConfirmationEmail(params: {
     },
     title: "Application Received Successfully",
     salutation: `Dear ${params.candidateName},`,
-    leadParagraph: `Thank you for your interest in joining GARA Innovation. Your application for <strong>${params.openingTitle}</strong> has been logged into our hiring pipeline.`,
+    leadParagraph: `Thank you for your interest in joining GARA Innovation. Your application for <strong>${escapeHtml(params.openingTitle)}</strong> has been logged into our hiring pipeline.`,
     contentHtml,
     ctaButton: {
       text: "Track Application Status",
@@ -374,36 +400,37 @@ export function buildInterviewInvitationEmail(params: {
     minute: "2-digit",
   });
 
+  const meetingLink = safeHttpUrl(params.meetingLink);
   const subject = `[GARA Innovation] Interview Scheduled: ${params.roundName} (${params.openingTitle})`;
-  const text = `Hello ${params.candidateName},\n\nYou have been shortlisted for an interview round for the position of ${params.openingTitle}.\n\nInterview Round: ${params.roundName}\nDate & Time: ${formattedDate}\nDuration: ${params.durationMinutes} minutes\n${params.meetingLink ? `Meeting Link: ${params.meetingLink}\n` : ""}Candidate Portal: ${portalUrl}\n\nPlease be prepared 5 minutes prior to the scheduled time.\n\n— GARA Innovation Talent Acquisition`;
+  const text = `Hello ${params.candidateName},\n\nYou have been shortlisted for an interview round for the position of ${params.openingTitle}.\n\nInterview Round: ${params.roundName}\nDate & Time: ${formattedDate}\nDuration: ${params.durationMinutes} minutes\n${meetingLink ? `Meeting Link: ${meetingLink}\n` : ""}Candidate Portal: ${portalUrl}\n\nPlease be prepared 5 minutes prior to the scheduled time.\n\n— GARA Innovation Talent Acquisition`;
 
   const contentHtml = `
     <div style="margin: 20px 0; padding: 20px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
       <table width="100%" cellpadding="6" cellspacing="0" border="0" style="font-size: 13px;">
         <tr>
           <td width="35%" style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Position</td>
-          <td style="color: #0f172a; font-weight: 700;">${params.openingTitle}</td>
+          <td style="color: #0f172a; font-weight: 700;">${escapeHtml(params.openingTitle)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Interview Round</td>
-          <td style="color: #0f172a; font-weight: 600;">${params.roundName}</td>
+          <td style="color: #0f172a; font-weight: 600;">${escapeHtml(params.roundName)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Date & Time</td>
-          <td style="color: #1d4ed8; font-weight: 700;">${formattedDate}</td>
+          <td style="color: #1d4ed8; font-weight: 700;">${escapeHtml(formattedDate)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Duration</td>
-          <td style="color: #334155;">${params.durationMinutes} minutes</td>
+          <td style="color: #334155;">${escapeHtml(params.durationMinutes)} minutes</td>
         </tr>
         ${
-          params.meetingLink
+          meetingLink
             ? `
           <tr>
             <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Meeting Link</td>
             <td>
-              <a href="${params.meetingLink}" target="_blank" style="color: #2563eb; text-decoration: underline; font-weight: 600; word-break: break-all;">
-                ${params.meetingLink}
+              <a href="${escapeHtml(meetingLink)}" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: underline; font-weight: 600; word-break: break-all;">
+                ${escapeHtml(meetingLink)}
               </a>
             </td>
           </tr>
@@ -423,11 +450,11 @@ export function buildInterviewInvitationEmail(params: {
     },
     title: "Interview Round Scheduled",
     salutation: `Dear ${params.candidateName},`,
-    leadParagraph: `Congratulations! We were impressed by your profile and are pleased to invite you to the <strong>${params.roundName}</strong> for <strong>${params.openingTitle}</strong>.`,
+    leadParagraph: `Congratulations! We were impressed by your profile and are pleased to invite you to the <strong>${escapeHtml(params.roundName)}</strong> for <strong>${escapeHtml(params.openingTitle)}</strong>.`,
     contentHtml,
     ctaButton: {
-      text: params.meetingLink ? "Join Meeting / View Portal" : "View Interview Details",
-      url: params.meetingLink || portalUrl,
+      text: meetingLink ? "Join Meeting / View Portal" : "View Interview Details",
+      url: meetingLink || portalUrl,
     },
     secondaryNote: {
       title: "Preparation Guidelines",
@@ -462,15 +489,15 @@ export function buildApplicationStageUpdateEmail(params: {
       <table width="100%" cellpadding="6" cellspacing="0" border="0" style="font-size: 13px;">
         <tr>
           <td width="35%" style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Role</td>
-          <td style="color: #0f172a; font-weight: 700;">${params.openingTitle}</td>
+          <td style="color: #0f172a; font-weight: 700;">${escapeHtml(params.openingTitle)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Reference</td>
-          <td style="color: #0f172a; font-family: monospace;">${params.referenceCode}</td>
+          <td style="color: #0f172a; font-family: monospace;">${escapeHtml(params.referenceCode)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Updated Status</td>
-          <td style="color: #0f172a; font-weight: 700;">${params.newStatus.replace(/_/g, " ")}</td>
+          <td style="color: #0f172a; font-weight: 700;">${escapeHtml(params.newStatus.replace(/_/g, " "))}</td>
         </tr>
       </table>
     </div>
@@ -479,7 +506,7 @@ export function buildApplicationStageUpdateEmail(params: {
         ? `
       <div style="margin: 16px 0; padding: 14px 18px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
         <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 6px;">Message from Hiring Team</div>
-        <div style="font-size: 13px; color: #334155; line-height: 1.5;">${params.message}</div>
+        <div style="font-size: 13px; color: #334155; line-height: 1.5; white-space: pre-line;">${escapeHtml(params.message)}</div>
       </div>
     `
         : ""
@@ -495,7 +522,7 @@ export function buildApplicationStageUpdateEmail(params: {
     },
     title: "Application Status Update",
     salutation: `Hello ${params.candidateName},`,
-    leadParagraph: `Your application for <strong>${params.openingTitle}</strong> has progressed in our evaluation process.`,
+    leadParagraph: `Your application for <strong>${escapeHtml(params.openingTitle)}</strong> has progressed in our evaluation process.`,
     contentHtml,
     ctaButton: {
       text: "View in Candidate Portal",
@@ -526,11 +553,11 @@ export function buildEvaluationSelectionEmail(params: {
       <table width="100%" cellpadding="6" cellspacing="0" border="0" style="font-size: 13px;">
         <tr>
           <td width="35%" style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Selected Position</td>
-          <td style="color: #0f172a; font-weight: 700;">${params.openingTitle}</td>
+          <td style="color: #0f172a; font-weight: 700;">${escapeHtml(params.openingTitle)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Program Duration</td>
-          <td style="color: #15803d; font-weight: 700;">${days} Working Days</td>
+          <td style="color: #15803d; font-weight: 700;">${escapeHtml(days)} Working Days</td>
         </tr>
       </table>
     </div>
@@ -545,7 +572,7 @@ export function buildEvaluationSelectionEmail(params: {
     },
     title: "Selected for Supervised Evaluation",
     salutation: `Congratulations ${params.candidateName}!`,
-    leadParagraph: `We are pleased to inform you that you have been selected for the GARA Innovation <strong>${days}-working-day supervised evaluation period</strong> for <strong>${params.openingTitle}</strong>.`,
+    leadParagraph: `We are pleased to inform you that you have been selected for the GARA Innovation <strong>${escapeHtml(days)}-working-day supervised evaluation period</strong> for <strong>${escapeHtml(params.openingTitle)}</strong>.`,
     contentHtml,
     ctaButton: {
       text: "Open Evaluation Cockpit",
@@ -589,22 +616,22 @@ export function buildJobOfferEmail(params: {
       <table width="100%" cellpadding="6" cellspacing="0" border="0" style="font-size: 13px;">
         <tr>
           <td width="35%" style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Offered Role</td>
-          <td style="color: #0f172a; font-weight: 700;">${params.designation}</td>
+          <td style="color: #0f172a; font-weight: 700;">${escapeHtml(params.designation)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Department</td>
-          <td style="color: #0f172a;">${params.department}</td>
+          <td style="color: #0f172a;">${escapeHtml(params.department)}</td>
         </tr>
         <tr>
           <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Joining Date</td>
-          <td style="color: #1d4ed8; font-weight: 700;">${joiningDateFormatted}</td>
+          <td style="color: #1d4ed8; font-weight: 700;">${escapeHtml(joiningDateFormatted)}</td>
         </tr>
         ${
           params.applicationReference
             ? `
           <tr>
             <td style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">Application Ref</td>
-            <td style="color: #0f172a; font-family: monospace;">${params.applicationReference}</td>
+            <td style="color: #0f172a; font-family: monospace;">${escapeHtml(params.applicationReference)}</td>
           </tr>
         `
             : ""
@@ -622,7 +649,7 @@ export function buildJobOfferEmail(params: {
     },
     title: "Formal Offer of Employment",
     salutation: `Dear ${params.candidateName},`,
-    leadParagraph: `Following your successful evaluation, GARA Innovation is delighted to extend a formal offer of employment for the position of <strong>${params.designation}</strong>.`,
+    leadParagraph: `Following your successful evaluation, GARA Innovation is delighted to extend a formal offer of employment for the position of <strong>${escapeHtml(params.designation)}</strong>.`,
     contentHtml,
     ctaButton: {
       text: "Review & Accept Offer",
@@ -671,8 +698,8 @@ export function buildGenericNotificationEmail(params: {
     .map(
       (k) => `
       <tr>
-        <td width="35%" style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">${k.replace(/([A-Z])/g, " $1")}</td>
-        <td style="color: #0f172a; font-weight: 500;">${String(p[k])}</td>
+        <td width="35%" style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">${escapeHtml(k.replace(/([A-Z])/g, " $1"))}</td>
+        <td style="color: #0f172a; font-weight: 500;">${escapeHtml(typeof p[k] === "object" && p[k] !== null ? JSON.stringify(p[k]) : p[k])}</td>
       </tr>
     `
     )

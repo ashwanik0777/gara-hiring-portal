@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
-import { validateFormResponses, FileMetadataInput } from "@/features/application-forms/services/form-validator";
+import {
+  validateFormResponses,
+  getPrimaryFileField,
+  FileMetadataInput,
+} from "@/features/application-forms/services/form-validator";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
 import {
   ApplicationStatus,
@@ -9,19 +13,47 @@ import {
   CandidateProfileData,
 } from "../types";
 import { CandidateProfileInput } from "../schemas";
-import { NotFoundError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { NotFoundError, ForbiddenError, ValidationError, ConflictError } from "@/lib/errors";
+import { logger } from "@/lib/logging/logger";
+import { hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
+import {
+  RECRUITMENT_STAFF_ROLES,
+  isAssignedToApplication,
+  isInterviewerScoped,
+} from "@/features/recruitment/services/application-access";
 import { OpeningStatus, Prisma } from "@prisma/client";
+
+/** Bounded number of attempts to find an unused reference code. */
+export const MAX_REFERENCE_ATTEMPTS = 5;
+
+/**
+ * Stored in `Application.resumeStorageKey` (a required column) when the published
+ * form did not request a document and the candidate attached none.
+ */
+export const NO_RESUME_STORAGE_KEY = "";
 
 /**
  * Generates an immutable human-readable reference code.
- * Format: GARA-<YEAR>-APP-<6_ALPHANUMERIC>
+ * Format: GARA-<YEAR>-APP-<6_HEX>, using the UTC year of submission.
  * Example: GARA-2026-APP-7F3A9C
  */
-export function generateApplicationReference(): string {
-  const year = 2026; // Stable anchor aligned with Next.js static prerender policy
+export function generateApplicationReference(now: Date = new Date()): string {
+  const year = now.getUTCFullYear();
   const randomSuffix = crypto.randomBytes(3).toString("hex").toUpperCase();
   return `GARA-${year}-APP-${randomSuffix}`;
 }
+
+/** Detects a Prisma unique-constraint violation structurally (works across client versions). */
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code: unknown }).code === "P2002"
+  );
+}
+
+const PDF_MAGIC_BYTES = "%PDF-";
 
 export class ApplicationService {
   /**
@@ -53,11 +85,11 @@ export class ApplicationService {
       };
     }
 
-    // Auto-create CandidateProfile linked to User
-    const profile = await prisma.candidateProfile.create({
-      data: {
-        userId: user.id,
-      },
+    // Auto-create CandidateProfile linked to User (upsert tolerates concurrent first requests)
+    const profile = await prisma.candidateProfile.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: { userId: user.id },
     });
 
     return {
@@ -133,8 +165,10 @@ export class ApplicationService {
 
     let profileId = user.candidateProfile?.id;
     if (!profileId) {
-      const created = await prisma.candidateProfile.create({
-        data: { userId },
+      const created = await prisma.candidateProfile.upsert({
+        where: { userId },
+        update: {},
+        create: { userId },
       });
       profileId = created.id;
     }
@@ -166,27 +200,25 @@ export class ApplicationService {
       throw new ValidationError("This opening does not have an active application form configured.");
     }
 
-    // 2.5 Check for existing active application to prevent duplicates
-    const existingApplication = await prisma.application.findFirst({
-      where: {
-        openingId: opening.id,
-        candidateId: profileId,
-        isArchived: false,
-      },
-      select: { id: true, referenceCode: true },
-    });
-    if (existingApplication) {
-      throw new ValidationError(
-        `You have already submitted an application for this opening (Reference: ${existingApplication.referenceCode}). Duplicate applications are not permitted.`
-      );
-    }
+    // Duplicate-application handling is undecided (OD-005): repeat submissions are not
+    // blocked here; the submission rate limit in the Server Action is the technical safeguard.
 
     const formSchema = activeFormVersion.schemaDefinition as unknown as FormSchemaDefinition;
 
-    // 3. Server-side validation of untrusted responses & file
+    // 3. Server-side validation of untrusted responses & file.
+    // The single uploaded document maps to the form's primary file field; whether it is
+    // mandatory is decided by the published form definition only.
+    const documentField = getPrimaryFileField(formSchema);
+    if (resumeFile && !documentField) {
+      throw new ValidationError("This application form does not accept document uploads", [
+        { field: "resume", message: "Remove the attached document and submit again" },
+      ]);
+    }
+    const documentFieldName = documentField?.name ?? "resume";
+
     const fileInputs: Record<string, FileMetadataInput> = {};
-    if (resumeFile) {
-      fileInputs["resume"] = resumeFile;
+    if (resumeFile && documentField) {
+      fileInputs[documentField.name] = resumeFile;
     }
 
     const validation = validateFormResponses(formSchema, responses, fileInputs);
@@ -198,101 +230,130 @@ export class ApplicationService {
       throw new ValidationError("Application form validation failed", issues);
     }
 
-    if (!resumeFile) {
-      throw new ValidationError("Resume document (PDF) is required", [
-        { field: "resume", message: "Please attach your resume in PDF format (up to 5MB)" },
-      ]);
+    if (resumeFile) {
+      // Validate PDF magic bytes to prevent MIME type spoofing
+      const headerString = Buffer.from(resumeFile.buffer.slice(0, PDF_MAGIC_BYTES.length)).toString(
+        "ascii"
+      );
+      if (!headerString.startsWith(PDF_MAGIC_BYTES)) {
+        throw new ValidationError("The uploaded file is not a valid PDF document", [
+          { field: documentFieldName, message: "Please upload a genuine PDF file" },
+        ]);
+      }
     }
 
-    // Validate PDF magic bytes to prevent MIME type spoofing
-    const fileHeader = resumeFile.buffer.slice(0, 5);
-    const headerString = Buffer.from(fileHeader).toString("ascii");
-    if (!headerString.startsWith("%PDF-")) {
-      throw new ValidationError("The uploaded file is not a valid PDF document", [
-        { field: "resume", message: "Please upload a genuine PDF file" },
-      ]);
-    }
-
-    // 4. Secure upload to isolated private storage
+    // 4. Secure upload to isolated private storage (only when a document was attached)
     const { getStorageService } = await import("@/infrastructure/storage");
     const storageService = getStorageService();
-    const uploadResult = await storageService.upload(
-      resumeFile.buffer,
-      resumeFile.name,
-      resumeFile.type,
-      `resumes/${opening.slug}`
-    );
+    const uploadResult = resumeFile
+      ? await storageService.upload(
+          resumeFile.buffer,
+          resumeFile.name,
+          resumeFile.type,
+          `resumes/${opening.slug}`
+        )
+      : null;
+    const resumeStorageKey = uploadResult?.storageKey ?? NO_RESUME_STORAGE_KEY;
 
-    // 5. Generate unique reference code
-    let referenceCode = generateApplicationReference();
-    // Safety check against collisions
-    const existingRef = await prisma.application.findUnique({
-      where: { referenceCode },
-    });
-    if (existingRef) {
-      referenceCode = `${referenceCode}-${crypto.randomBytes(1).toString("hex").toUpperCase()}`;
+    // 5 + 6. DB Transaction: Application + Status History + Outbox + Audit.
+    // The unique constraint on referenceCode is the collision check; a collision retries
+    // with a fresh code a bounded number of times.
+    try {
+      const result = await this.createApplicationWithUniqueReference((referenceCode) =>
+        prisma.$transaction(async (tx) => {
+          const application = await tx.application.create({
+            data: {
+              referenceCode,
+              openingId: opening.id,
+              candidateId: profileId,
+              formVersionId: activeFormVersion.id,
+              status: ApplicationStatus.SUBMITTED,
+              submittedResponses: validation.sanitizedResponses as Prisma.InputJsonValue,
+              resumeStorageKey,
+            },
+          });
+
+          await tx.applicationStatusHistory.create({
+            data: {
+              applicationId: application.id,
+              fromStatus: "DRAFT",
+              toStatus: ApplicationStatus.SUBMITTED,
+              actorId: userId,
+              candidateMessage:
+                "Your application has been received and logged successfully into the recruitment pipeline.",
+            },
+          });
+
+          await tx.notificationOutbox.create({
+            data: {
+              recipientEmail: user.email,
+              templateName: "APPLICATION_CONFIRMATION",
+              payload: {
+                referenceCode: application.referenceCode,
+                candidateName: user.name,
+                openingTitle: opening.title,
+                submittedAt: application.createdAt.toISOString(),
+              },
+              status: "PENDING",
+            },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              actorId: userId,
+              actorRole: "CANDIDATE",
+              action: "SUBMIT_APPLICATION",
+              resourceType: "APPLICATION",
+              resourceId: application.id,
+              diffPayload: {
+                referenceCode: application.referenceCode,
+                openingSlug: opening.slug,
+              },
+            },
+          });
+
+          return application;
+        })
+      );
+
+      return {
+        applicationId: result.id,
+        referenceCode: result.referenceCode,
+      };
+    } catch (error) {
+      // Never leave an orphaned private document behind when the records were not written.
+      if (uploadResult) {
+        await storageService.delete(uploadResult.storageKey).catch((cleanupError: unknown) => {
+          logger.error("Failed to remove uploaded document after a failed submission", cleanupError, {
+            openingId: opening.id,
+          });
+        });
+      }
+      throw error;
     }
+  }
 
-    // 6. DB Transaction: Application + Status History + Outbox
-    const result = await prisma.$transaction(async (tx) => {
-      const application = await tx.application.create({
-        data: {
-          referenceCode,
-          openingId: opening.id,
-          candidateId: profileId,
-          formVersionId: activeFormVersion.id,
-          status: ApplicationStatus.SUBMITTED,
-          submittedResponses: validation.sanitizedResponses as Prisma.InputJsonValue,
-          resumeStorageKey: uploadResult.storageKey,
-        },
-      });
-
-      await tx.applicationStatusHistory.create({
-        data: {
-          applicationId: application.id,
-          fromStatus: "DRAFT",
-          toStatus: ApplicationStatus.SUBMITTED,
-          actorId: userId,
-          candidateMessage:
-            "Your application has been received and logged successfully into the recruitment pipeline.",
-        },
-      });
-
-      await tx.notificationOutbox.create({
-        data: {
-          recipientEmail: user.email,
-          templateName: "APPLICATION_CONFIRMATION",
-          payload: {
-            referenceCode: application.referenceCode,
-            candidateName: user.name,
-            openingTitle: opening.title,
-            submittedAt: application.createdAt.toISOString(),
-          },
-          status: "PENDING",
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          actorId: userId,
-          actorRole: "CANDIDATE",
-          action: "SUBMIT_APPLICATION",
-          resourceType: "APPLICATION",
-          resourceId: application.id,
-          diffPayload: {
-            referenceCode: application.referenceCode,
-            openingSlug: opening.slug,
-          },
-        },
-      });
-
-      return application;
-    });
-
-    return {
-      applicationId: result.id,
-      referenceCode: result.referenceCode,
-    };
+  /**
+   * Runs `create` with freshly generated reference codes until one is accepted by the
+   * unique constraint, up to MAX_REFERENCE_ATTEMPTS. Other errors propagate unchanged.
+   */
+  private async createApplicationWithUniqueReference<T>(
+    create: (referenceCode: string) => Promise<T>
+  ): Promise<T> {
+    for (let attempt = 1; attempt <= MAX_REFERENCE_ATTEMPTS; attempt++) {
+      try {
+        return await create(generateApplicationReference());
+      } catch (error) {
+        // The only unique constraint written by the submission transaction is referenceCode.
+        if (!isUniqueConstraintViolation(error)) {
+          throw error;
+        }
+        logger.warn("Application reference code collision; retrying", { attempt });
+      }
+    }
+    throw new ConflictError(
+      "We could not register your application at this moment. Please try again."
+    );
   }
 
   /**
@@ -413,6 +474,7 @@ export class ApplicationService {
         schemaDefinition: application.formVersion.schemaDefinition as unknown as FormSchemaDefinition,
       },
       submittedResponses: (application.submittedResponses ?? {}) as Record<string, unknown>,
+      hasResume: application.resumeStorageKey !== NO_RESUME_STORAGE_KEY,
       resumeDownloadUrl: `/api/candidate/applications/${application.id}/resume`,
       timeline: application.statusHistory,
     };
@@ -420,18 +482,28 @@ export class ApplicationService {
 
   /**
    * Retrieves candidate's uploaded resume for secure streaming.
-   * Enforces ownership or staff role authorization.
+   * Readable by the owning candidate, and by recruitment staff holding `canApplications`;
+   * interviewer-scoped staff only for applications they are assigned to
+   * (docs/SECURITY.md "Record-Level Access Examples").
    */
   async getApplicationResume(
     applicationId: string,
-    userId: string,
-    isStaff = false
+    viewer: AuthenticatedUser
   ): Promise<{ buffer: Buffer; mimeType: string; filename: string }> {
     const application = await prisma.application.findUnique({
       where: { id: applicationId },
-      include: {
+      select: {
+        id: true,
+        resumeStorageKey: true,
+        assignedRecruiterId: true,
         candidate: {
           select: { userId: true },
+        },
+        // Only the viewer's own rounds are needed to decide interviewer assignment.
+        interviewSchedules: {
+          where: { interviewerId: viewer.id },
+          select: { interviewerId: true },
+          take: 1,
         },
       },
     });
@@ -440,8 +512,15 @@ export class ApplicationService {
       throw new NotFoundError("Application not found");
     }
 
-    if (!isStaff && application.candidate.userId !== userId) {
-      throw new ForbiddenError("You are not authorized to download this document");
+    if (application.candidate.userId !== viewer.id) {
+      await this.assertStaffMayReadApplication(viewer, {
+        assignedRecruiterId: application.assignedRecruiterId,
+        interviewerIds: application.interviewSchedules.map((s) => s.interviewerId),
+      });
+    }
+
+    if (application.resumeStorageKey === NO_RESUME_STORAGE_KEY) {
+      throw new NotFoundError("No document was attached to this application");
     }
 
     const { getStorageService } = await import("@/infrastructure/storage");
@@ -452,6 +531,23 @@ export class ApplicationService {
     }
 
     return file;
+  }
+
+  /**
+   * Staff read access to another candidate's application: a recruitment staff role plus the
+   * `canApplications` permission; interviewer-scoped users must also be assigned to it.
+   */
+  private async assertStaffMayReadApplication(
+    viewer: AuthenticatedUser,
+    assignment: { assignedRecruiterId: string | null; interviewerIds: ReadonlyArray<string | null> }
+  ): Promise<void> {
+    const hasStaffRole = viewer.roles.some((role) => RECRUITMENT_STAFF_ROLES.includes(role));
+    if (!hasStaffRole || !(await hasPermission(viewer, "canApplications"))) {
+      throw new ForbiddenError("You are not authorized to download this document");
+    }
+    if (isInterviewerScoped(viewer) && !isAssignedToApplication(viewer.id, assignment)) {
+      throw new ForbiddenError("You are not authorized to download this document");
+    }
   }
 }
 

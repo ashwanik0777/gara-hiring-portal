@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { getPublicOpeningBySlug } from "@/features/openings/services/opening-service";
+import { NotFoundError } from "@/lib/errors";
 import {
   Briefcase,
   MapPin,
@@ -43,11 +44,14 @@ export async function generateMetadata({ params }: OpeningDetailPageProps) {
 export default async function OpeningDetailPage({ params }: OpeningDetailPageProps) {
   const { slug } = await params;
 
-  let opening;
+  let opening: Awaited<ReturnType<typeof getPublicOpeningBySlug>>;
   try {
     opening = await getPublicOpeningBySlug(slug);
-  } catch {
-    notFound();
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      notFound();
+    }
+    throw error;
   }
 
   return (
@@ -144,9 +148,9 @@ export default async function OpeningDetailPage({ params }: OpeningDetailPagePro
                     Seven-Working-Day Supervised Evaluation
                   </div>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Selected candidates for this internship complete an intensive 7-working-day
-                    supervised evaluation. Work progress is tracked against structured milestones,
-                    and successful completion yields an official GARA verifiable credential.
+                    Selected candidates for this internship complete a 7-working-day supervised
+                    evaluation. Work progress is tracked against structured milestones and reviewed
+                    by the hiring team.
                   </p>
                 </CardContent>
               </Card>

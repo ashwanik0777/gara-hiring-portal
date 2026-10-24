@@ -1,17 +1,16 @@
 import React from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/guards";
-import { getUserPermissions, STAFF_ROLES } from "@/lib/auth/permissions";
+import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
-import { prisma } from "@/lib/db";
 import { ApplicationStatus } from "@prisma/client";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import { ForbiddenError } from "@/lib/errors";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/feedback/empty-state";
 import {
-  Users,
   Search,
   Filter,
   ArrowRight,
@@ -126,14 +125,13 @@ export default async function SubAdminApplicationsPage({
     redirect("/login?callbackUrl=/subadmin/applications");
   }
 
-  const hasStaffOrAdminRole = user.roles.some((r) => STAFF_ROLES.includes(r));
-  if (!hasStaffOrAdminRole) {
-    redirect("/candidate/dashboard");
+  if (user.mustChangePassword) {
+    redirect("/set-password");
   }
 
-  const permissions = await getUserPermissions(user.id, user.roles);
-  if (!permissions.canApplications) {
-    redirect("/subadmin");
+  // Page-level guard: the granular `canApplications` permission is the gate.
+  if (!(await hasPermission(user, "canApplications"))) {
+    return <UnauthorizedState message="You do not have permission to view applications." />;
   }
 
   const { status, search } = await searchParams;
@@ -143,27 +141,34 @@ export default async function SubAdminApplicationsPage({
       ? (status as ApplicationStatus)
       : undefined;
 
-  // 1. Parallel database queries for accurate pipeline counts + filtered queue
-  const [allStatusCounts, applications] = await Promise.all([
-    prisma.application
-      .groupBy({
-        by: ["status"],
-        where: { isArchived: false },
-        _count: { status: true },
-      })
-      .catch(() => []),
-    recruitmentService.getRecruitmentQueue(user, {
-      status: validStatus,
-      search: search || undefined,
-    }),
-  ]);
-
-  const countByStatus: Record<string, number> = {};
-  let globalTotal = 0;
-  for (const item of allStatusCounts) {
-    countByStatus[item.status] = item._count.status;
-    globalTotal += item._count.status;
+  // 1. Pipeline counts + filtered queue. Both come from the recruitment service, which
+  // authorizes the user and limits counts to the applications they may see (interviewers:
+  // assigned applications only). Failures propagate to the error boundary instead of being
+  // shown as zero counts.
+  let statusCounts: Awaited<ReturnType<typeof recruitmentService.getRecruitmentStatusCounts>>;
+  let applications: Awaited<ReturnType<typeof recruitmentService.getRecruitmentQueue>>;
+  try {
+    [statusCounts, applications] = await Promise.all([
+      recruitmentService.getRecruitmentStatusCounts(user),
+      recruitmentService.getRecruitmentQueue(user, {
+        status: validStatus,
+        search: search || undefined,
+      }),
+    ]);
+  } catch (error) {
+    if (error instanceof ForbiddenError) {
+      return (
+        <UnauthorizedState
+          title="Application Queue Unavailable"
+          message="Your role is not permitted to open the application queue. Contact a Super Administrator if you need access."
+        />
+      );
+    }
+    throw error;
   }
+
+  const countByStatus = statusCounts.counts;
+  const globalTotal = statusCounts.total;
 
   const screeningTotal =
     (countByStatus[ApplicationStatus.SUBMITTED] || 0) +
@@ -276,7 +281,7 @@ export default async function SubAdminApplicationsPage({
           </div>
         </Link>
 
-        {/* 4. 7-Day Supervised Evaluation */}
+        {/* 4. 7-Working-Day Supervised Evaluation */}
         <Link
           href="/subadmin/applications?status=EVALUATION_SELECTED"
           className={`bg-card border border-border/80 border-l-4 border-l-purple-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group cursor-pointer ${
@@ -285,7 +290,7 @@ export default async function SubAdminApplicationsPage({
         >
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              7-Day Eval Gate
+              7-Working-Day Eval Gate
             </span>
             <div className="h-8 w-8 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
               <Award className="h-4 w-4" />
@@ -410,7 +415,7 @@ export default async function SubAdminApplicationsPage({
                 : "border border-border/80 bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-muted/60"
             }`}
           >
-            7-Day Eval
+            7-Working-Day Eval
           </Link>
           <Link
             href="/subadmin/applications?status=HIRED"

@@ -26,7 +26,7 @@ export function OpeningStatusActions({ openingId, currentStatus }: OpeningStatus
       if (res.success) {
         router.refresh();
       } else {
-        setError(res.error.message);
+        setError(res.error);
       }
     } catch {
       setError("An unexpected error occurred while updating status.");

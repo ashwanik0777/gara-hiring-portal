@@ -306,7 +306,7 @@ export function SubAdminManagementClient({
   };
 
   const handleDelete = (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to remove Sub-Admin ${name}?`)) return;
+    if (!confirm(`Revoke staff access for ${name}? Their account and history are kept, but they lose all sub-admin roles and are signed out.`)) return;
 
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -314,9 +314,9 @@ export function SubAdminManagementClient({
     startTransition(async () => {
       const res = await deleteSubAdminAction(id);
       if (!res.success) {
-        setErrorMsg(res.error || "Failed to delete Sub-Admin");
+        setErrorMsg(res.error || "Failed to revoke Sub-Admin access");
       } else {
-        setSuccessMsg(`Sub-Admin ${name} removed.`);
+        setSuccessMsg(`Staff access for ${name} revoked.`);
         setDeletedIds((prev) => new Set([...prev, id]));
         if (editingSubAdmin?.id === id) {
           setEditingSubAdmin(null);
@@ -1067,7 +1067,7 @@ export function SubAdminManagementClient({
                             onClick={() => handleDelete(subAdmin.id, subAdmin.name)}
                             disabled={isPending}
                             className="text-[11px] h-7 px-2"
-                            title="Delete Sub-Admin"
+                            title="Revoke Sub-Admin access"
                           >
                             <Trash2 className="h-3 w-3" />
                           </Button>

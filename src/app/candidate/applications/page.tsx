@@ -71,7 +71,7 @@ function getStatusDescription(status: ApplicationStatus): {
     case ApplicationStatus.INTERVIEWED:
       return { message: "Your interview feedback is being compiled by the evaluation panel." };
     case ApplicationStatus.EVALUATION_SELECTED:
-      return { message: "Selected for practical 7-day internship evaluation.", isImportant: true };
+      return { message: "Selected for practical 7-working-day internship evaluation.", isImportant: true };
     case ApplicationStatus.OFFERED:
       return { message: "Action Required: An offer has been extended! Click below to review and respond.", isImportant: true };
     case ApplicationStatus.OFFER_ACCEPTED:
@@ -89,6 +89,9 @@ export default async function CandidateApplicationsPage() {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login?callbackUrl=/candidate/applications");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
   }
 
   const applications = await applicationService.getCandidateApplications(user.id);

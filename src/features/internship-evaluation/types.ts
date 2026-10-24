@@ -57,6 +57,23 @@ export interface OnboardingChecklistItem {
   completed: boolean;
   verifiedAt?: string | null;
   verifiedBy?: string | null;
+  verifiedById?: string | null;
+}
+
+export interface EvaluationEnrollmentListItem {
+  id: string;
+  referenceCode: string;
+  candidateName: string;
+  candidateEmail: string;
+  openingTitle: string;
+  openingDepartment: string;
+  supervisorName: string | null;
+  status: EvaluationStatus;
+  startDate: Date | null;
+  endDate: Date | null;
+  reviewedCheckpoints: number;
+  totalCheckpoints: number;
+  idCardNumber: string | null;
 }
 
 export interface EvaluationEnrollmentDetail {

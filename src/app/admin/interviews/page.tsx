@@ -2,12 +2,14 @@ import React from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
-import { prisma } from "@/lib/db";
+import { ForbiddenError } from "@/lib/errors";
+import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
 import { InterviewRecommendation, Role } from "@prisma/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/feedback/empty-state";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import {
   Calendar,
   Clock,
@@ -39,38 +41,21 @@ export const instant = false;
 export default async function RecruitmentInterviewsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  if (user.mustChangePassword) redirect("/set-password");
 
   const isStaff = user.roles.some((r) => STAFF_ROLES.includes(r));
   if (!isStaff) redirect("/candidate/dashboard");
 
-  const schedules = await prisma.interviewSchedule.findMany({
-    include: {
-      application: {
-        include: {
-          candidate: {
-            include: {
-              user: {
-                select: { name: true, email: true },
-              },
-            },
-          },
-          opening: {
-            select: { title: true, department: true },
-          },
-        },
-      },
-      interviewer: {
-        select: { name: true, email: true },
-      },
-      feedback: {
-        select: {
-          recommendation: true,
-          summaryNotes: true,
-        },
-      },
-    },
-    orderBy: { scheduledAt: "asc" },
-  });
+  let schedules: Awaited<ReturnType<typeof recruitmentService.getInterviewSchedules>>;
+  try {
+    // The service enforces staff role + canInterviews.
+    schedules = await recruitmentService.getInterviewSchedules(user, { order: "asc" });
+  } catch (err: unknown) {
+    if (err instanceof ForbiddenError) {
+      return <UnauthorizedState message="Viewing interview sessions requires the interviews permission." />;
+    }
+    throw err;
+  }
 
   // KPI Metrics Calculation
   const totalSessions = schedules.length;

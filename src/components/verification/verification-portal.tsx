@@ -31,8 +31,11 @@ interface VerificationResult {
   completionDate?: string;
   signatoryTitle?: string;
   signatoryName?: string;
+  evaluationRequirementsFulfilled?: boolean;
   error?: string;
 }
+
+const MAX_CODE_LENGTH = 64;
 
 export function VerificationPortal() {
   const searchParams = useSearchParams();
@@ -55,7 +58,7 @@ export function VerificationPortal() {
   }, [initialCode]);
 
   async function handleVerify(codeToVerify?: string) {
-    const target = (codeToVerify ?? inputCode).trim().toUpperCase();
+    const target = (codeToVerify ?? inputCode).trim().toUpperCase().slice(0, MAX_CODE_LENGTH);
     if (!target) return;
 
     setLoading(true);
@@ -166,7 +169,8 @@ export function VerificationPortal() {
                   type="text"
                   value={inputCode}
                   onChange={(e) => setInputCode(e.target.value.toUpperCase())}
-                  placeholder="GARA-CERT-2026-XXXXXX"
+                  maxLength={MAX_CODE_LENGTH}
+                  placeholder="Code printed on the certificate"
                   className="w-full pl-11 pr-4 py-3 bg-background border border-border rounded-xl text-sm sm:text-base font-mono tracking-wider text-foreground placeholder:text-muted-foreground/50 placeholder:font-sans placeholder:tracking-normal focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary uppercase shadow-2xs"
                   disabled={loading}
                   autoComplete="off"
@@ -192,25 +196,6 @@ export function VerificationPortal() {
               </button>
             </div>
 
-            {/* Discrete Demo Test Helper */}
-            <div className="flex flex-wrap items-center justify-between text-xs pt-1 text-muted-foreground gap-2">
-              <span className="text-[11px]">
-                Try sample code:{" "}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setInputCode("GARA-CERT-2026-DEMO01");
-                    handleVerify("GARA-CERT-2026-DEMO01");
-                  }}
-                  className="font-mono font-semibold text-primary hover:underline cursor-pointer"
-                >
-                  GARA-CERT-2026-DEMO01
-                </button>
-              </span>
-              <span className="text-[11px] text-muted-foreground/70">
-                256-Bit Immutable Database Verification
-              </span>
-            </div>
           </form>
         </div>
       </div>
@@ -368,14 +353,16 @@ export function VerificationPortal() {
                     </button>
                   </div>
 
-                  {/* Authenticity Guarantee Callout */}
+                  {/* Registry Record Callout (claims only what the record shows) */}
                   <div className="p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-xs text-muted-foreground leading-relaxed flex items-start gap-3">
                     <ShieldCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                     <div>
                       <span className="font-bold text-foreground block">
-                        GARA Innovation Official Registry Guarantee
+                        GARA Innovation Certificate Registry
                       </span>
-                      This credential has been validated directly against GARA Innovation&apos;s production database. All supervised 7-working-day evaluation checkpoints and formal approvals have been verified.
+                      {result.evaluationRequirementsFulfilled
+                        ? "This certificate matches an active record in GARA Innovation's certificate registry. The record shows a passed supervised evaluation with every checkpoint reviewed and an approved completion decision."
+                        : "This certificate matches an active record in GARA Innovation's certificate registry."}
                     </div>
                   </div>
                 </div>
@@ -404,7 +391,9 @@ export function VerificationPortal() {
                   <span>
                     {result.status === "REVOKED"
                       ? "CREDENTIAL REVOKED"
-                      : "VERIFICATION FAILED"}
+                      : result.status === "SUPERSEDED"
+                        ? "CODE SUPERSEDED"
+                        : "VERIFICATION FAILED"}
                   </span>
                 </div>
                 <h2 className="text-xl font-bold text-foreground">
@@ -423,7 +412,7 @@ export function VerificationPortal() {
                   <ul className="list-disc list-inside space-y-1">
                     <li>Confirm the verification code printed on the physical certificate.</li>
                     <li>Scan the QR code printed on the bottom corner of the official PDF document.</li>
-                    <li>Official format: <code className="font-mono text-foreground font-semibold">GARA-CERT-YYYY-XXXXXX</code>.</li>
+                    <li>Verification codes start with <code className="font-mono text-foreground font-semibold">GARA-CERT-</code>.</li>
                   </ul>
                 </div>
 
@@ -450,10 +439,10 @@ export function VerificationPortal() {
             <ShieldCheck className="h-5 w-5" />
           </div>
           <h3 className="font-bold text-foreground text-sm mb-1.5">
-            Tamper-Proof Ledger
+            Registry Lookup
           </h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Every certificate carries a cryptographic unique identifier directly authenticated against our production database.
+            Every certificate carries a randomly generated verification code that is checked against GARA Innovation&apos;s certificate records.
           </p>
         </div>
 
@@ -465,7 +454,7 @@ export function VerificationPortal() {
             Supervised Evaluation
           </h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Credentials are only issued upon successful completion of the 7-working-day supervised assessment and mentor review.
+            Certificates are issued only after the supervised evaluation is recorded as passed and authorized staff approve completion.
           </p>
         </div>
 
@@ -474,10 +463,10 @@ export function VerificationPortal() {
             <FileCheck className="h-5 w-5" />
           </div>
           <h3 className="font-bold text-foreground text-sm mb-1.5">
-            Instant Public Audit
+            Public Verification
           </h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Employers, universities, and background verifiers can inspect credential authenticity 24/7 without exposing candidate PII.
+            Employers, universities, and background verifiers can confirm a certificate without seeing contact details or internal evaluation notes.
           </p>
         </div>
       </div>

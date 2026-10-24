@@ -47,13 +47,14 @@ export interface RecruiterStatusHistoryItem {
   id: string;
   fromStatus: string;
   toStatus: string;
-  internalNotes?: string | null; // CONFIDENTIAL - visible to staff only
+  internalNotes?: string | null; // CONFIDENTIAL - visible to staff only (omitted for interviewer-scoped views)
   candidateMessage?: string | null;
   createdAt: Date;
   actor?: {
     id: string;
     name: string;
-    email: string;
+    /** Null when the viewer may not see staff email addresses (interviewer-scoped view). */
+    email: string | null;
   } | null;
 }
 
@@ -82,11 +83,17 @@ export interface InterviewScheduleItem {
     ratings: Record<string, unknown>;
     summaryNotes: string; // Confidential evaluation notes
     submittedAt: Date;
+    interviewerId: string;
     interviewerName: string;
   } | null;
 }
 
 export interface RecruiterApplicationDetail extends RecruiterApplicationItem {
+  /**
+   * True when the viewer is interviewer-scoped: internal notes, staff emails, other
+   * interviewers' rounds and feedback are omitted from this projection.
+   */
+  restrictedView: boolean;
   formVersion: {
     versionNumber: number;
     schemaDefinition: FormSchemaDefinition;
@@ -96,6 +103,17 @@ export interface RecruiterApplicationDetail extends RecruiterApplicationItem {
   resumeDownloadUrl: string;
   statusHistory: RecruiterStatusHistoryItem[];
   interviewSchedules: InterviewScheduleItem[];
+}
+
+/**
+ * Staff member who may be assigned to conduct an interview round
+ * (holds INTERVIEWER, MANAGER, HR or ADMIN).
+ */
+export interface InterviewerOption {
+  id: string;
+  name: string;
+  email: string;
+  roles: string[];
 }
 
 export interface QueueFilters {

@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useState, useTransition, useMemo, useEffect } from "react";
-import {
+import type {
+  LeavePageData,
   LeaveRequestItem,
   LeaveTypeItem,
   LeaveStats,
-  EmployeeOption,
   LeaveRequestStatus,
 } from "../types";
 import {
@@ -13,6 +13,7 @@ import {
   createLeaveRequestAction,
   createLeaveTypeAction,
   toggleLeaveTypeAction,
+  seedDefaultLeaveTypesAction,
 } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,43 +27,42 @@ import {
   AlertCircle,
   PlusCircle,
   Search,
-  Filter,
-  UserCheck,
-  Building,
   FileText,
   ShieldCheck,
   X,
   Loader2,
   Check,
-  ChevronRight,
   Info,
   CalendarRange,
   Users,
   Settings2,
-  ExternalLink,
   Eye,
   PieChart,
   CalendarCheck,
-  ArrowRight,
 } from "lucide-react";
 
 interface LeaveManagementClientProps {
-  initialRequests: LeaveRequestItem[];
-  leaveTypes: LeaveTypeItem[];
-  stats: LeaveStats;
-  employees: EmployeeOption[];
-  currentUserId: string;
-  portalRole: "ADMIN" | "SUBADMIN" | "HRMS";
+  pageData: Exclude<LeavePageData, { view: "forbidden" }>;
 }
 
-export function LeaveManagementClient({
-  initialRequests,
-  leaveTypes: initialLeaveTypes,
-  stats: initialStats,
-  employees,
-  currentUserId,
-  portalRole,
-}: LeaveManagementClientProps) {
+/** `YYYY-MM-DD` of today's UTC calendar day (leave dates are stored as UTC days). */
+function todayUtcKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function utcKeyPlusDays(days: number): string {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) {
+  const isTeamView = pageData.view === "team";
+  const canManageTypes = pageData.view === "team" && pageData.canManageTypes;
+  const canSeedDefaultTypes = pageData.view === "team" && pageData.canSeedDefaultTypes;
+  const employees = pageData.employees;
+  const initialRequests = pageData.requests;
+  const initialLeaveTypes = pageData.leaveTypes;
+  const initialStats = pageData.stats;
+
   const [requests, setRequests] = useState<LeaveRequestItem[]>(initialRequests);
   const [leaveTypes, setLeaveTypes] = useState<LeaveTypeItem[]>(initialLeaveTypes);
   const [stats, setStats] = useState<LeaveStats>(initialStats);
@@ -114,11 +114,12 @@ export function LeaveManagementClient({
   });
 
   // Apply Leave Form State
+  const firstActiveTypeId = leaveTypes.find((t) => t.isActive)?.id || "";
   const [applyForm, setApplyForm] = useState({
     employeeId: employees[0]?.id || "",
-    leaveTypeId: leaveTypes[0]?.id || "",
-    startDate: new Date().toISOString().split("T")[0],
-    endDate: new Date().toISOString().split("T")[0],
+    leaveTypeId: firstActiveTypeId,
+    startDate: todayUtcKey(),
+    endDate: todayUtcKey(),
     reason: "",
   });
 
@@ -136,6 +137,7 @@ export function LeaveManagementClient({
   // Listen to navbar action buttons
   useEffect(() => {
     const handleCategoryEvent = () => {
+      if (!canManageTypes) return;
       setNewTypeModal({
         isOpen: true,
         code: "",
@@ -158,7 +160,7 @@ export function LeaveManagementClient({
       window.removeEventListener("open-apply-leave-tab", handleApplyEvent);
       window.removeEventListener("request-leave", handleApplyEvent);
     };
-  }, []);
+  }, [canManageTypes]);
 
   // Filtered requests computation
   const filteredRequests = useMemo(() => {
@@ -185,32 +187,23 @@ export function LeaveManagementClient({
     });
   }, [requests, statusFilter, typeFilter, searchQuery]);
 
-  // People currently on leave today
+  // People currently on leave today (UTC calendar days, matching storage)
   const currentlyOnLeave = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
+    const todayKey = todayUtcKey();
     return requests.filter((r) => {
       if (r.status !== "APPROVED") return false;
-      const start = new Date(r.startDate);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(r.endDate);
-      end.setHours(23, 59, 59, 999);
-      return today >= start && today <= end;
+      return r.startDate.slice(0, 10) <= todayKey && r.endDate.slice(0, 10) >= todayKey;
     });
   }, [requests]);
 
   // Upcoming approved leaves (next 14 days)
   const upcomingLeaves = useMemo(() => {
-    const today = new Date();
-    today.setHours(23, 59, 59, 999);
-    const fourteenDaysLater = new Date();
-    fourteenDaysLater.setDate(fourteenDaysLater.getDate() + 14);
-
+    const todayKey = todayUtcKey();
+    const limitKey = utcKeyPlusDays(14);
     return requests.filter((r) => {
       if (r.status !== "APPROVED") return false;
-      const start = new Date(r.startDate);
-      return start > today && start <= fourteenDaysLater;
+      const startKey = r.startDate.slice(0, 10);
+      return startKey > todayKey && startKey <= limitKey;
     });
   }, [requests]);
 
@@ -230,9 +223,10 @@ export function LeaveManagementClient({
       });
 
       if (!res.success) {
-        showFeedback("error", res.error || "Failed to update leave request.");
+        showFeedback("error", res.error);
         return;
       }
+      const { skippedDates, attendanceDaysMarked } = res.data;
 
       // Optimistic update
       setRequests((prev) =>
@@ -257,10 +251,14 @@ export function LeaveManagementClient({
       }));
 
       setReviewModal({ isOpen: false, target: null, action: "APPROVED", notes: "" });
-      showFeedback(
-        "success",
-        `Leave request for ${target.employeeName} has been ${action.toLowerCase()}.`
-      );
+      let message = `Leave request for ${target.employeeName} has been ${action.toLowerCase()}.`;
+      if (action === "APPROVED") {
+        message += ` ${attendanceDaysMarked} attendance ${attendanceDaysMarked === 1 ? "day" : "days"} marked on leave.`;
+        if (skippedDates.length > 0) {
+          message += ` Left unchanged because attendance is already recorded: ${skippedDates.join(", ")}.`;
+        }
+      }
+      showFeedback("success", message);
     });
   };
 
@@ -270,36 +268,39 @@ export function LeaveManagementClient({
       showFeedback("error", "Please fill in all required fields.");
       return;
     }
+    if (applyForm.endDate < applyForm.startDate) {
+      showFeedback("error", "End date cannot precede start date.");
+      return;
+    }
 
     startTransition(async () => {
+      // Dates are UTC calendar days; the server re-validates range, overlap and leave type.
       const res = await createLeaveRequestAction({
         employeeId: applyForm.employeeId,
         leaveTypeId: applyForm.leaveTypeId,
-        startDate: new Date(applyForm.startDate).toISOString(),
-        endDate: new Date(applyForm.endDate).toISOString(),
+        startDate: `${applyForm.startDate}T00:00:00.000Z`,
+        endDate: `${applyForm.endDate}T00:00:00.000Z`,
         reason: applyForm.reason,
       });
 
       if (!res.success) {
-        showFeedback("error", res.error || "Failed to submit leave request.");
+        showFeedback("error", res.error);
         return;
       }
 
-      const created = res.data as LeaveRequestItem;
-      if (created) {
-        setRequests((prev) => [created, ...prev]);
-        setStats((prev) => ({
-          ...prev,
-          totalRequests: prev.totalRequests + 1,
-          pendingCount: prev.pendingCount + 1,
-        }));
-      }
+      const created = res.data;
+      setRequests((prev) => [created, ...prev]);
+      setStats((prev) => ({
+        ...prev,
+        totalRequests: prev.totalRequests + 1,
+        pendingCount: prev.pendingCount + 1,
+      }));
 
       setApplyForm({
         employeeId: employees[0]?.id || "",
-        leaveTypeId: leaveTypes[0]?.id || "",
-        startDate: new Date().toISOString().split("T")[0],
-        endDate: new Date().toISOString().split("T")[0],
+        leaveTypeId: firstActiveTypeId,
+        startDate: todayUtcKey(),
+        endDate: todayUtcKey(),
         reason: "",
       });
 
@@ -325,14 +326,12 @@ export function LeaveManagementClient({
       });
 
       if (!res.success) {
-        showFeedback("error", res.error || "Failed to create leave type.");
+        showFeedback("error", res.error);
         return;
       }
 
-      const created = res.data as LeaveTypeItem;
-      if (created) {
-        setLeaveTypes((prev) => [...prev, created]);
-      }
+      const created = res.data;
+      setLeaveTypes((prev) => [...prev, created]);
 
       setNewTypeModal({
         isOpen: false,
@@ -355,7 +354,7 @@ export function LeaveManagementClient({
       });
 
       if (!res.success) {
-        showFeedback("error", res.error || "Failed to toggle status.");
+        showFeedback("error", res.error);
         return;
       }
 
@@ -367,6 +366,20 @@ export function LeaveManagementClient({
     });
   };
 
+  const handleSeedDefaultTypes = () => {
+    startTransition(async () => {
+      const res = await seedDefaultLeaveTypesAction();
+      if (!res.success) {
+        showFeedback("error", res.error);
+        return;
+      }
+      showFeedback(
+        "success",
+        `${res.data.created} suggested leave categories loaded. They remain pending product-owner approval (OD-007). Reload to see them.`
+      );
+    });
+  };
+
   const formatDisplayDate = (isoStr: string) => {
     try {
       const d = new Date(isoStr);
@@ -374,6 +387,7 @@ export function LeaveManagementClient({
         month: "short",
         day: "numeric",
         year: "numeric",
+        timeZone: "UTC",
       });
     } catch {
       return isoStr;
@@ -448,77 +462,30 @@ export function LeaveManagementClient({
     );
   };
 
-  // Computed leave stats for the employee currently viewed in detailsModal
+  // Recorded leave days for the employee currently viewed in detailsModal.
+  // Only counts what is on record: entitlements and balances are pending OD-007.
   const selectedEmployeeLeaveSummary = useMemo(() => {
     if (!detailsModal.target) return null;
     const empId = detailsModal.target.employeeId;
     const empRequests = requests.filter((r) => r.employeeId === empId);
 
-    const approvedRequests = empRequests.filter((r) => r.status === "APPROVED");
-    const totalApprovedDays = approvedRequests.reduce((sum, r) => sum + r.durationDays, 0);
-
-    const pendingRequests = empRequests.filter((r) => r.status === "PENDING");
-    const totalPendingDays = pendingRequests.reduce((sum, r) => sum + r.durationDays, 0);
-
-    // Standard baseline policy quotas (annual)
-    const quotas: Record<string, { label: string; quota: number }> = {
-      CASUAL: { label: "Casual Leave (CL)", quota: 12 },
-      SICK: { label: "Medical & Sick (SL)", quota: 10 },
-      EARNED: { label: "Privilege / Earned (PL)", quota: 15 },
-      PARENTAL: { label: "Parental Leave", quota: 30 },
-      BEREAVEMENT: { label: "Bereavement Leave", quota: 5 },
-      UNPAID: { label: "Leave Without Pay (LWP)", quota: 0 },
-    };
-
-    const usageByType: Record<string, { name: string; code: string; taken: number; quota: number; remaining: number }> = {};
-    for (const [code, info] of Object.entries(quotas)) {
-      usageByType[code] = {
-        name: info.label,
-        code,
-        taken: 0,
-        quota: info.quota,
-        remaining: info.quota,
-      };
-    }
-
-    leaveTypes.forEach((lt) => {
-      const code = lt.code.toUpperCase();
-      if (!usageByType[code]) {
-        usageByType[code] = {
-          name: lt.name,
-          code,
-          taken: 0,
-          quota: lt.isPaid ? 12 : 0,
-          remaining: lt.isPaid ? 12 : 0,
-        };
-      }
-    });
-
-    approvedRequests.forEach((req) => {
-      const code = req.leaveTypeCode?.toUpperCase() || "CASUAL";
-      if (!usageByType[code]) {
-        usageByType[code] = {
-          name: req.leaveTypeName,
-          code,
-          taken: 0,
-          quota: 12,
-          remaining: 12,
-        };
-      }
-      usageByType[code].taken += req.durationDays;
-      usageByType[code].remaining = Math.max(0, usageByType[code].quota - usageByType[code].taken);
-    });
-
-    const otherRequests = empRequests.filter((r) => r.id !== detailsModal.target?.id);
+    const totalApprovedDays = empRequests
+      .filter((r) => r.status === "APPROVED")
+      .reduce((sum, r) => sum + r.durationDays, 0);
+    const totalPendingDays = empRequests
+      .filter((r) => r.status === "PENDING")
+      .reduce((sum, r) => sum + r.durationDays, 0);
 
     return {
       totalApprovedDays,
       totalPendingDays,
-      usageByType,
       allRequestsCount: empRequests.length,
-      otherRequests,
+      otherRequests: empRequests.filter((r) => r.id !== detailsModal.target?.id),
     };
-  }, [detailsModal.target, requests, leaveTypes]);
+  }, [detailsModal.target, requests]);
+
+  const canReview = (req: LeaveRequestItem) =>
+    isTeamView && req.status === "PENDING" && !req.isOwnRequest;
 
   return (
     <div className="space-y-6">
@@ -566,7 +533,7 @@ export function LeaveManagementClient({
           <div className="mt-2 flex items-center gap-1.5 text-[11px]">
             {stats.pendingCount > 0 ? (
               <span className="inline-flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-400 bg-amber-500/15 px-2 py-0.5 rounded-md">
-                <AlertCircle className="h-3 w-3" /> Action required
+                <AlertCircle className="h-3 w-3" /> {isTeamView ? "Action required" : "Awaiting review"}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 bg-emerald-500/15 px-2 py-0.5 rounded-md font-medium">
@@ -660,7 +627,7 @@ export function LeaveManagementClient({
           }`}
         >
           <FileText className="h-3.5 w-3.5" />
-          Leave Applications
+          {isTeamView ? "Leave Applications" : "My Leave Requests"}
           <span
             className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
               stats.pendingCount > 0
@@ -698,7 +665,7 @@ export function LeaveManagementClient({
           }`}
         >
           <Settings2 className="h-3.5 w-3.5" />
-          Policy Categories ({leaveTypes.length})
+          Leave Categories ({leaveTypes.length})
         </button>
 
         <button
@@ -710,7 +677,7 @@ export function LeaveManagementClient({
           }`}
         >
           <PlusCircle className="h-3.5 w-3.5" />
-          Apply / Grant Leave
+          {isTeamView ? "Apply / Grant Leave" : "Request Leave"}
         </button>
       </div>
 
@@ -821,7 +788,9 @@ export function LeaveManagementClient({
                           <p className="text-xs text-muted-foreground max-w-sm">
                             {searchQuery || statusFilter !== "ALL" || typeFilter !== "ALL"
                               ? "Try adjusting your search terms or filters to view records."
-                              : "No employee leave requests have been submitted yet."}
+                              : isTeamView
+                                ? "No employee leave requests have been submitted yet."
+                                : "You have not submitted any leave requests yet."}
                           </p>
                           <Button
                             variant="outline"
@@ -829,7 +798,8 @@ export function LeaveManagementClient({
                             onClick={() => setActiveTab("apply")}
                             className="mt-2 text-xs rounded-xl"
                           >
-                            <PlusCircle className="h-3.5 w-3.5 mr-1" /> Grant Leave
+                            <PlusCircle className="h-3.5 w-3.5 mr-1" />{" "}
+                            {isTeamView ? "Grant Leave" : "Request Leave"}
                           </Button>
                         </div>
                       </td>
@@ -879,10 +849,8 @@ export function LeaveManagementClient({
                             <div>{getLeaveTypeBadge(req.leaveTypeCode, req.leaveTypeName, req.isPaid)}</div>
                             <div className="text-[10px] text-muted-foreground/80 flex items-center gap-1.5 pl-0.5 font-medium">
                               <span className={req.isPaid ? "text-emerald-600 dark:text-emerald-400 font-semibold" : "text-amber-600 dark:text-amber-400 font-semibold"}>
-                                {req.isPaid ? "Paid Leave" : "Unpaid Leave"}
+                                {req.isPaid ? "Marked paid" : "Marked unpaid"}
                               </span>
-                              <span>•</span>
-                              <span>Standard Quota</span>
                             </div>
                           </div>
                         </td>
@@ -922,13 +890,14 @@ export function LeaveManagementClient({
                               type="button"
                               onClick={() => setDetailsModal({ isOpen: true, target: req })}
                               className="h-8 w-8 rounded-lg border border-border/80 bg-background hover:bg-muted text-muted-foreground hover:text-primary transition-all flex items-center justify-center shadow-2xs cursor-pointer group/eye"
-                              title="View Full Details, Reason & Leave Balances"
+                              title="View full details"
+                              aria-label="View full details"
                             >
                               <Eye className="h-4 w-4 group-hover/eye:scale-110 transition-transform" />
                             </button>
 
-                            {/* Approve Icon Button (Only for PENDING) */}
-                            {req.status === "PENDING" && (
+                            {/* Approve Icon Button (pending requests of other employees only) */}
+                            {canReview(req) && (
                               <button
                                 type="button"
                                 onClick={() =>
@@ -941,13 +910,14 @@ export function LeaveManagementClient({
                                 }
                                 className="h-8 w-8 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-600 hover:text-white dark:bg-emerald-950/50 dark:hover:bg-emerald-600 dark:text-emerald-400 dark:hover:text-white border border-emerald-500/30 hover:border-emerald-600 transition-all flex items-center justify-center shadow-2xs cursor-pointer"
                                 title="Approve Leave Application"
+                                aria-label="Approve leave application"
                               >
                                 <Check className="h-4 w-4 stroke-[2.5]" />
                               </button>
                             )}
 
-                            {/* Reject Icon Button (Only for PENDING) */}
-                            {req.status === "PENDING" && (
+                            {/* Reject Icon Button (pending requests of other employees only) */}
+                            {canReview(req) && (
                               <button
                                 type="button"
                                 onClick={() =>
@@ -960,6 +930,7 @@ export function LeaveManagementClient({
                                 }
                                 className="h-8 w-8 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white dark:bg-rose-950/50 dark:hover:bg-rose-600 dark:text-rose-400 dark:hover:text-white border border-rose-500/30 hover:border-rose-600 transition-all flex items-center justify-center shadow-2xs cursor-pointer"
                                 title="Reject Leave Application"
+                                aria-label="Reject leave application"
                               >
                                 <X className="h-4 w-4 stroke-[2.5]" />
                               </button>
@@ -1113,17 +1084,42 @@ export function LeaveManagementClient({
                 Configured Leave Categories
               </h2>
               <p className="text-xs text-muted-foreground">
-                Manage leave quotas, paid status, and approval prerequisites for each category.
+                Leave entitlements, balances, accrual and approval-chain rules are pending
+                product-owner approval (OD-007). No balances are calculated.
               </p>
             </div>
-            <Button
-              size="sm"
-              onClick={() => setNewTypeModal({ isOpen: true, code: "", name: "", description: "", isPaid: true, requiresApproval: true })}
-              className="gap-1.5 rounded-xl text-xs"
-            >
-              <PlusCircle className="h-3.5 w-3.5" /> Add Category
-            </Button>
+            {canManageTypes && (
+              <Button
+                size="sm"
+                onClick={() => setNewTypeModal({ isOpen: true, code: "", name: "", description: "", isPaid: true, requiresApproval: true })}
+                className="gap-1.5 rounded-xl text-xs"
+              >
+                <PlusCircle className="h-3.5 w-3.5" /> Add Category
+              </Button>
+            )}
           </div>
+
+          {leaveTypes.length === 0 && (
+            <div className="p-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <span>
+                No leave categories are configured.
+                {canSeedDefaultTypes
+                  ? " A suggested catalogue (casual, sick, earned, parental, bereavement, unpaid) can be loaded; its names and paid flags are pending product-owner approval (OD-007)."
+                  : " An administrator must configure leave categories before leave can be requested."}
+              </span>
+              {canSeedDefaultTypes && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleSeedDefaultTypes}
+                  disabled={isPending}
+                  className="rounded-xl text-xs shrink-0"
+                >
+                  Load suggested categories (pending approval)
+                </Button>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {leaveTypes.map((t) => (
@@ -1173,14 +1169,18 @@ export function LeaveManagementClient({
                       )}
                     </div>
 
-                    <button
-                      onClick={() => handleToggleType(t.id, t.isActive)}
-                      className={`text-[11px] font-medium hover:underline cursor-pointer ${
-                        t.isActive ? "text-rose-600 dark:text-rose-400" : "text-primary"
-                      }`}
-                    >
-                      {t.isActive ? "Deactivate" : "Activate"}
-                    </button>
+                    {canManageTypes && (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleType(t.id, t.isActive)}
+                        disabled={isPending}
+                        className={`text-[11px] font-medium hover:underline cursor-pointer ${
+                          t.isActive ? "text-rose-600 dark:text-rose-400" : "text-primary"
+                        }`}
+                      >
+                        {t.isActive ? "Deactivate" : "Activate"}
+                      </button>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -1197,14 +1197,17 @@ export function LeaveManagementClient({
           <CardHeader className="pb-4 border-b border-border/60 bg-muted/20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-                <PlusCircle className="h-4 w-4 text-primary" /> Apply / Grant Employee Leave
+                <PlusCircle className="h-4 w-4 text-primary" />{" "}
+                {isTeamView ? "Apply / Grant Employee Leave" : "Request Leave"}
               </CardTitle>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Submit a formal leave request on behalf of an active staff member or intern.
+                {isTeamView
+                  ? "Submit a leave request on behalf of a staff member or intern. It still requires review by another authorized reviewer."
+                  : "Submit a leave request for review. No leave balance is checked or deducted (OD-007)."}
               </p>
             </div>
             <span className="text-[11px] font-mono font-medium px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 w-fit">
-              {employees.length} Active {employees.length === 1 ? "Employee" : "Employees"} Available
+              {employees.length} {employees.length === 1 ? "Employee" : "Employees"} Available
             </span>
           </CardHeader>
           <CardContent className="p-6">
@@ -1218,7 +1221,9 @@ export function LeaveManagementClient({
                   </label>
                   {employees.length === 0 ? (
                     <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-400">
-                      No active employees found in the system. Please ensure employee profiles exist.
+                      {isTeamView
+                        ? "No employee records found. Employee records are created in the Employees module."
+                        : "No employee record is linked to your account. Leave can be requested once HR has created it."}
                     </div>
                   ) : (
                     <select
@@ -1259,7 +1264,7 @@ export function LeaveManagementClient({
                       ))}
                   </select>
                   <p className="text-[11px] text-muted-foreground mt-1">
-                    Select policy type for appropriate attendance & payroll handling.
+                    Only active leave categories are listed.
                   </p>
                 </div>
               </div>
@@ -1291,13 +1296,13 @@ export function LeaveManagementClient({
                   />
                 </div>
                 <div className="h-10 px-3.5 rounded-xl border border-border/70 bg-muted/30 flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground font-medium">Estimated Duration:</span>
+                  <span className="text-muted-foreground font-medium">Calendar Days:</span>
                   <span className="font-bold text-foreground font-mono">
                     {(() => {
-                      const s = new Date(applyForm.startDate).getTime();
-                      const e = new Date(applyForm.endDate).getTime();
-                      if (isNaN(s) || isNaN(e) || e < s) return "1 day";
-                      const diff = Math.max(1, Math.round((e - s) / (1000 * 60 * 60 * 24)) + 1);
+                      const s = Date.parse(`${applyForm.startDate}T00:00:00Z`);
+                      const e = Date.parse(`${applyForm.endDate}T00:00:00Z`);
+                      if (isNaN(s) || isNaN(e) || e < s) return "—";
+                      const diff = Math.round((e - s) / (1000 * 60 * 60 * 24)) + 1;
                       return `${diff} ${diff === 1 ? "day" : "days"}`;
                     })()}
                   </span>
@@ -1331,7 +1336,7 @@ export function LeaveManagementClient({
                 </Button>
                 <Button
                   type="submit"
-                  disabled={isPending || employees.length === 0}
+                  disabled={isPending || employees.length === 0 || !firstActiveTypeId}
                   className="rounded-xl text-xs h-9 px-5 shadow-xs"
                 >
                   {isPending ? (
@@ -1431,7 +1436,9 @@ export function LeaveManagementClient({
                 <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-[11px] flex items-start gap-2">
                   <Info className="h-4 w-4 shrink-0 mt-0.5" />
                   <span>
-                    Approving this leave will automatically mark the employee as <strong>ON LEAVE</strong> in the Attendance Module for the specified date window.
+                    Approving marks days in this window as <strong>ON LEAVE</strong> in Attendance where
+                    no attendance is recorded. Days with a check-in, present/half-day status or a pending
+                    correction are left unchanged and listed after approval.
                   </span>
                 </div>
               )}
@@ -1590,25 +1597,24 @@ export function LeaveManagementClient({
                 </div>
               </div>
 
-              {/* ── SECTION 2: EMPLOYEE LEAVE BALANCES (KITNI BAKI HAI / KITNI LE CHUKA) ── */}
+              {/* ── SECTION 2: RECORDED LEAVE DAYS (no balances: OD-007) ── */}
               <div className="pt-3 border-t border-border/60 space-y-3">
                 <div>
                   <h4 className="font-bold text-foreground text-xs uppercase tracking-wider font-mono flex items-center gap-1.5">
-                    <PieChart className="h-3.5 w-3.5 text-primary" /> Leave Balance & Entitlements Overview
+                    <PieChart className="h-3.5 w-3.5 text-primary" /> Recorded Leave
                   </h4>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
-                    Total leaves taken and remaining allowances for {detailsModal.target.employeeName}.
+                    Calendar days on record for {detailsModal.target.employeeName} in the loaded requests.
                   </p>
                 </div>
 
-                {/* 3 Summary Pills */}
                 <div className="grid grid-cols-3 gap-2.5">
                   <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-center">
                     <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 uppercase font-mono block">
-                      Leaves Taken
+                      Approved
                     </span>
                     <span className="text-lg sm:text-xl font-extrabold font-mono text-emerald-700 dark:text-emerald-300 block mt-0.5">
-                      {selectedEmployeeLeaveSummary?.totalApprovedDays || 0}{" "}
+                      {selectedEmployeeLeaveSummary?.totalApprovedDays ?? 0}{" "}
                       <span className="text-xs font-normal">days</span>
                     </span>
                   </div>
@@ -1618,7 +1624,7 @@ export function LeaveManagementClient({
                       Pending Approvals
                     </span>
                     <span className="text-lg sm:text-xl font-extrabold font-mono text-amber-700 dark:text-amber-300 block mt-0.5">
-                      {selectedEmployeeLeaveSummary?.totalPendingDays || 0}{" "}
+                      {selectedEmployeeLeaveSummary?.totalPendingDays ?? 0}{" "}
                       <span className="text-xs font-normal">days</span>
                     </span>
                   </div>
@@ -1628,52 +1634,14 @@ export function LeaveManagementClient({
                       Total Applications
                     </span>
                     <span className="text-lg sm:text-xl font-extrabold font-mono text-blue-700 dark:text-blue-300 block mt-0.5">
-                      {selectedEmployeeLeaveSummary?.allRequestsCount || 1}
+                      {selectedEmployeeLeaveSummary?.allRequestsCount ?? 0}
                     </span>
                   </div>
                 </div>
 
-                {/* Category-by-Category Quota & Remaining Balance Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {selectedEmployeeLeaveSummary &&
-                    Object.entries(selectedEmployeeLeaveSummary.usageByType)
-                      .slice(0, 3)
-                      .map(([code, item]) => {
-                        const percentUsed = item.quota > 0 ? Math.min(100, Math.round((item.taken / item.quota) * 100)) : 0;
-                        return (
-                          <div
-                            key={code}
-                            className="p-3 rounded-xl border border-border/70 bg-card flex flex-col justify-between shadow-2xs"
-                          >
-                            <div>
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="font-semibold text-foreground truncate">{item.name}</span>
-                                <span className="font-mono text-[10px] font-bold text-primary">
-                                  {item.remaining} left
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-muted-foreground mt-1 flex justify-between">
-                                <span>Used: <strong className="text-foreground">{item.taken}</strong>d</span>
-                                <span>Quota: {item.quota}d</span>
-                              </div>
-                            </div>
-
-                            {/* Mini progress bar */}
-                            <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden mt-2">
-                              <div
-                                className={`h-full rounded-full transition-all ${
-                                  percentUsed > 80
-                                    ? "bg-rose-500"
-                                    : percentUsed > 50
-                                    ? "bg-amber-500"
-                                    : "bg-emerald-500"
-                                }`}
-                                style={{ width: `${percentUsed}%` }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })}
+                <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-2">
+                  <Info className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>Leave balance policy pending approval (OD-007). Entitlements and remaining balances are not calculated.</span>
                 </div>
               </div>
 
@@ -1718,7 +1686,7 @@ export function LeaveManagementClient({
             {/* Modal Footer Actions */}
             <div className="p-4 bg-muted/20 border-t border-border/60 flex items-center justify-between gap-2 shrink-0">
               {/* Quick in-modal review buttons if still pending */}
-              {detailsModal.target.status === "PENDING" ? (
+              {canReview(detailsModal.target) ? (
                 <div className="flex items-center gap-2">
                   <Button
                     size="sm"

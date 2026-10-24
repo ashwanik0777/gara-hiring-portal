@@ -111,7 +111,7 @@ export function SetPasswordScreen({
   };
 
   return (
-    <div className="min-h-screen w-full bg-linear-to-b from-background via-muted/20 to-background flex items-center justify-center p-4 sm:p-6">
+    <div className="min-h-screen w-full bg-background flex items-center justify-center p-4 sm:p-6">
       <div className="w-full max-w-md bg-card border border-border/80 shadow-2xl rounded-3xl p-6 sm:p-8 space-y-6 animate-in fade-in zoom-in-95 duration-200">
         {/* Brand Header */}
         <div className="text-center space-y-2">
@@ -271,7 +271,7 @@ export function SetPasswordScreen({
         {/* Security Footer Notice */}
         <div className="flex items-center gap-2 justify-center text-[11px] text-muted-foreground pt-2 border-t border-border/50">
           <ShieldCheck className="h-3.5 w-3.5 text-primary shrink-0" />
-          <span>Encrypted with argon2id / enterprise password hashing</span>
+          <span>Passwords are stored only as salted, one-way hashes</span>
         </div>
       </div>
     </div>

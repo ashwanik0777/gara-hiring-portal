@@ -2,6 +2,7 @@ import React from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
+import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { applicationService } from "@/features/applications/services/application-service";
 import { offerService } from "@/features/employees/services/offer-service";
 import { CandidateOfferView } from "@/features/employees/components/candidate-offer-view";
@@ -63,24 +64,26 @@ function getStatusBadge(status: ApplicationStatus) {
 export default async function ApplicationDetailPage({ params }: ApplicationDetailPageProps) {
   const user = await getCurrentUser();
   if (!user) {
-    redirect("/login");
+    redirect("/login?callbackUrl=/candidate/applications");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
   }
 
   const { id } = await params;
 
-  let application;
+  let application: Awaited<ReturnType<typeof applicationService.getCandidateApplicationDetail>>;
   try {
+    // Ownership is enforced by the service (strict IDOR check).
     application = await applicationService.getCandidateApplicationDetail(id, user.id);
   } catch (err: unknown) {
-    if (
-      typeof err === "object" &&
-      err !== null &&
-      "code" in err &&
-      (err as { code: string }).code === "NOT_FOUND"
-    ) {
+    if (err instanceof NotFoundError) {
       notFound();
     }
-    // If forbidden / unauthorized IDOR attempt
+    if (!(err instanceof ForbiddenError)) {
+      throw err;
+    }
+    // Forbidden: the application belongs to another candidate
     return (
       <div className="container mx-auto px-4 py-16 max-w-xl text-center">
         <div className="mx-auto w-12 h-12 rounded-full bg-destructive/10 text-destructive flex items-center justify-center mb-4">
@@ -184,28 +187,34 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-6">
-          <div className="flex items-center justify-between p-4 rounded-lg border border-border bg-muted/30">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-primary/10 rounded-md text-primary">
-                <FileText className="h-5 w-5" />
+          {application.hasResume ? (
+            <div className="flex items-center justify-between p-4 rounded-lg border border-border bg-muted/30">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-primary/10 rounded-md text-primary">
+                  <FileText className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-foreground">Resume Document (PDF)</div>
+                  <div className="text-xs text-muted-foreground">PDF attachment</div>
+                </div>
               </div>
-              <div>
-                <div className="text-sm font-medium text-foreground">Resume Document (PDF)</div>
-                <div className="text-xs text-muted-foreground">Verified PDF attachment</div>
-              </div>
-            </div>
 
-            <a
-              href={application.resumeDownloadUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block"
-            >
-              <Button variant="outline" size="sm" className="gap-1.5">
-                <Download className="h-3.5 w-3.5" /> Download Document
-              </Button>
-            </a>
-          </div>
+              <a
+                href={application.resumeDownloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block"
+              >
+                <Button variant="outline" size="sm" className="gap-1.5">
+                  <Download className="h-3.5 w-3.5" /> Download Document
+                </Button>
+              </a>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">
+              No document was attached to this application.
+            </p>
+          )}
         </CardContent>
       </Card>
 

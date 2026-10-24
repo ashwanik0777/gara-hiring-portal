@@ -11,7 +11,15 @@ import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { OpeningType, WorkplaceType } from "@/types/enums";
 
-export function OpeningForm() {
+interface OpeningFormProps {
+  /**
+   * Base path of the openings workspace the user is in. After creation the user is sent
+   * to `${basePath}/{id}/edit`, so sub-admins stay inside their own portal.
+   */
+  basePath?: "/admin/openings" | "/subadmin/openings";
+}
+
+export function OpeningForm({ basePath = "/admin/openings" }: OpeningFormProps) {
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -26,7 +34,6 @@ export function OpeningForm() {
     defaultValues: {
       type: OpeningType.INTERNSHIP,
       workplaceType: WorkplaceType.REMOTE,
-      location: "Bengaluru, India",
     },
   });
 
@@ -45,10 +52,10 @@ export function OpeningForm() {
     setError(null);
     try {
       const result = await createOpeningAction(values);
-      if (result.success && result.data) {
-        router.push(`/recruitment/openings/${result.data.id}/edit`);
-      } else if (!result.success) {
-        setError(result.error.message);
+      if (result.success) {
+        router.push(`${basePath}/${result.data.id}/edit`);
+      } else {
+        setError(result.error);
       }
     } catch {
       setError("An unexpected error occurred while creating the opening.");
@@ -103,7 +110,7 @@ export function OpeningForm() {
                 className="flex h-10 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 {...register("type")}
               >
-                <option value={OpeningType.INTERNSHIP}>Internship (7-Day Evaluation)</option>
+                <option value={OpeningType.INTERNSHIP}>Internship (7-Working-Day Evaluation)</option>
                 <option value={OpeningType.FULL_TIME}>Full-Time Role</option>
               </select>
             </div>

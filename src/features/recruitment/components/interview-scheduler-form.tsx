@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
-import { scheduleInterviewAction } from "../actions";
+import React, { useEffect, useState } from "react";
+import { listInterviewerOptionsAction, scheduleInterviewAction } from "../actions";
+import type { InterviewerOption } from "../types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -11,12 +12,18 @@ interface InterviewSchedulerFormProps {
   applicationId: string;
   candidateName: string;
   defaultRoundNumber?: number;
+  /**
+   * Staff who may conduct the interview. When omitted, the list is loaded through
+   * an authorized server action (HR/Admin with the interviews permission only).
+   */
+  interviewerOptions?: InterviewerOption[];
 }
 
 export function InterviewSchedulerForm({
   applicationId,
   candidateName,
   defaultRoundNumber = 1,
+  interviewerOptions,
 }: InterviewSchedulerFormProps) {
   const [roundNumber, setRoundNumber] = useState(defaultRoundNumber);
   const [roundName, setRoundName] = useState(
@@ -25,6 +32,30 @@ export function InterviewSchedulerForm({
   const [scheduledAt, setScheduledAt] = useState("");
   const [durationMinutes, setDurationMinutes] = useState(45);
   const [meetingLink, setMeetingLink] = useState("");
+  const [interviewerId, setInterviewerId] = useState("");
+  const [loadedInterviewers, setLoadedInterviewers] = useState<InterviewerOption[]>([]);
+  const [interviewerLoadError, setInterviewerLoadError] = useState<string | null>(null);
+  const interviewers = interviewerOptions ?? loadedInterviewers;
+
+  useEffect(() => {
+    if (interviewerOptions) return;
+    let cancelled = false;
+    listInterviewerOptionsAction()
+      .then((res) => {
+        if (cancelled) return;
+        if (res.success) {
+          setLoadedInterviewers(res.data);
+        } else {
+          setInterviewerLoadError(res.error);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setInterviewerLoadError("Interviewer list could not be loaded.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [interviewerOptions]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +80,9 @@ export function InterviewSchedulerForm({
     formData.append("scheduledAt", new Date(scheduledAt).toISOString());
     formData.append("durationMinutes", String(durationMinutes));
     formData.append("meetingLink", meetingLink);
+    if (interviewerId) {
+      formData.append("interviewerId", interviewerId);
+    }
 
     try {
       const res = await scheduleInterviewAction(formData);
@@ -148,6 +182,33 @@ export function InterviewSchedulerForm({
                 <option value={90}>90 Minutes</option>
               </select>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label
+              htmlFor={`interviewer-${applicationId}`}
+              className="block text-xs font-medium text-foreground"
+            >
+              Assigned Interviewer
+            </label>
+            <select
+              id={`interviewer-${applicationId}`}
+              value={interviewerId}
+              onChange={(e) => setInterviewerId(e.target.value)}
+              className="w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">Not assigned yet</option>
+              {interviewers.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name} ({option.email}) — {option.roles.join(", ")}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              {interviewerLoadError
+                ? interviewerLoadError
+                : "Only the assigned interviewer (or HR/Admin) can submit feedback for this round."}
+            </p>
           </div>
 
           <Input

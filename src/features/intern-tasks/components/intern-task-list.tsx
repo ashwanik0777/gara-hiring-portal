@@ -1,8 +1,10 @@
 "use client";
 
 import React from "react";
-import { InternTaskDetail, TaskPriority, TaskStatus } from "../types";
+import type { InternTaskDetail } from "../types";
+import { SubmissionReviewStatus, TaskPriority, TaskStatus } from "@/types/enums";
 import { TaskSubmissionDialog } from "./task-submission-dialog";
+import { ReviewSubmissionDialog } from "./review-submission-dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -66,6 +68,17 @@ export function InternTaskList({ tasks, isSupervisorView = false }: InternTaskLi
       {tasks.map((task) => {
         const isCompleted = task.status === TaskStatus.COMPLETED;
         const needsRevision = task.status === TaskStatus.REVISION_REQUESTED;
+        // Only the latest submission can be reviewed, and only while it is pending.
+        const latestSubmission = task.submissions.reduce<InternTaskDetail["submissions"][number] | null>(
+          (latest, sub) => (!latest || sub.versionNumber > latest.versionNumber ? sub : latest),
+          null
+        );
+        const reviewableSubmission =
+          isSupervisorView &&
+          !isCompleted &&
+          latestSubmission?.status === SubmissionReviewStatus.PENDING
+            ? latestSubmission
+            : null;
 
         return (
           <Card key={task.id} className="border-border">
@@ -95,7 +108,19 @@ export function InternTaskList({ tasks, isSupervisorView = false }: InternTaskLi
                     <TaskSubmissionDialog
                       taskId={task.id}
                       taskTitle={task.title}
-                      versionNumber={task.submissions.length}
+                      versionNumber={latestSubmission?.versionNumber ?? 0}
+                    />
+                  </div>
+                )}
+
+                {reviewableSubmission && (
+                  <div className="shrink-0">
+                    <ReviewSubmissionDialog
+                      taskId={task.id}
+                      submissionId={reviewableSubmission.id}
+                      versionNumber={reviewableSubmission.versionNumber}
+                      submissionNotes={reviewableSubmission.submissionNotes}
+                      deliverableUrls={reviewableSubmission.deliverableUrls}
                     />
                   </div>
                 )}

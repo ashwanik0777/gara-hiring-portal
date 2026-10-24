@@ -18,10 +18,8 @@ import {
   ArrowLeft,
   MailCheck,
 } from "lucide-react";
-import {
-  forgotPasswordAction,
-  checkUserMustChangePasswordAction,
-} from "@/features/auth/password-actions";
+import { getPostLoginRedirectAction } from "@/features/auth/password-actions";
+import { sanitizeCallbackPath } from "@/lib/auth/redirects";
 
 interface AuthSplitScreenProps {
   initialMode: "login" | "register" | "forgot";
@@ -30,11 +28,8 @@ interface AuthSplitScreenProps {
 export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const rawCallbackUrl = searchParams.get("callbackUrl") || "/dashboard";
-  // Prevent open redirect: only allow relative paths, disallow protocol-relative URLs
-  const callbackUrl = (rawCallbackUrl.startsWith("/") && !rawCallbackUrl.startsWith("//") && !rawCallbackUrl.includes("://"))
-    ? rawCallbackUrl
-    : "/dashboard";
+  // Prevent open redirect: only same-origin relative paths are accepted
+  const callbackUrl = sanitizeCallbackPath(searchParams.get("callbackUrl"));
 
   const [mode, setMode] = useState<"login" | "register" | "forgot">(initialMode);
 
@@ -132,10 +127,10 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
         return;
       }
 
-      // Check if user has temporary password active
-      const statusRes = await checkUserMustChangePasswordAction(loginEmail);
-      if (statusRes.mustChangePassword) {
-        router.replace("/set-password");
+      // Check if the signed-in session still uses a temporary password
+      const { redirectTo } = await getPostLoginRedirectAction();
+      if (redirectTo) {
+        router.replace(redirectTo);
         router.refresh();
         return;
       }
@@ -221,10 +216,17 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
     setForgotError(null);
 
     try {
-      const res = await forgotPasswordAction(forgotEmail);
+      const { error } = await authClient.requestPasswordReset({
+        email: forgotEmail.trim(),
+        redirectTo: "/reset-password",
+      });
       setForgotLoading(false);
-      if (!res.success) {
-        setForgotError(res.error || "Failed to process password recovery request.");
+      if (error) {
+        setForgotError(
+          error.status === 429
+            ? "Too many reset requests. Please wait a few minutes and try again."
+            : "Failed to process password recovery request."
+        );
       } else {
         setForgotSubmitted(true);
       }
@@ -796,10 +798,10 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                       <MailCheck className="h-6 w-6" />
                     </div>
                     <p className="text-sm text-foreground">
-                      If an account matches <span className="font-semibold">{forgotEmail}</span>, a temporary access password has been sent to your email.
+                      If an account matches <span className="font-semibold">{forgotEmail}</span>, a password reset link has been sent to that email.
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Sign in with the temporary password and you will be prompted to set your new permanent password. Please check your inbox and spam folders.
+                      The link is valid for 1 hour and can be used once. Your current password keeps working until you choose a new one. Please check your inbox and spam folders.
                     </p>
                     <button
                       type="button"
@@ -1071,7 +1073,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                     <MailCheck className="h-5 w-5" />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    A temporary login password has been sent to <span className="font-semibold text-foreground">{forgotEmail}</span>. Sign in with it to set your new permanent password.
+                    If an account matches <span className="font-semibold text-foreground">{forgotEmail}</span>, a password reset link has been sent. It is valid for 1 hour.
                   </p>
                   <button
                     type="button"

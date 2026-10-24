@@ -27,7 +27,7 @@ The GARA platform handles sensitive data across multiple user types. Key threat 
 
 ### Supported Methods (Initial)
 
-1. **Email/Password** — bcrypt-hashed passwords, minimum complexity requirements
+1. **Email/Password** — Better Auth scrypt-hashed passwords, minimum complexity requirements
 2. **Google OAuth** — via approved OAuth library
 
 > **No other social providers** until explicitly approved by the product owner.
@@ -56,6 +56,16 @@ The GARA platform handles sensitive data across multiple user types. Key threat 
 
 > Exact limits to be calibrated during testing. Implement configurable rate limiting.
 
+### Implemented Authentication Controls (2026-10-24)
+
+- **Password reset** uses Better Auth's token flow: `/forgot-password` → single-use link valid for 1 hour → `/reset-password`. The response does not reveal whether the account exists, the email is sent after the response, the current password keeps working until the reset completes, and all sessions are revoked on completion. No endpoint can overwrite a password without the emailed token.
+- **Temporary passwords** exist only for administrator-created sub-admin accounts (`mustChangePassword`). `requireAuth()` rejects such sessions at every server boundary until `/set-password` succeeds; that action is only valid in this state and signs out other devices.
+- **Post-login routing** is decided from the current session only (`getPostLoginRedirectAction`); no endpoint discloses another account's roles or state.
+- **Callback URLs** are sanitized to same-origin relative paths (`sanitizeCallbackPath`), including backslash and protocol-relative variants.
+- **Trusted origins** are an explicit allow-list; localhost is trusted only outside production.
+- **Rate limits**: Better Auth endpoints use database-backed storage (`rate_limits`); application code uses the advisory-locked Postgres limiter (`RATE_LIMIT_POLICIES`).
+- **OAuth tokens** are encrypted at rest (`encryptOAuthTokens`).
+
 ---
 
 ## 3. Authorization
@@ -83,6 +93,10 @@ Proposed role hierarchy (subject to product-owner approval):
 4. **Middleware redirects are UX, not security.** Even if middleware redirects unauthorized users, the Server Action/Route Handler must independently verify permission.
 5. **Public signup creates `CANDIDATE` role only.** Elevation to any staff role requires admin action.
 6. **Permission matrix must be documented and tested** — both positive (allowed) and negative (forbidden) cases.
+7. **Granular module permissions are enforced on the server.** Staff roles (HR, MANAGER, INTERVIEWER, MENTOR) need the matching `SubAdminPermission` flag (`canApplications`, `canOpenings`, `canInterviews`, `canEvaluations`, `canEmployees`, `canAttendance`, `canLeave`, `canPayroll`, `canReports`) in addition to any role rule, via `requirePermission` / `assertPermission` (`src/lib/auth/guards.ts`). ADMIN holds every permission. A database error while resolving permissions denies access instead of falling back to role defaults.
+8. **Pages authorize themselves.** Layout checks are navigation only; every page that loads protected data calls a guard.
+9. **Errors returned to clients** pass through `toActionError` / `toSafeErrorResponse`; only operational `AppError` messages are shown, everything else is logged server-side.
+10. **Staff removal revokes access instead of deleting the user**, preserving employment, attendance, leave and payroll history (`User → Employee` is `onDelete: Restrict`).
 
 ### Record-Level Access Examples
 
@@ -139,8 +153,8 @@ Proposed role hierarchy (subject to product-owner approval):
 ### Environment Variables
 
 - All secrets (database URL, OAuth client secret, JWT secret, API keys) come from environment variables.
-- `.env.example` contains placeholder keys with dummy values. It is committed.
-- `.env`, `.env.local`, `.env.production` are **never committed.** They are in `.gitignore`.
+- A single local `.env` holds every variable (product-owner decision, 2026-10-24: no `.env.example`). The variable reference lives in `docs/RUNBOOK.md` section 2.
+- `.env` and any other `.env*` file are **never committed.** They are in `.gitignore`.
 - Environment variables are validated at startup using a schema (e.g., Zod). Missing required variables cause a startup failure with a clear message — not a silent runtime crash.
 
 ### What Must Never Be Logged

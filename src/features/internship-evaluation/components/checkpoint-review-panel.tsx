@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
-import { CheckpointItem, CheckpointStatus } from "../types";
+import React, { useId, useState } from "react";
+import type { CheckpointItem } from "../types";
+import { CheckpointStatus } from "@/types/enums";
 import { reviewCheckpointAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -10,8 +11,11 @@ import { CheckCircle2, Clock, AlertCircle, FileText, MessageSquare } from "lucid
 
 interface CheckpointReviewPanelProps {
   checkpoints: CheckpointItem[];
-  enrollmentId: string;
+  /** Reviews are only accepted while the evaluation is IN_PROGRESS. */
+  canReview: boolean;
 }
+
+type ReviewOutcome = typeof CheckpointStatus.REVIEWED | typeof CheckpointStatus.BLOCKED;
 
 function getCheckpointBadge(status: CheckpointStatus) {
   switch (status) {
@@ -28,11 +32,13 @@ function getCheckpointBadge(status: CheckpointStatus) {
 
 export function CheckpointReviewPanel({
   checkpoints,
-  enrollmentId,
+  canReview,
 }: CheckpointReviewPanelProps) {
+  const formId = useId();
   const [activeCpId, setActiveCpId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState("");
-  const [status, setStatus] = useState<CheckpointStatus>(CheckpointStatus.REVIEWED);
+  // No outcome is preselected; the supervisor must choose one explicitly.
+  const [status, setStatus] = useState<ReviewOutcome | "">("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,13 +47,16 @@ export function CheckpointReviewPanel({
       setError("Please enter supervisor evaluation feedback.");
       return;
     }
+    if (!status) {
+      setError("Please choose a review outcome.");
+      return;
+    }
 
     setError(null);
     setIsSubmitting(true);
 
     const formData = new FormData();
     formData.append("checkpointId", checkpointId);
-    formData.append("enrollmentId", enrollmentId);
     formData.append("feedback", feedback);
     formData.append("status", status);
 
@@ -58,6 +67,7 @@ export function CheckpointReviewPanel({
       } else {
         setActiveCpId(null);
         setFeedback("");
+        setStatus("");
       }
     } catch {
       setError("Failed to record checkpoint review.");
@@ -74,7 +84,7 @@ export function CheckpointReviewPanel({
             <Clock className="h-4 w-4 text-primary" /> 7-Working-Day Daily Checkpoints
           </span>
           <span className="text-xs text-muted-foreground font-mono">
-            {checkpoints.filter((c) => c.status === CheckpointStatus.REVIEWED).length} / 7 Completed
+            {checkpoints.filter((c) => c.status === CheckpointStatus.REVIEWED).length} / {checkpoints.length} Reviewed
           </span>
         </CardTitle>
       </CardHeader>
@@ -105,15 +115,21 @@ export function CheckpointReviewPanel({
                   )}
                 </div>
 
-                {activeCpId !== cp.id && (
+                {/* Supervisor-led review: PENDING checkpoints can be reviewed without intern notes. */}
+                {canReview && activeCpId !== cp.id && (
                   <Button
                     size="sm"
                     variant="outline"
                     className="text-xs self-start sm:self-auto"
                     onClick={() => {
                       setActiveCpId(cp.id);
+                      setError(null);
                       setFeedback(cp.supervisorFeedback || "");
-                      setStatus(cp.status === CheckpointStatus.PENDING ? CheckpointStatus.REVIEWED : cp.status);
+                      setStatus(
+                        cp.status === CheckpointStatus.REVIEWED || cp.status === CheckpointStatus.BLOCKED
+                          ? cp.status
+                          : ""
+                      );
                     }}
                   >
                     <MessageSquare className="h-3.5 w-3.5 mr-1" />
@@ -132,7 +148,7 @@ export function CheckpointReviewPanel({
                 </div>
               ) : (
                 <p className="text-[11px] text-muted-foreground italic">
-                  Pending intern submission for Day {cp.dayNumber}.
+                  No intern notes submitted for Day {cp.dayNumber}.
                 </p>
               )}
 
@@ -150,11 +166,16 @@ export function CheckpointReviewPanel({
               {activeCpId === cp.id && (
                 <div className="pt-2 space-y-3 border-t border-border/50">
                   <div className="space-y-1">
-                    <label className="block text-xs font-medium text-foreground">
+                    <label
+                      htmlFor={`${formId}-feedback`}
+                      className="block text-xs font-medium text-foreground"
+                    >
                       Supervisor Feedback
                     </label>
                     <textarea
+                      id={`${formId}-feedback`}
                       rows={2}
+                      maxLength={5000}
                       value={feedback}
                       onChange={(e) => setFeedback(e.target.value)}
                       placeholder="Enter specific feedback on code quality, task execution, and progress..."
@@ -164,15 +185,24 @@ export function CheckpointReviewPanel({
 
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <label className="text-xs font-medium text-foreground">Status:</label>
+                      <label
+                        htmlFor={`${formId}-outcome`}
+                        className="text-xs font-medium text-foreground"
+                      >
+                        Outcome:
+                      </label>
                       <select
+                        id={`${formId}-outcome`}
+                        required
                         value={status}
-                        onChange={(e) => setStatus(e.target.value as CheckpointStatus)}
+                        onChange={(e) => setStatus(e.target.value as ReviewOutcome | "")}
                         className="rounded-md border border-input bg-card px-2 py-1 text-xs text-foreground"
                       >
-                        <option value={CheckpointStatus.REVIEWED}>Reviewed (Pass)</option>
+                        <option value="" disabled>
+                          Select outcome…
+                        </option>
+                        <option value={CheckpointStatus.REVIEWED}>Reviewed</option>
                         <option value={CheckpointStatus.BLOCKED}>Blocked / Needs Rework</option>
-                        <option value={CheckpointStatus.PENDING}>Pending</option>
                       </select>
                     </div>
 

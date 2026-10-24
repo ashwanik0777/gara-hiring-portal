@@ -16,8 +16,8 @@ export interface TaskSubmissionItem {
   supervisorFeedback?: string | null;
   reviewedAt?: Date | null;
   submittedAt: Date;
+  /** Display name only; staff identifiers and contact details are not needed by the task list. */
   reviewedBy?: {
-    id: string;
     name: string;
   } | null;
 }
@@ -31,10 +31,9 @@ export interface InternTaskDetail {
   dueDate?: Date | null;
   status: TaskStatus;
   changeRequestNotes?: string | null;
+  /** Display name only; the intern's browser never needs the assigning staff member's email. */
   assignedBy: {
-    id: string;
     name: string;
-    email: string;
   };
   createdAt: Date;
   updatedAt: Date;

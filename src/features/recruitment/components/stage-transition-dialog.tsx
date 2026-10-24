@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { ApplicationStatus } from "@/types/enums";
-import { VALID_APPLICATION_TRANSITIONS } from "../schemas";
+import { VALID_APPLICATION_TRANSITIONS, getManualTransitionTargets } from "../schemas";
 import { transitionStatusAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -19,7 +19,10 @@ export function StageTransitionDialog({
   currentStatus,
   candidateName,
 }: StageTransitionDialogProps) {
-  const allowedNextStatuses = VALID_APPLICATION_TRANSITIONS[currentStatus] ?? [];
+  // Offer and hiring stages are excluded: they are reached only through the offer workflow.
+  const allowedNextStatuses = getManualTransitionTargets(currentStatus);
+  const hasWorkflowOwnedTargets =
+    (VALID_APPLICATION_TRANSITIONS[currentStatus] ?? []).length > allowedNextStatuses.length;
 
   const [toStatus, setToStatus] = useState<ApplicationStatus | "">(
     allowedNextStatuses[0] ?? ""
@@ -29,6 +32,16 @@ export function StageTransitionDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  if (allowedNextStatuses.length === 0 && hasWorkflowOwnedTargets) {
+    return (
+      <Card className="border-border bg-muted/20">
+        <CardContent className="pt-6 text-center text-xs text-muted-foreground">
+          The next stage for <span className="font-semibold text-foreground">{currentStatus}</span> is managed by the job offer and hiring workflow below.
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (allowedNextStatuses.length === 0) {
     return (

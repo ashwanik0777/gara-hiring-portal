@@ -13,7 +13,7 @@ Enterprise full-stack recruitment, internship evaluation, and human resource man
 - **Styling:** Tailwind CSS v4 + GARA Design Tokens (restrained palette, zero gradients)
 - **Icons:** [Lucide React](https://lucide.dev/)
 - **Validation:** [Zod](https://zod.dev/) + React Hook Form
-- **Testing:** [Vitest](https://vitest.dev/) (Unit/Integration) + [Playwright](https://playwright.dev/) (E2E)
+- **Testing:** [Vitest](https://vitest.dev/) unit tests with mocked persistence (`tests/unit/`). Integration and end-to-end suites are not set up yet (see `docs/SECURITY_REMEDIATION_CHECKLIST.md`, ENG-07).
 
 ---
 
@@ -25,8 +25,8 @@ Enterprise full-stack recruitment, internship evaluation, and human resource man
 
 ### 2. Configure Environment
 ```bash
-cp .env.example .env.local
-# Update .env.local with your database connection string and Better Auth secret
+# Create a single .env in the project root (never commit it).
+# Every variable is listed in docs/RUNBOOK.md section 2.
 ```
 
 ### 3. Install Dependencies
@@ -39,8 +39,9 @@ npm install
 # Generate Prisma Client
 npx prisma generate
 
-# Apply migrations (when PostgreSQL is connected)
+# Apply versioned migrations (when PostgreSQL is connected)
 npx prisma migrate dev
+# Existing databases created before migrations existed: follow the baseline procedure in docs/RUNBOOK.md §4.1
 ```
 
 ### 5. Start Development Server
@@ -76,13 +77,14 @@ npm run build
 
 | Document | Purpose |
 |---|---|
-| [`CLAUDE.md`](file:///Users/ashwanikushwaha/intern-hiring/CLAUDE.md) | Persistent rules and non-negotiable guidelines for AI assistants |
-| [`docs/PROJECT_BASELINE.md`](file:///Users/ashwanikushwaha/intern-hiring/docs/PROJECT_BASELINE.md) | Product source of truth and master phased prompt pack |
-| [`docs/PROJECT_RULES.md`](file:///Users/ashwanikushwaha/intern-hiring/docs/PROJECT_RULES.md) | Engineering standards and developer rules (Sections A–K) |
-| [`docs/FOLDER_STRUCTURE.md`](file:///Users/ashwanikushwaha/intern-hiring/docs/FOLDER_STRUCTURE.md) | Target directory blueprint and dependency rules |
-| [`docs/ARCHITECTURE.md`](file:///Users/ashwanikushwaha/intern-hiring/docs/ARCHITECTURE.md) | System layers, domain boundaries, and provider adapters |
-| [`docs/DATA_MODEL.md`](file:///Users/ashwanikushwaha/intern-hiring/docs/DATA_MODEL.md) | Relational database schema outline and state machines |
-| [`docs/SECURITY.md`](file:///Users/ashwanikushwaha/intern-hiring/docs/SECURITY.md) | Security policy, RBAC hierarchy, and document privacy |
-| [`docs/TESTING.md`](file:///Users/ashwanikushwaha/intern-hiring/docs/TESTING.md) | Testing strategy across unit, integration, and E2E layers |
-| [`docs/OPEN_DECISIONS.md`](file:///Users/ashwanikushwaha/intern-hiring/docs/OPEN_DECISIONS.md) | Active policy questions and unresolved blockers (OD-001–OD-020) |
-| [`docs/RUNBOOK.md`](file:///Users/ashwanikushwaha/intern-hiring/docs/RUNBOOK.md) | Deployment runbook, secret hygiene, and incident handling |
+| [`CLAUDE.md`](CLAUDE.md) | Persistent rules and non-negotiable guidelines for AI assistants |
+| [`docs/PROJECT_BASELINE.md`](docs/PROJECT_BASELINE.md) | Product source of truth and master phased prompt pack |
+| [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) | Engineering standards and developer rules (Sections A–K) |
+| [`docs/FOLDER_STRUCTURE.md`](docs/FOLDER_STRUCTURE.md) | Target directory blueprint and dependency rules |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System layers, domain boundaries, and provider adapters |
+| [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) | Relational database schema outline and state machines |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | Security policy, RBAC hierarchy, and document privacy |
+| [`docs/TESTING.md`](docs/TESTING.md) | Testing strategy across unit, integration, and E2E layers |
+| [`docs/OPEN_DECISIONS.md`](docs/OPEN_DECISIONS.md) | Active policy questions and unresolved blockers (OD-001–OD-020) |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Deployment runbook, secret hygiene, and incident handling |
+| [`docs/SECURITY_REMEDIATION_CHECKLIST.md`](docs/SECURITY_REMEDIATION_CHECKLIST.md) | Audit findings, fix status, and required owner actions |

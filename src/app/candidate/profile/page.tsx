@@ -11,6 +11,9 @@ export default async function CandidateProfilePage() {
   if (!user) {
     redirect("/login?callbackUrl=/candidate/profile");
   }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
 
   const profile = await applicationService.getOrCreateCandidateProfile(user.id);
 

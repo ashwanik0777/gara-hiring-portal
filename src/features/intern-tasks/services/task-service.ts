@@ -1,9 +1,6 @@
 import { prisma } from "@/lib/db";
-import {
-  Role,
-  TaskStatus,
-  SubmissionReviewStatus,
-} from "@prisma/client";
+import type { AuthenticatedUser } from "@/lib/auth/guards";
+import { TaskStatus, SubmissionReviewStatus } from "@prisma/client";
 import {
   CreateTaskInput,
   SubmitTaskInput,
@@ -12,35 +9,56 @@ import {
   InternTaskDetail,
   ProgressReportItem,
 } from "../types";
+import { SUBMISSION_REVIEW_OUTCOMES } from "../schemas";
+import {
+  assertEnrollmentInScope,
+  assertEvaluationAccess,
+  primaryActorRole,
+  rethrowUniqueAsConflict,
+} from "@/features/internship-evaluation/services/enrollment-access";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 
-const STAFF_ROLES: Role[] = [Role.ADMIN, Role.HR, Role.MENTOR, Role.MANAGER];
+interface EnrollmentRef {
+  id: string;
+  userId: string;
+  supervisorId: string | null;
+}
 
 export class TaskService {
   /**
-   * Assign a new task to an intern.
-   * Authorized for ADMIN, HR, MENTOR, MANAGER.
+   * Interns read their own enrollment; staff need evaluation access for that specific enrollment.
    */
-  async createTask(
-    actorUserId: string,
-    actorRoles: Role[],
-    input: CreateTaskInput
-  ) {
-    const isStaff = actorRoles.some((r) => STAFF_ROLES.includes(r));
-    if (!isStaff) {
-      throw new Error("Unauthorized: Only supervisors or HR/Admin can assign tasks");
+  private async assertCanReadEnrollment(user: AuthenticatedUser, enrollment: EnrollmentRef): Promise<void> {
+    if (enrollment.userId === user.id) {
+      return;
     }
+    const access = await assertEvaluationAccess(user);
+    assertEnrollmentInScope(access, user, enrollment);
+  }
+
+  /**
+   * Assign a new task to an intern.
+   * Authorized for ADMIN/HR (any enrollment) and the assigned supervisor, all with canEvaluations.
+   */
+  async createTask(user: AuthenticatedUser, input: CreateTaskInput) {
+    const access = await assertEvaluationAccess(user);
 
     const enrollment = await prisma.internshipEnrollment.findUnique({
       where: { id: input.enrollmentId },
+      select: { id: true, userId: true, supervisorId: true },
     });
 
     if (!enrollment) {
-      throw new Error("Internship enrollment not found");
+      throw new NotFoundError("Internship enrollment not found");
     }
+    assertEnrollmentInScope(access, user, enrollment);
 
     const dueDate = input.dueDate ? new Date(input.dueDate) : null;
+    if (dueDate && Number.isNaN(dueDate.getTime())) {
+      throw new ValidationError("Invalid due date");
+    }
 
-    const task = await prisma.internTask.create({
+    return prisma.internTask.create({
       data: {
         enrollmentId: input.enrollmentId,
         title: input.title.trim(),
@@ -48,38 +66,25 @@ export class TaskService {
         priority: input.priority,
         dueDate,
         status: TaskStatus.ASSIGNED,
-        assignedById: actorUserId,
+        assignedById: user.id,
       },
-      include: {
-        assignedBy: {
-          select: { id: true, name: true, email: true },
-        },
-      },
+      select: { id: true, enrollmentId: true },
     });
-
-    return task;
   }
 
   /**
    * Get all tasks for an enrollment.
    */
-  async getEnrollmentTasks(
-    enrollmentId: string,
-    actorUserId: string,
-    actorRoles: Role[]
-  ): Promise<InternTaskDetail[]> {
+  async getEnrollmentTasks(enrollmentId: string, user: AuthenticatedUser): Promise<InternTaskDetail[]> {
     const enrollment = await prisma.internshipEnrollment.findUnique({
       where: { id: enrollmentId },
+      select: { id: true, userId: true, supervisorId: true },
     });
 
     if (!enrollment) {
-      throw new Error("Internship enrollment not found");
+      throw new NotFoundError("Internship enrollment not found");
     }
-
-    const isStaff = actorRoles.some((r) => STAFF_ROLES.includes(r));
-    if (!isStaff && enrollment.userId !== actorUserId) {
-      throw new Error("Unauthorized: You cannot access tasks for another intern");
-    }
+    await this.assertCanReadEnrollment(user, enrollment);
 
     const tasks = await prisma.internTask.findMany({
       where: { enrollmentId },
@@ -127,118 +132,188 @@ export class TaskService {
 
   /**
    * Submit or resubmit an assigned task with version history.
+   * The version number is computed under a task row lock; the @@unique([taskId, versionNumber])
+   * constraint is the final guard against concurrent submissions.
    */
-  async submitTask(actorUserId: string, input: SubmitTaskInput) {
+  async submitTask(user: AuthenticatedUser, input: SubmitTaskInput) {
     const task = await prisma.internTask.findUnique({
       where: { id: input.taskId },
-      include: {
-        enrollment: true,
-        submissions: {
-          orderBy: { versionNumber: "desc" },
-          take: 1,
-        },
-      },
+      include: { enrollment: { select: { id: true, userId: true } } },
     });
 
     if (!task) {
-      throw new Error("Task not found");
+      throw new NotFoundError("Task not found");
     }
 
-    if (task.enrollment.userId !== actorUserId) {
-      throw new Error("Unauthorized: You can only submit tasks assigned to your enrollment");
+    if (task.enrollment.userId !== user.id) {
+      throw new ForbiddenError("You can only submit tasks assigned to your enrollment");
     }
 
     if (task.status === TaskStatus.COMPLETED) {
-      throw new Error("Task is already approved and completed");
+      throw new ConflictError("Task is already approved and completed");
     }
 
-    const nextVersion = (task.submissions[0]?.versionNumber ?? 0) + 1;
+    try {
+      return await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "intern_tasks" WHERE "id" = ${task.id} FOR UPDATE`;
 
-    const [submission, updatedTask] = await prisma.$transaction([
-      prisma.taskSubmission.create({
-        data: {
-          taskId: input.taskId,
-          versionNumber: nextVersion,
-          submissionNotes: input.submissionNotes.trim(),
-          deliverableUrls: input.deliverableUrls || [],
-          status: SubmissionReviewStatus.PENDING,
-        },
-      }),
-      prisma.internTask.update({
-        where: { id: input.taskId },
-        data: {
-          status: TaskStatus.SUBMITTED,
-        },
-      }),
-    ]);
+        const latest = await tx.taskSubmission.findFirst({
+          where: { taskId: task.id },
+          orderBy: { versionNumber: "desc" },
+          select: { versionNumber: true },
+        });
+        const nextVersion = (latest?.versionNumber ?? 0) + 1;
 
-    return { submission, task: updatedTask };
+        const submission = await tx.taskSubmission.create({
+          data: {
+            taskId: task.id,
+            versionNumber: nextVersion,
+            submissionNotes: input.submissionNotes.trim(),
+            deliverableUrls: input.deliverableUrls ?? [],
+            status: SubmissionReviewStatus.PENDING,
+          },
+          select: { id: true, versionNumber: true },
+        });
+
+        const updated = await tx.internTask.updateMany({
+          where: { id: task.id, status: { not: TaskStatus.COMPLETED } },
+          data: { status: TaskStatus.SUBMITTED },
+        });
+        if (updated.count !== 1) {
+          throw new ConflictError("Task is already approved and completed");
+        }
+
+        return { submission, enrollmentId: task.enrollment.id };
+      });
+    } catch (error) {
+      rethrowUniqueAsConflict(
+        error,
+        "Another submission for this task was recorded at the same time. Please refresh and try again."
+      );
+    }
   }
 
   /**
    * Review a task submission (Approve or Request Revision).
+   * Only the latest PENDING submission of a task that is not yet completed can be reviewed.
    */
-  async reviewSubmission(
-    actorUserId: string,
-    actorRoles: Role[],
-    input: ReviewSubmissionInput
-  ) {
-    const isStaff = actorRoles.some((r) => STAFF_ROLES.includes(r));
-    if (!isStaff) {
-      throw new Error("Unauthorized: Only supervisors or HR/Admin can review submissions");
+  async reviewSubmission(user: AuthenticatedUser, input: ReviewSubmissionInput) {
+    if (!(SUBMISSION_REVIEW_OUTCOMES as readonly SubmissionReviewStatus[]).includes(input.status)) {
+      throw new ValidationError("Review status must be APPROVED or REVISION_REQUESTED.");
     }
+
+    const access = await assertEvaluationAccess(user);
 
     const submission = await prisma.taskSubmission.findUnique({
       where: { id: input.submissionId },
-      include: { task: true },
+      include: {
+        task: {
+          include: {
+            enrollment: { select: { id: true, userId: true, supervisorId: true } },
+          },
+        },
+      },
     });
 
     if (!submission || submission.taskId !== input.taskId) {
-      throw new Error("Submission not found");
+      throw new NotFoundError("Submission not found");
+    }
+    assertEnrollmentInScope(access, user, submission.task.enrollment);
+
+    if (submission.status !== SubmissionReviewStatus.PENDING) {
+      throw new ConflictError("This submission has already been reviewed.");
+    }
+    if (submission.task.status === TaskStatus.COMPLETED) {
+      throw new ConflictError("This task is already approved and completed.");
     }
 
     const isApproval = input.status === SubmissionReviewStatus.APPROVED;
     const taskStatus = isApproval ? TaskStatus.COMPLETED : TaskStatus.REVISION_REQUESTED;
+    const supervisorFeedback = input.supervisorFeedback?.trim() || null;
+    const changeRequestNotes = isApproval
+      ? null
+      : input.changeRequestNotes?.trim() || supervisorFeedback;
 
-    const [updatedSubmission, updatedTask] = await prisma.$transaction([
-      prisma.taskSubmission.update({
-        where: { id: input.submissionId },
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "intern_tasks" WHERE "id" = ${submission.taskId} FOR UPDATE`;
+
+      const latest = await tx.taskSubmission.findFirst({
+        where: { taskId: submission.taskId },
+        orderBy: { versionNumber: "desc" },
+        select: { id: true },
+      });
+      if (!latest || latest.id !== submission.id) {
+        throw new ConflictError("A newer version of this submission exists. Review the latest version instead.");
+      }
+
+      const reviewed = await tx.taskSubmission.updateMany({
+        where: { id: submission.id, status: SubmissionReviewStatus.PENDING },
         data: {
           status: input.status,
-          supervisorFeedback: input.supervisorFeedback?.trim() || null,
-          reviewedById: actorUserId,
+          supervisorFeedback,
+          reviewedById: user.id,
           reviewedAt: new Date(),
         },
-      }),
-      prisma.internTask.update({
-        where: { id: input.taskId },
-        data: {
-          status: taskStatus,
-          changeRequestNotes: isApproval ? null : (input.changeRequestNotes?.trim() || input.supervisorFeedback?.trim() || null),
-        },
-      }),
-    ]);
+      });
+      if (reviewed.count !== 1) {
+        throw new ConflictError("This submission has already been reviewed.");
+      }
 
-    return { submission: updatedSubmission, task: updatedTask };
+      const taskUpdated = await tx.internTask.updateMany({
+        where: { id: submission.taskId, status: { not: TaskStatus.COMPLETED } },
+        data: { status: taskStatus, changeRequestNotes },
+      });
+      if (taskUpdated.count !== 1) {
+        throw new ConflictError("This task is already approved and completed.");
+      }
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: primaryActorRole(user),
+          action: "TASK_SUBMISSION_REVIEWED",
+          resourceType: "TaskSubmission",
+          resourceId: submission.id,
+          diffPayload: {
+            taskId: submission.taskId,
+            enrollmentId: submission.task.enrollment.id,
+            versionNumber: submission.versionNumber,
+            fromStatus: submission.status,
+            toStatus: input.status,
+            taskFromStatus: submission.task.status,
+            taskToStatus: taskStatus,
+            supervisorFeedback,
+          },
+        },
+      });
+    });
+
+    return {
+      enrollmentId: submission.task.enrollment.id,
+      taskId: submission.taskId,
+      submissionId: submission.id,
+      status: input.status,
+    };
   }
 
   /**
    * Create a progress report (weekly, biweekly, or milestone check-in).
    */
-  async submitProgressReport(actorUserId: string, input: CreateProgressReportInput) {
+  async submitProgressReport(user: AuthenticatedUser, input: CreateProgressReportInput) {
     const enrollment = await prisma.internshipEnrollment.findUnique({
       where: { id: input.enrollmentId },
+      select: { id: true, userId: true },
     });
 
     if (!enrollment) {
-      throw new Error("Internship enrollment not found");
+      throw new NotFoundError("Internship enrollment not found");
     }
 
-    if (enrollment.userId !== actorUserId) {
-      throw new Error("Unauthorized: You can only submit progress reports for your own enrollment");
+    if (enrollment.userId !== user.id) {
+      throw new ForbiddenError("You can only submit progress reports for your own enrollment");
     }
 
-    const report = await prisma.progressReport.create({
+    return prisma.progressReport.create({
       data: {
         enrollmentId: input.enrollmentId,
         cadence: input.cadence,
@@ -247,34 +322,34 @@ export class TaskService {
         learnings: input.learnings?.trim() || null,
         blockers: input.blockers?.trim() || null,
       },
+      select: { id: true, enrollmentId: true },
     });
-
-    return report;
   }
 
   /**
-   * Add supervisor feedback to a progress report.
+   * Add supervisor feedback to a progress report (record-level scoped).
    */
-  async reviewProgressReport(
-    actorUserId: string,
-    actorRoles: Role[],
-    reportId: string,
-    supervisorFeedback: string
-  ) {
-    const isStaff = actorRoles.some((r) => STAFF_ROLES.includes(r));
-    if (!isStaff) {
-      throw new Error("Unauthorized: Only supervisors or HR/Admin can review progress reports");
-    }
+  async reviewProgressReport(user: AuthenticatedUser, reportId: string, supervisorFeedback: string) {
+    const access = await assertEvaluationAccess(user);
 
-    const report = await prisma.progressReport.update({
+    const report = await prisma.progressReport.findUnique({
       where: { id: reportId },
+      include: { enrollment: { select: { id: true, userId: true, supervisorId: true } } },
+    });
+
+    if (!report) {
+      throw new NotFoundError("Progress report not found");
+    }
+    assertEnrollmentInScope(access, user, report.enrollment);
+
+    return prisma.progressReport.update({
+      where: { id: report.id },
       data: {
         supervisorFeedback: supervisorFeedback.trim(),
         reviewedAt: new Date(),
       },
+      select: { id: true, enrollmentId: true },
     });
-
-    return report;
   }
 
   /**
@@ -282,21 +357,17 @@ export class TaskService {
    */
   async getEnrollmentProgressReports(
     enrollmentId: string,
-    actorUserId: string,
-    actorRoles: Role[]
+    user: AuthenticatedUser
   ): Promise<ProgressReportItem[]> {
     const enrollment = await prisma.internshipEnrollment.findUnique({
       where: { id: enrollmentId },
+      select: { id: true, userId: true, supervisorId: true },
     });
 
     if (!enrollment) {
-      throw new Error("Internship enrollment not found");
+      throw new NotFoundError("Internship enrollment not found");
     }
-
-    const isStaff = actorRoles.some((r) => STAFF_ROLES.includes(r));
-    if (!isStaff && enrollment.userId !== actorUserId) {
-      throw new Error("Unauthorized: You cannot access progress reports for another intern");
-    }
+    await this.assertCanReadEnrollment(user, enrollment);
 
     const reports = await prisma.progressReport.findMany({
       where: { enrollmentId },

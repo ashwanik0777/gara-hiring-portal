@@ -1,7 +1,11 @@
 import React from "react";
 import Link from "next/link";
 import { connection } from "next/server";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth/guards";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import { logger } from "@/lib/logging/logger";
 import { getUniqueVisitorCount } from "@/features/analytics/services/visitor-service";
 import {
   OpeningStatus,
@@ -9,6 +13,7 @@ import {
   InterviewStatus,
   EvaluationStatus,
   LeaveRequestStatus,
+  Role,
 } from "@prisma/client";
 import {
   FileText,
@@ -27,7 +32,6 @@ import {
   AlertCircle,
   Building,
   TrendingUp,
-  UserCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
@@ -70,13 +74,11 @@ function getApplicationStatusBadge(status: ApplicationStatus) {
   }
 }
 
-export default async function AdminOverviewPage() {
-  await connection();
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-
-  // 1. Parallel database queries for real-time counts and operational feeds
+/**
+ * Loads every dashboard metric. Errors propagate so a database failure is shown as
+ * "unavailable" instead of being rendered as real zero counts.
+ */
+async function loadAdminOverview(todayStart: Date, todayEnd: Date) {
   const [
     totalApplications,
     activeOpenings,
@@ -97,106 +99,175 @@ export default async function AdminOverviewPage() {
     hiredCount,
     recentApplications,
     recentOpenings,
-    pendingLeaveItems,
     latestPayroll,
   ] = await Promise.all([
-    prisma.application.count().catch(() => 0),
-    prisma.opening.count({ where: { status: OpeningStatus.PUBLISHED } }).catch(() => 0),
-    prisma.interviewSchedule.count({ where: { status: InterviewStatus.SCHEDULED } }).catch(() => 0),
-    prisma.internshipEnrollment.count({ where: { status: EvaluationStatus.IN_PROGRESS } }).catch(() => 0),
-    prisma.employee
-      .findMany({
-        select: { id: true, designation: true, department: true, status: true },
-      })
-      .catch(() => []),
-    prisma.leaveRequest.count({ where: { status: LeaveRequestStatus.PENDING } }).catch(() => 0),
-    prisma.attendanceRecord
-      .count({
-        where: { date: { gte: todayStart, lte: todayEnd }, status: "PRESENT" },
-      })
-      .catch(() => 0),
-    prisma.leaveRequest
-      .count({
-        where: {
-          status: LeaveRequestStatus.APPROVED,
-          startDate: { lte: todayEnd },
-          endDate: { gte: todayStart },
+    prisma.application.count(),
+    prisma.opening.count({ where: { status: OpeningStatus.PUBLISHED } }),
+    prisma.interviewSchedule.count({ where: { status: InterviewStatus.SCHEDULED } }),
+    prisma.internshipEnrollment.count({ where: { status: EvaluationStatus.IN_PROGRESS } }),
+    prisma.employee.findMany({
+      select: { id: true, designation: true, department: true, status: true },
+    }),
+    prisma.leaveRequest.count({ where: { status: LeaveRequestStatus.PENDING } }),
+    prisma.attendanceRecord.count({
+      where: { date: { gte: todayStart, lte: todayEnd }, status: "PRESENT" },
+    }),
+    prisma.leaveRequest.count({
+      where: {
+        status: LeaveRequestStatus.APPROVED,
+        startDate: { lte: todayEnd },
+        endDate: { gte: todayStart },
+      },
+    }),
+    prisma.attendanceRegularization.count({ where: { status: "PENDING" } }),
+    getUniqueVisitorCount(),
+    prisma.userRole.count({
+      where: { role: { in: ["HR", "MANAGER", "INTERVIEWER", "MENTOR", "ADMIN"] } },
+    }),
+    prisma.application.count({ where: { status: ApplicationStatus.SUBMITTED } }),
+    prisma.application.count({ where: { status: ApplicationStatus.SCREENING } }),
+    prisma.application.count({ where: { status: ApplicationStatus.SHORTLISTED } }),
+    prisma.application.count({
+      where: {
+        status: {
+          in: [ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.INTERVIEWED],
         },
-      })
-      .catch(() => 0),
-    prisma.attendanceRegularization.count({ where: { status: "PENDING" } }).catch(() => 0),
-    getUniqueVisitorCount().catch(() => 0),
-    prisma.userRole
-      .count({ where: { role: { in: ["HR", "MANAGER", "INTERVIEWER", "MENTOR", "ADMIN"] } } })
-      .catch(() => 0),
-    prisma.application.count({ where: { status: ApplicationStatus.SUBMITTED } }).catch(() => 0),
-    prisma.application.count({ where: { status: ApplicationStatus.SCREENING } }).catch(() => 0),
-    prisma.application.count({ where: { status: ApplicationStatus.SHORTLISTED } }).catch(() => 0),
-    prisma.application
-      .count({
-        where: {
-          status: {
-            in: [ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.INTERVIEWED],
-          },
+      },
+    }),
+    prisma.application.count({ where: { status: ApplicationStatus.EVALUATION_SELECTED } }),
+    prisma.application.count({
+      where: {
+        status: {
+          in: [
+            ApplicationStatus.OFFERED,
+            ApplicationStatus.OFFER_ACCEPTED,
+            ApplicationStatus.HIRED,
+          ],
         },
-      })
-      .catch(() => 0),
-    prisma.application.count({ where: { status: ApplicationStatus.EVALUATION_SELECTED } }).catch(() => 0),
-    prisma.application
-      .count({
-        where: {
-          status: {
-            in: [
-              ApplicationStatus.OFFERED,
-              ApplicationStatus.OFFER_ACCEPTED,
-              ApplicationStatus.HIRED,
-            ],
-          },
-        },
-      })
-      .catch(() => 0),
-    prisma.application
-      .findMany({
-        take: 5,
-        orderBy: { createdAt: "desc" },
-        include: {
-          opening: { select: { title: true, department: true, type: true } },
-          candidate: { include: { user: { select: { name: true, email: true } } } },
-        },
-      })
-      .catch(() => []),
-    prisma.opening
-      .findMany({
-        take: 4,
-        orderBy: { createdAt: "desc" },
-        select: {
-          id: true,
-          title: true,
-          department: true,
-          status: true,
-          type: true,
-          _count: { select: { applications: true } },
-        },
-      })
-      .catch(() => []),
-    prisma.leaveRequest
-      .findMany({
-        where: { status: LeaveRequestStatus.PENDING },
-        take: 2,
-        include: {
-          employee: { include: { user: { select: { name: true, email: true } } } },
-          leaveType: { select: { name: true } },
-        },
-        orderBy: { createdAt: "desc" },
-      })
-      .catch(() => []),
-    prisma.payrollPeriod
-      .findFirst({
-        orderBy: { startDate: "desc" },
-        select: { code: true, status: true },
-      })
-      .catch(() => null),
+      },
+    }),
+    prisma.application.findMany({
+      take: 5,
+      orderBy: { createdAt: "desc" },
+      include: {
+        opening: { select: { title: true, department: true, type: true } },
+        candidate: { include: { user: { select: { name: true, email: true } } } },
+      },
+    }),
+    prisma.opening.findMany({
+      take: 4,
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        title: true,
+        department: true,
+        status: true,
+        type: true,
+        _count: { select: { applications: true } },
+      },
+    }),
+    prisma.payrollPeriod.findFirst({
+      orderBy: { startDate: "desc" },
+      select: { code: true, status: true },
+    }),
   ]);
+
+  return {
+    totalApplications,
+    activeOpenings,
+    scheduledInterviews,
+    activeEvaluations,
+    allEmployees,
+    pendingLeaves,
+    todayAttendance,
+    todayOnLeave,
+    pendingRegularizations,
+    totalVisitors,
+    subAdminCount,
+    submittedCount,
+    screeningCount,
+    shortlistedCount,
+    interviewingCount,
+    inEvaluationCount,
+    hiredCount,
+    recentApplications,
+    recentOpenings,
+    latestPayroll,
+  };
+}
+
+function DashboardUnavailable() {
+  return (
+    <div
+      role="alert"
+      className="max-w-xl mx-auto mt-10 p-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 text-center space-y-3"
+    >
+      <AlertCircle className="h-8 w-8 text-amber-600 dark:text-amber-400 mx-auto" />
+      <h1 className="text-base font-bold text-foreground">Dashboard metrics unavailable</h1>
+      <p className="text-xs text-muted-foreground">
+        The overview data could not be loaded right now, so no figures are shown. Please try again in a
+        moment. The individual modules remain available from the navigation.
+      </p>
+      <Link
+        href="/admin"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-border bg-background hover:bg-muted transition-colors"
+      >
+        Retry
+      </Link>
+    </div>
+  );
+}
+
+export default async function AdminOverviewPage() {
+  await connection();
+
+  const user = await getCurrentUser();
+  if (!user) {
+    redirect("/login?callbackUrl=/admin");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
+  // Page-level guard: the /admin portal is restricted to Super Administrators.
+  if (!user.roles.includes(Role.ADMIN)) {
+    return <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />;
+  }
+
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+  // 1. Parallel database queries for real-time counts and operational feeds
+  let overview: Awaited<ReturnType<typeof loadAdminOverview>>;
+  try {
+    overview = await loadAdminOverview(todayStart, todayEnd);
+  } catch (error) {
+    logger.error("Admin dashboard metrics could not be loaded", error);
+    return <DashboardUnavailable />;
+  }
+  const {
+    totalApplications,
+    activeOpenings,
+    scheduledInterviews,
+    activeEvaluations,
+    allEmployees,
+    pendingLeaves,
+    todayAttendance,
+    todayOnLeave,
+    pendingRegularizations,
+    totalVisitors,
+    subAdminCount,
+    submittedCount,
+    screeningCount,
+    shortlistedCount,
+    interviewingCount,
+    inEvaluationCount,
+    hiredCount,
+    recentApplications,
+    recentOpenings,
+    latestPayroll,
+  } = overview;
 
   // Derived Workforce metrics
   const totalEmployees = allEmployees.length;
@@ -401,7 +472,7 @@ export default async function AdminOverviewPage() {
         >
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              7-Day Evaluations
+              7-Working-Day Evaluations
             </span>
             <div className="h-8 w-8 rounded-xl bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
               <Award className="h-4 w-4" />
@@ -493,12 +564,12 @@ export default async function AdminOverviewPage() {
                   </div>
                 </div>
 
-                {/* 3. 7-Day Supervised Evaluation */}
+                {/* 3. 7-Working-Day Supervised Evaluation */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-medium text-foreground flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-purple-500" />
-                      7-Day Supervised Evaluation
+                      7-Working-Day Supervised Evaluation
                     </span>
                     <span className="font-mono text-muted-foreground font-semibold">
                       {inEvaluationCount} ({totalApplications ? Math.round((inEvaluationCount / totalApplications) * 100) : 0}%)
@@ -676,7 +747,10 @@ export default async function AdminOverviewPage() {
           </div>
 
           <div className="pt-3 border-t border-border/60 mt-4 flex items-center justify-between text-xs text-muted-foreground">
-            <span>Platform Visitors: {totalVisitors} unique</span>
+            <span>
+              Platform Visitors:{" "}
+              {totalVisitors === null ? "Unavailable" : `${totalVisitors} unique`}
+            </span>
             <Link
               href="/admin/applications"
               className="text-primary font-semibold hover:underline"
@@ -728,7 +802,7 @@ export default async function AdminOverviewPage() {
                         {opening._count.applications} applied
                       </Badge>
                       <Link
-                        href={`/admin/openings/${opening.id}`}
+                        href={`/admin/openings/${opening.id}/edit`}
                         className="text-primary hover:underline text-xs font-semibold"
                       >
                         Edit
@@ -821,7 +895,7 @@ export default async function AdminOverviewPage() {
               <div className="h-8 w-8 rounded-lg bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
                 <Award className="h-4 w-4" />
               </div>
-              <span className="text-xs font-bold text-foreground truncate">7-Day Eval</span>
+              <span className="text-xs font-bold text-foreground truncate">Evaluations</span>
             </div>
             <Badge variant="outline" className="font-mono text-[10px] shrink-0">
               {activeEvaluations}
@@ -895,7 +969,7 @@ export default async function AdminOverviewPage() {
               <span className="text-xs font-bold text-foreground truncate">Payroll</span>
             </div>
             <Badge variant="outline" className="font-mono text-[10px] shrink-0">
-              {latestPayroll?.code || "Active"}
+              {latestPayroll?.code || "None"}
             </Badge>
           </Link>
 

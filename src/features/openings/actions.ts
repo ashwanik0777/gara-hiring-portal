@@ -1,53 +1,99 @@
 "use server";
 
+import { z } from "zod";
 import { revalidatePath } from "next/cache";
-import { requireRole } from "@/lib/auth/guards";
-import { Role, OpeningStatus } from "@prisma/client";
+import { requirePermission } from "@/lib/auth/guards";
+import { OpeningStatus } from "@prisma/client";
 import {
   createOpening,
   updateOpening,
   updateOpeningStatus,
   saveOpeningFormVersion,
 } from "./services/opening-service";
-import { CreateOpeningInput, UpdateOpeningInput } from "./schemas";
-import { FormSchemaDefinitionInput } from "@/features/application-forms/schemas";
-import { toSafeErrorResponse } from "@/lib/errors";
+import {
+  CreateOpeningInput,
+  UpdateOpeningInput,
+  createOpeningSchema,
+  updateOpeningSchema,
+  openingIdSchema,
+  openingStatusSchema,
+} from "./schemas";
+import {
+  FormSchemaDefinitionInput,
+  formSchemaDefinitionSchema,
+} from "@/features/application-forms/schemas";
+import { toActionError, ValidationError } from "@/lib/errors";
 
-export async function createOpeningAction(data: CreateOpeningInput) {
+export type OpeningActionResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: string };
+
+function parseArgument<T>(schema: z.ZodType<T>, value: unknown, message: string): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.issues[0]?.message ?? message, parsed.error.issues);
+  }
+  return parsed.data;
+}
+
+function revalidateOpeningPaths(slug?: string) {
+  revalidatePath("/careers");
+  if (slug) {
+    revalidatePath(`/careers/${slug}`);
+  }
+  revalidatePath("/admin/openings");
+  revalidatePath("/subadmin/openings");
+}
+
+export async function createOpeningAction(
+  data: CreateOpeningInput
+): Promise<OpeningActionResult<{ id: string; slug: string }>> {
   try {
-    const user = await requireRole([Role.ADMIN, Role.HR]);
-    const opening = await createOpening(data, user);
-    revalidatePath("/careers");
-    revalidatePath("/recruitment/openings");
-    return { success: true as const, data: opening };
+    const user = await requirePermission("canOpenings");
+    const input = parseArgument(createOpeningSchema, data, "Invalid opening details");
+    const opening = await createOpening(input, user);
+    revalidateOpeningPaths();
+    return { success: true, data: { id: opening.id, slug: opening.slug } };
   } catch (error) {
-    return toSafeErrorResponse(error);
+    return { success: false, error: toActionError(error, "The opening could not be created.") };
   }
 }
 
-export async function updateOpeningAction(id: string, data: UpdateOpeningInput) {
+export async function updateOpeningAction(
+  id: string,
+  data: UpdateOpeningInput
+): Promise<OpeningActionResult<{ id: string; slug: string }>> {
   try {
-    const user = await requireRole([Role.ADMIN, Role.HR]);
-    const opening = await updateOpening(id, data, user);
-    revalidatePath("/careers");
-    revalidatePath(`/careers/${opening.slug}`);
-    revalidatePath("/recruitment/openings");
-    return { success: true as const, data: opening };
+    const user = await requirePermission("canOpenings");
+    const openingId = parseArgument(openingIdSchema, id, "Invalid opening identifier");
+    const input = parseArgument(updateOpeningSchema, data, "Invalid opening details");
+    const opening = await updateOpening(openingId, input, user);
+    revalidateOpeningPaths(opening.slug);
+    return { success: true, data: { id: opening.id, slug: opening.slug } };
   } catch (error) {
-    return toSafeErrorResponse(error);
+    return { success: false, error: toActionError(error, "The opening could not be updated.") };
   }
 }
 
-export async function updateOpeningStatusAction(id: string, status: OpeningStatus) {
+export async function updateOpeningStatusAction(
+  id: string,
+  status: OpeningStatus
+): Promise<OpeningActionResult<{ id: string; slug: string; status: OpeningStatus }>> {
   try {
-    const user = await requireRole([Role.ADMIN, Role.HR]);
-    const opening = await updateOpeningStatus(id, status, user);
-    revalidatePath("/careers");
-    revalidatePath(`/careers/${opening.slug}`);
-    revalidatePath("/recruitment/openings");
-    return { success: true as const, data: opening };
+    const user = await requirePermission("canOpenings");
+    const openingId = parseArgument(openingIdSchema, id, "Invalid opening identifier");
+    const nextStatus = parseArgument(openingStatusSchema, status, "Invalid opening status");
+    const opening = await updateOpeningStatus(openingId, nextStatus, user);
+    revalidateOpeningPaths(opening.slug);
+    return {
+      success: true,
+      data: { id: opening.id, slug: opening.slug, status: opening.status },
+    };
   } catch (error) {
-    return toSafeErrorResponse(error);
+    return {
+      success: false,
+      error: toActionError(error, "The opening status could not be changed."),
+    };
   }
 }
 
@@ -55,14 +101,30 @@ export async function saveOpeningFormVersionAction(
   openingId: string,
   schema: FormSchemaDefinitionInput,
   shouldPublish = true
-) {
+): Promise<OpeningActionResult<{ id: string; versionNumber: number; isPublished: boolean }>> {
   try {
-    const user = await requireRole([Role.ADMIN, Role.HR]);
-    const formVersion = await saveOpeningFormVersion(openingId, schema, shouldPublish, user);
-    revalidatePath("/careers");
-    revalidatePath("/recruitment/openings");
-    return { success: true as const, data: formVersion };
+    const user = await requirePermission("canOpenings");
+    const id = parseArgument(openingIdSchema, openingId, "Invalid opening identifier");
+    const formSchema = parseArgument(
+      formSchemaDefinitionSchema,
+      schema,
+      "Invalid application form definition"
+    );
+    const publish = parseArgument(z.boolean(), shouldPublish, "Invalid publish flag");
+    const formVersion = await saveOpeningFormVersion(id, formSchema, publish, user);
+    revalidateOpeningPaths();
+    return {
+      success: true,
+      data: {
+        id: formVersion.id,
+        versionNumber: formVersion.versionNumber,
+        isPublished: formVersion.isPublished,
+      },
+    };
   } catch (error) {
-    return toSafeErrorResponse(error);
+    return {
+      success: false,
+      error: toActionError(error, "The application form could not be saved."),
+    };
   }
 }

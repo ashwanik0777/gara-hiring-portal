@@ -11,7 +11,6 @@ import {
   CreditCard,
   Download,
   Filter,
-  TrendingUp,
   Globe,
   Building,
 } from "lucide-react";
@@ -31,11 +30,15 @@ import {
 
 interface AnalyticsDashboardClientProps {
   initialData: ComprehensiveAnalyticsDashboardData;
+  /** Console the dashboard is rendered in, used for filter navigation and module links. */
+  basePath?: "/admin" | "/subadmin";
 }
 
 export function AnalyticsDashboardClient({
   initialData,
+  basePath = "/admin",
 }: AnalyticsDashboardClientProps) {
+  const reportsPath = `${basePath}/reports`;
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -63,7 +66,7 @@ export function AnalyticsDashboardClient({
   const telemetry = initialData.telemetry;
 
   const formatCurrency = (amount?: number | null) => {
-    if (amount === undefined || amount === null) return "₹0";
+    if (amount === undefined || amount === null) return "Not configured";
     return new Intl.NumberFormat("en-IN", {
       style: "currency",
       currency: "INR",
@@ -73,7 +76,7 @@ export function AnalyticsDashboardClient({
 
   const handleDatePreset = (days?: number) => {
     if (!days) {
-      router.push("/admin/reports");
+      router.push(reportsPath);
       return;
     }
     const end = new Date();
@@ -83,7 +86,7 @@ export function AnalyticsDashboardClient({
     const sStr = start.toISOString().split("T")[0];
     const eStr = end.toISOString().split("T")[0];
 
-    router.push(`/admin/reports?startDate=${sStr}&endDate=${eStr}`);
+    router.push(`${reportsPath}?startDate=${sStr}&endDate=${eStr}`);
   };
 
   const handleApplyFilter = (e: React.FormEvent) => {
@@ -93,7 +96,7 @@ export function AnalyticsDashboardClient({
     if (endDate) params.set("endDate", endDate);
     if (department) params.set("department", department);
 
-    router.push(`/admin/reports?${params.toString()}`);
+    router.push(`${reportsPath}?${params.toString()}`);
     setShowCustomFilter(false);
   };
 
@@ -139,17 +142,19 @@ export function AnalyticsDashboardClient({
             Workforce & HR ({employees.totalEmployees})
           </button>
 
-          <button
-            onClick={() => setActiveTab("payroll")}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === "payroll"
-                ? "bg-background text-foreground shadow-2xs border border-border/60"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <CreditCard className="h-3.5 w-3.5" />
-            Payroll & Finance
-          </button>
+          {payroll && (
+            <button
+              onClick={() => setActiveTab("payroll")}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === "payroll"
+                  ? "bg-background text-foreground shadow-2xs border border-border/60"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <CreditCard className="h-3.5 w-3.5" />
+              Payroll & Finance
+            </button>
+          )}
 
           <button
             onClick={() => setActiveTab("exports")}
@@ -259,7 +264,7 @@ export function AnalyticsDashboardClient({
                   setStartDate("");
                   setEndDate("");
                   setDepartment("");
-                  router.push("/admin/reports");
+                  router.push(reportsPath);
                   setShowCustomFilter(false);
                 }}
                 className="h-9 text-xs rounded-xl"
@@ -326,15 +331,23 @@ export function AnalyticsDashboardClient({
               <CreditCard className="h-4 w-4" />
             </div>
           </div>
-          <div className="text-xl sm:text-2xl font-extrabold font-mono text-foreground tracking-tight truncate">
-            {formatCurrency(kpis.payrollDisbursedAmount)}
-          </div>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-            <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20">
-              {kpis.paidWorkforceCount} Paid
-            </Badge>
-            <span className="text-muted-foreground">• {kpis.unpaidWorkforceCount} Unpaid</span>
-          </div>
+          {payroll ? (
+            <>
+              <div className="text-xl sm:text-2xl font-extrabold font-mono text-foreground tracking-tight truncate">
+                {formatCurrency(kpis.payrollDisbursedAmount)}
+              </div>
+              <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
+                <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20">
+                  {kpis.paidWorkforceCount ?? 0} Paid
+                </Badge>
+                <span className="text-muted-foreground">• {kpis.unpaidWorkforceCount ?? 0} Unpaid</span>
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Payroll figures require the payroll permission.
+            </p>
+          )}
         </div>
 
         {/* 4. Attendance & Leaves Today */}
@@ -518,13 +531,14 @@ export function AnalyticsDashboardClient({
 
               <div className="pt-3 border-t border-border/60 mt-4 flex items-center justify-between text-xs text-muted-foreground">
                 <span>Active on leave today: {kpis.todayOnLeave}</span>
-                <Link href="/admin/leave" className="text-primary font-semibold hover:underline flex items-center gap-1">
+                <Link href={`${basePath}/leave`} className="text-primary font-semibold hover:underline flex items-center gap-1">
                   Manage Leaves →
                 </Link>
               </div>
             </Card>
 
-            {/* 3. Payroll & Financial Summary */}
+            {/* 3. Payroll & Financial Summary (only with the payroll permission) */}
+            {payroll ? (
             <Card className="rounded-2xl border border-border/80 p-5 shadow-2xs flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-3 border-b border-border/60 mb-3">
@@ -533,7 +547,7 @@ export function AnalyticsDashboardClient({
                     Payroll Operations
                   </CardTitle>
                   <Badge variant="outline" className="font-mono text-xs">
-                    Cycle: {payroll.activeCycleCode}
+                    Cycle: {payroll.activeCycleCode ?? "Not configured"}
                   </Badge>
                 </div>
 
@@ -541,28 +555,39 @@ export function AnalyticsDashboardClient({
                   <div className="p-3.5 rounded-xl bg-muted/40 border border-border/60 flex justify-between items-center">
                     <div>
                       <span className="text-[10px] font-bold text-muted-foreground uppercase font-mono">
-                        Disbursed Net Pay
+                        Recorded Disbursements
                       </span>
                       <div className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
                         {formatCurrency(payroll.disbursedAmount)}
                       </div>
+                      {payroll.paidWithoutRecordedAmount > 0 && (
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          {payroll.paidWithoutRecordedAmount} paid record(s) without a recorded amount are excluded.
+                        </p>
+                      )}
                     </div>
                     <Badge variant="outline" className="text-xs font-mono">
-                      {kpis.payrollCompletionRate}% Paid
+                      {kpis.payrollCompletionRate ?? 0}% Paid
                     </Badge>
                   </div>
 
                   <div className="space-y-1.5 text-xs">
                     <div className="flex justify-between py-1 border-b border-border/40">
-                      <span className="text-muted-foreground">Paid Eligible Workforce:</span>
+                      <span className="text-muted-foreground">Configured as Paid:</span>
                       <span className="font-mono font-bold text-foreground">
                         {payroll.paidWorkforce} Staff
                       </span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-border/40">
-                      <span className="text-muted-foreground">Unpaid / Non-Stipendiary:</span>
+                      <span className="text-muted-foreground">Configured as Unpaid:</span>
                       <span className="font-mono font-bold text-muted-foreground">
                         {payroll.unpaidWorkforce} Staff
+                      </span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-border/40">
+                      <span className="text-muted-foreground">Payout Not Configured:</span>
+                      <span className="font-mono font-bold text-muted-foreground">
+                        {payroll.payoutNotConfigured} Staff
                       </span>
                     </div>
                     <div className="flex justify-between py-1">
@@ -576,12 +601,21 @@ export function AnalyticsDashboardClient({
               </div>
 
               <div className="pt-3 border-t border-border/60 mt-4 flex items-center justify-between text-xs text-muted-foreground">
-                <span>Cycle: {payroll.cycleStatus}</span>
-                <Link href="/admin/payroll" className="text-primary font-semibold hover:underline flex items-center gap-1">
+                <span>Cycle: {payroll.cycleStatus ?? "Not configured"}</span>
+                <Link href={`${basePath}/payroll`} className="text-primary font-semibold hover:underline flex items-center gap-1">
                   Manage Payroll →
                 </Link>
               </div>
             </Card>
+            ) : (
+            <Card className="rounded-2xl border border-border/80 p-5 shadow-2xs flex flex-col justify-center text-center">
+              <CreditCard className="h-5 w-5 text-muted-foreground mx-auto mb-2" />
+              <CardTitle className="text-sm font-bold text-foreground">Payroll Operations</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Payroll figures are only shown to staff with the payroll permission.
+              </p>
+            </Card>
+            )}
           </div>
         </div>
       )}
@@ -743,7 +777,7 @@ export function AnalyticsDashboardClient({
       {/* ══════════════════════════════════════════════════════════════════
           TAB 4: PAYROLL & FINANCE TELEMETRY
           ══════════════════════════════════════════════════════════════════ */}
-      {activeTab === "payroll" && (
+      {activeTab === "payroll" && payroll && (
         <div className="space-y-6">
           <PayrollTrendChart
             data={charts.payrollCycleTrends}
@@ -754,10 +788,10 @@ export function AnalyticsDashboardClient({
             <div className="flex items-center justify-between pb-4 border-b border-border/60 mb-4">
               <CardTitle className="text-sm font-bold text-foreground flex items-center gap-2">
                 <CreditCard className="h-4 w-4 text-primary" />
-                Current Cycle: {payroll.activeCycleCode}
+                Current Cycle: {payroll.activeCycleCode ?? "Not configured"}
               </CardTitle>
               <Badge variant="outline" className="font-mono text-xs">
-                Status: {payroll.cycleStatus}
+                Status: {payroll.cycleStatus ?? "Not configured"}
               </Badge>
             </div>
 
@@ -788,11 +822,16 @@ export function AnalyticsDashboardClient({
               </div>
               <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
                 <span className="text-[10px] font-bold text-muted-foreground uppercase font-mono">
-                  Disbursed Volume
+                  Recorded Disbursements
                 </span>
                 <div className="text-2xl font-bold font-mono text-foreground mt-1">
                   {formatCurrency(payroll.disbursedAmount)}
                 </div>
+                {payroll.paidWithoutRecordedAmount > 0 && (
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Excludes {payroll.paidWithoutRecordedAmount} paid record(s) without a recorded amount.
+                  </p>
+                )}
               </div>
             </div>
           </Card>

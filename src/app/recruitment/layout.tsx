@@ -4,13 +4,13 @@ import { getCurrentUser } from "@/lib/auth/guards";
 import { Role } from "@prisma/client";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import { ADMIN_NAV_ITEMS } from "@/config/dashboard-nav";
+import { SUB_ADMIN_ROLES } from "@/lib/auth/roles";
 
-const STAFF_ROLES: Role[] = [
-  Role.ADMIN,
-  Role.HR,
-  Role.INTERVIEWER,
-  Role.MANAGER,
-];
+/*
+ * Legacy route tree: next.config.ts redirects every /recruitment/* URL to /admin/*.
+ * It mirrors the /admin authorization (Super Administrators only) in case it is ever
+ * reached; sub-admins use the /subadmin workspace.
+ */
 
 export const instant = false;
 
@@ -24,12 +24,18 @@ export default async function RecruitmentLayout({
     redirect("/login?callbackUrl=/recruitment/applications");
   }
 
-  const isStaff = user.roles.some((r) => STAFF_ROLES.includes(r));
-  if (!isStaff) {
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
+  if (!user.roles.includes(Role.ADMIN)) {
+    if (user.roles.some((r) => SUB_ADMIN_ROLES.includes(r))) {
+      redirect("/subadmin");
+    }
     redirect("/candidate/dashboard");
   }
 
-  const primaryRole = user.roles[0] ?? "STAFF";
+  const primaryRole = "ADMIN";
 
   return (
     <DashboardShell

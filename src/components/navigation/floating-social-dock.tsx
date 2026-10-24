@@ -47,6 +47,11 @@ function WhatsAppIcon({ className }: { className?: string }) {
   );
 }
 
+function hasHref<T extends { href: string | null }>(item: T): item is T & { href: string } {
+  return item.href !== null;
+}
+
+// WhatsApp is only listed when NEXT_PUBLIC_WHATSAPP_URL is configured (see lib/constants).
 const socialItems = [
   { name: "WhatsApp", href: SOCIAL_LINKS.whatsapp, iconComponent: WhatsAppIcon, color: "#25D366", hoverBg: "#25D366" },
   { name: "LinkedIn", href: SOCIAL_LINKS.linkedin, iconComponent: LinkedInIcon, color: "#0A66C2", hoverBg: "#0A66C2" },
@@ -54,7 +59,7 @@ const socialItems = [
   { name: "X", href: SOCIAL_LINKS.twitter, iconComponent: XIcon, color: undefined, className: "text-foreground dark:text-white", hoverBg: "#18181b" },
   { name: "YouTube", href: SOCIAL_LINKS.youtube, iconComponent: YouTubeIcon, color: "#FF0000", hoverBg: "#FF0000" },
   { name: "Email", href: `mailto:${APP_EMAIL}`, icon: Mail, color: "#6366f1", hoverBg: "#4f46e5" },
-];
+].filter(hasHref);
 
 export function SocialSidebar() {
   const [visible, setVisible] = useState(false);

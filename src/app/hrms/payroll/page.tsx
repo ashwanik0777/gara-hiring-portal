@@ -1,37 +1,33 @@
 import React from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
-import { STAFF_ROLES } from "@/lib/auth/permissions";
-import { payrollService } from "@/features/payroll/services/payroll-service";
-import { PayrollManagementClient } from "@/features/payroll/components/payroll-management-client";
+import { loadPayrollPageData } from "@/features/payroll/services/payroll-page-data";
+import { PayrollPageView } from "@/features/payroll/components/payroll-page-view";
 
 export const instant = false;
 
 export const metadata = {
-  title: "Payroll & Compensation Management — HRMS Console",
-  description: "Manage monthly payroll cycles, employee banking, and disbursement verifications.",
+  title: "Payroll — HRMS Console",
+  description: "Payroll cycles and disbursement records.",
 };
 
-export default async function PayrollModulePage() {
+export default async function PayrollModulePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ period?: string | string[] }>;
+}) {
   const user = await getCurrentUser();
   if (!user) {
-    redirect("/login");
+    redirect("/login?callbackUrl=/hrms/payroll");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
   }
 
-  const hasAccess = user.roles.some((r) => STAFF_ROLES.includes(r));
-  if (!hasAccess) {
-    redirect("/candidate/dashboard");
-  }
+  // Team view only for ADMIN, or HR holding `canPayroll`; everyone else sees only
+  // their own records (masked).
+  const { period } = await searchParams;
+  const pageData = await loadPayrollPageData(user, period, { allowSelfView: true });
 
-  const dashboardData = await payrollService.getPayrollDashboardData(user);
-
-  return (
-    <div className="w-full">
-      <PayrollManagementClient
-        initialData={dashboardData}
-        currentUserId={user.id}
-        portalRole="HRMS"
-      />
-    </div>
-  );
+  return <PayrollPageView pageData={pageData} />;
 }

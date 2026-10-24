@@ -72,13 +72,13 @@ export function FormBuilder({
     setStatusMessage(null);
     try {
       const res = await saveOpeningFormVersionAction(openingId, schema, shouldPublish);
-      if (res.success && res.data) {
+      if (res.success) {
         setStatusMessage({
           type: "success",
           text: `Form version ${res.data.versionNumber} ${shouldPublish ? "published successfully" : "saved as draft"}.`,
         });
-      } else if (!res.success) {
-        setStatusMessage({ type: "error", text: res.error.message });
+      } else {
+        setStatusMessage({ type: "error", text: res.error });
       }
     } catch {
       setStatusMessage({ type: "error", text: "Failed to save form version." });

@@ -1,15 +1,15 @@
 import React from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
-import { Role } from "@/types/enums";
-import { leaveService } from "@/features/leave/services/leave-service";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import { loadLeavePageData } from "@/features/leave/services/leave-page-data";
 import { LeaveManagementClient } from "@/features/leave/components/leave-management-client";
 
 export const instant = false;
 
 export const metadata = {
   title: "Leave Management — HRMS Console",
-  description: "Review staff leave applications and manage organization time-off.",
+  description: "Request leave and review leave applications.",
 };
 
 export default async function HrmsLeavePage() {
@@ -17,34 +17,19 @@ export default async function HrmsLeavePage() {
   if (!user) {
     redirect("/login?callbackUrl=/hrms/leave");
   }
-
-  const isStaffOrAdmin = user.roles.some((r) =>
-    ([Role.ADMIN, Role.HR, Role.MANAGER] as Role[]).includes(r)
-  );
-
-  if (!isStaffOrAdmin) {
-    redirect("/candidate/dashboard");
+  if (user.mustChangePassword) {
+    redirect("/set-password");
   }
 
-  await leaveService.ensureDefaultLeaveTypes();
-
-  const [stats, leaveTypes, requests, employees] = await Promise.all([
-    leaveService.getLeaveStats(),
-    leaveService.getLeaveTypes(true),
-    leaveService.getAllLeaveRequests(user),
-    leaveService.getEmployeeOptions(),
-  ]);
+  // Team view only for staff holding `canLeave`; everyone else sees only their own requests.
+  const pageData = await loadLeavePageData(user, { allowSelfView: true });
+  if (pageData.view === "forbidden") {
+    return <UnauthorizedState message={pageData.message} />;
+  }
 
   return (
     <div className="w-full">
-      <LeaveManagementClient
-        initialRequests={requests}
-        leaveTypes={leaveTypes}
-        stats={stats}
-        employees={employees}
-        currentUserId={user.id}
-        portalRole="HRMS"
-      />
+      <LeaveManagementClient pageData={pageData} />
     </div>
   );
 }

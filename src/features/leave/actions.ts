@@ -1,169 +1,135 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { requireAuth, requireRole } from "@/lib/auth/guards";
+import { toActionError } from "@/lib/errors";
+import { Role } from "@prisma/client";
 import { leaveService } from "./services/leave-service";
 import {
   CreateLeaveRequestSchema,
   ReviewLeaveRequestSchema,
   CreateLeaveTypeSchema,
   ToggleLeaveTypeSchema,
-  CreateLeaveRequestInput,
-  ReviewLeaveRequestInput,
-  CreateLeaveTypeInput,
-  ToggleLeaveTypeInput,
 } from "./schemas";
-import { Role } from "@/types/enums";
+import type { LeaveRequestItem, LeaveReviewResult, LeaveTypeItem } from "./types";
 
+type ActionResult<T = undefined> =
+  | (T extends undefined ? { success: true } : { success: true; data: T })
+  | { success: false; error: string };
+
+function firstIssue(issues: { message: string }[]): string {
+  return issues.map((i) => i.message).join(", ") || "Invalid input data";
+}
+
+function revalidateLeavePages(includeAttendance = false) {
+  revalidatePath("/admin/leave");
+  revalidatePath("/subadmin/leave");
+  revalidatePath("/hrms/leave");
+  if (includeAttendance) {
+    revalidatePath("/admin/attendance");
+    revalidatePath("/subadmin/attendance");
+    revalidatePath("/hrms/attendance");
+  }
+}
+
+/**
+ * Approves or rejects a pending leave request. Requires `canLeave`; reviewers cannot
+ * review their own request (enforced in the service).
+ */
 export async function reviewLeaveRequestAction(
-  rawInput: ReviewLeaveRequestInput
-): Promise<{ success: boolean; error?: string }> {
+  rawInput: unknown
+): Promise<ActionResult<LeaveReviewResult>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Unauthorized: Please log in." };
-    }
-
-    const isAuthorized = user.roles.some((r) =>
-      ([Role.ADMIN, Role.HR, Role.MANAGER] as Role[]).includes(r)
-    );
-    if (!isAuthorized) {
-      return {
-        success: false,
-        error: "Forbidden: Leave review requires HR, Manager, or Admin authority.",
-      };
-    }
+    const user = await requireAuth();
 
     const parsed = ReviewLeaveRequestSchema.safeParse(rawInput);
     if (!parsed.success) {
-      return {
-        success: false,
-        error: parsed.error.issues.map((i) => i.message).join(", "),
-      };
+      return { success: false, error: firstIssue(parsed.error.issues) };
     }
 
-    await leaveService.reviewLeaveRequest(user, parsed.data);
-
-    revalidatePath("/admin/leave");
-    revalidatePath("/subadmin/leave");
-    revalidatePath("/hrms/leave");
-    revalidatePath("/admin/attendance");
-
-    return { success: true };
+    const data = await leaveService.reviewLeaveRequest(user, parsed.data);
+    revalidateLeavePages(true);
+    return { success: true, data };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to review leave request.";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Failed to review leave request.") };
   }
 }
 
+/**
+ * Submits a leave request for oneself, or on behalf of another employee with `canLeave`.
+ */
 export async function createLeaveRequestAction(
-  rawInput: CreateLeaveRequestInput
-): Promise<{ success: boolean; error?: string; data?: unknown }> {
+  rawInput: unknown
+): Promise<ActionResult<LeaveRequestItem>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Unauthorized: Please log in." };
-    }
+    const user = await requireAuth();
 
     const parsed = CreateLeaveRequestSchema.safeParse(rawInput);
     if (!parsed.success) {
-      return {
-        success: false,
-        error: parsed.error.issues.map((i) => i.message).join(", "),
-      };
+      return { success: false, error: firstIssue(parsed.error.issues) };
     }
 
-    const result = await leaveService.submitLeaveRequest(user, parsed.data);
-
-    revalidatePath("/admin/leave");
-    revalidatePath("/subadmin/leave");
-    revalidatePath("/hrms/leave");
-
-    return { success: true, data: result };
+    const data = await leaveService.submitLeaveRequest(user, parsed.data);
+    revalidateLeavePages();
+    return { success: true, data };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to submit leave request.";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Failed to submit leave request.") };
   }
 }
 
+/**
+ * Creates a leave category. Requires ADMIN, or HR holding `canLeave`.
+ */
 export async function createLeaveTypeAction(
-  rawInput: CreateLeaveTypeInput
-): Promise<{ success: boolean; error?: string; data?: unknown }> {
+  rawInput: unknown
+): Promise<ActionResult<LeaveTypeItem>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Unauthorized: Please log in." };
-    }
-
-    const isAuthorized = user.roles.some((r) =>
-      ([Role.ADMIN, Role.HR, Role.MANAGER] as Role[]).includes(r)
-    );
-    if (!isAuthorized) {
-      return {
-        success: false,
-        error: "Forbidden: Creating leave categories requires Admin or HR authority.",
-      };
-    }
+    const user = await requireAuth();
 
     const parsed = CreateLeaveTypeSchema.safeParse(rawInput);
     if (!parsed.success) {
-      return {
-        success: false,
-        error: parsed.error.issues.map((i) => i.message).join(", "),
-      };
+      return { success: false, error: firstIssue(parsed.error.issues) };
     }
 
-    const result = await leaveService.createLeaveType(user, parsed.data);
-
-    revalidatePath("/admin/leave");
-    revalidatePath("/subadmin/leave");
-    revalidatePath("/hrms/leave");
-
-    return { success: true, data: result };
+    const data = await leaveService.createLeaveType(user, parsed.data);
+    revalidateLeavePages();
+    return { success: true, data };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to create leave type.";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Failed to create leave type.") };
   }
 }
 
-export async function toggleLeaveTypeAction(
-  rawInput: ToggleLeaveTypeInput
-): Promise<{ success: boolean; error?: string }> {
+/**
+ * Activates or deactivates a leave category. Requires ADMIN, or HR holding `canLeave`.
+ */
+export async function toggleLeaveTypeAction(rawInput: unknown): Promise<ActionResult> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Unauthorized: Please log in." };
-    }
+    const user = await requireAuth();
 
     const parsed = ToggleLeaveTypeSchema.safeParse(rawInput);
     if (!parsed.success) {
-      return {
-        success: false,
-        error: parsed.error.issues.map((i) => i.message).join(", "),
-      };
+      return { success: false, error: firstIssue(parsed.error.issues) };
     }
 
     await leaveService.toggleLeaveType(user, parsed.data.id, parsed.data.isActive);
-
-    revalidatePath("/admin/leave");
-    revalidatePath("/subadmin/leave");
-    revalidatePath("/hrms/leave");
-
+    revalidateLeavePages();
     return { success: true };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to toggle leave category status.";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Failed to toggle leave category status.") };
   }
 }
 
-export async function seedDefaultLeaveTypesAction(): Promise<{ success: boolean; error?: string }> {
+/**
+ * Loads the suggested leave-type catalogue when no categories exist. ADMIN only.
+ * The catalogue is pending product-owner approval (OD-007).
+ */
+export async function seedDefaultLeaveTypesAction(): Promise<ActionResult<{ created: number }>> {
   try {
-    await leaveService.ensureDefaultLeaveTypes();
-    revalidatePath("/admin/leave");
-    revalidatePath("/subadmin/leave");
-    return { success: true };
+    const user = await requireRole([Role.ADMIN]);
+    const data = await leaveService.ensureDefaultLeaveTypes(user);
+    revalidateLeavePages();
+    return { success: true, data };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to initialize default leave types.";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Failed to load the suggested leave categories.") };
   }
 }

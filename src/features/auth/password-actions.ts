@@ -1,18 +1,20 @@
 "use server";
 
 import crypto from "crypto";
+import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { auth } from "@/lib/auth/auth";
+import { getCurrentUser, requireAuth } from "@/lib/auth/guards";
+import { toActionError } from "@/lib/errors";
 import { hashPassword } from "better-auth/crypto";
-import { NodemailerEmailAdapter } from "@/infrastructure/email/outbox-processor";
-import { buildForgotPasswordEmail } from "@/infrastructure/email/email-templates";
 import { z } from "zod";
 
 const setPasswordSchema = z.object({
   newPassword: z
     .string()
     .min(10, "Password must be at least 10 characters")
+    .max(128, "Password must be at most 128 characters")
     .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
     .regex(/[a-z]/, "Password must contain at least one lowercase letter")
     .regex(/[0-9]/, "Password must contain at least one number")
@@ -21,13 +23,19 @@ const setPasswordSchema = z.object({
 
 /**
  * Action to set a new permanent password when logged in with a temporary password.
- * Clears mustChangePassword so future logins proceed directly to dashboard.
+ * Only available while `mustChangePassword` is set (temporary credentials issued by an
+ * administrator). Regular password changes go through Better Auth's change-password
+ * flow, which requires the current password. Other sessions are revoked afterwards.
  */
 export async function setNewPasswordAction(rawInput: { newPassword: string }) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Authentication required to update password." };
+    const user = await requireAuth({ allowPendingPasswordChange: true });
+
+    if (!user.mustChangePassword) {
+      return {
+        success: false,
+        error: "Your account does not have a pending temporary password. Use the change-password option instead.",
+      };
     }
 
     const parsed = setPasswordSchema.safeParse(rawInput);
@@ -91,150 +99,27 @@ export async function setNewPasswordAction(rawInput: { newPassword: string }) {
       });
     });
 
+    // 4. Sign out every other device that may still hold the temporary credentials.
+    await auth.api.revokeOtherSessions({ headers: await headers() });
+
     revalidatePath("/", "layout");
     return {
       success: true,
       message: "Permanent password successfully updated. Welcome to GARA Innovation!",
     };
   } catch (error) {
-    const msg = error instanceof Error ? error.message : "Failed to set new password.";
-    return { success: false, error: msg };
+    return { success: false, error: toActionError(error, "Failed to set new password.") };
   }
 }
 
 /**
- * Action to handle forgot password requests.
- * Generates a temporary password, hashes it, sets mustChangePassword: true,
- * and sends an email to the user with their temporary credentials.
+ * Returns where the signed-in user should land right after authentication.
+ * Uses the current session only, so it cannot be used to probe other accounts.
  */
-export async function forgotPasswordAction(email: string) {
-  try {
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) {
-      return { success: false, error: "Please enter your email address." };
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { email: cleanEmail },
-      include: { roles: true },
-    });
-
-    // If user does not exist, return neutral safe message to avoid email enumeration
-    if (!user) {
-      return {
-        success: true,
-        message: "If an account exists with this email, temporary login credentials have been sent to it.",
-      };
-    }
-
-    // Generate secure temporary password satisfying password strength rules
-    // Pattern: Gara@ + 4 hex chars + 2 digits + !
-    const randomHex = crypto.randomBytes(2).toString("hex").toUpperCase();
-    const randomDigits = Math.floor(10 + Math.random() * 90);
-    const tempPassword = `Gara@${randomHex}${randomDigits}!`;
-    const hashedPassword = await hashPassword(tempPassword);
-
-    await prisma.$transaction(async (tx) => {
-      // 1. Update credential account password
-      const account = await tx.account.findFirst({
-        where: {
-          userId: user.id,
-          providerId: "credential",
-        },
-      });
-
-      if (account) {
-        await tx.account.update({
-          where: { id: account.id },
-          data: {
-            password: hashedPassword,
-            updatedAt: new Date(),
-          },
-        });
-      } else {
-        await tx.account.create({
-          data: {
-            id: crypto.randomUUID(),
-            userId: user.id,
-            accountId: user.id,
-            providerId: "credential",
-            password: hashedPassword,
-          },
-        });
-      }
-
-      // 2. Mark mustChangePassword as true
-      await tx.user.update({
-        where: { id: user.id },
-        data: {
-          mustChangePassword: true,
-          updatedAt: new Date(),
-        },
-      });
-
-      // 3. Log audit event
-      await tx.auditLog.create({
-        data: {
-          actorId: user.id,
-          actorRole: user.roles[0]?.role || "CANDIDATE",
-          action: "PASSWORD_RESET_TEMP_ISSUED",
-          resourceType: "USER",
-          resourceId: user.id,
-        },
-      });
-    });
-
-    // 4. Send email with temporary password
-    try {
-      const emailTransport = new NodemailerEmailAdapter();
-      const loginUrl = `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/login`;
-
-      const emailPayload = buildForgotPasswordEmail({
-        name: user.name,
-        email: user.email,
-        temporaryPassword: tempPassword,
-        loginUrl,
-      });
-
-      await emailTransport.sendEmail({
-        to: user.email,
-        subject: emailPayload.subject,
-        text: emailPayload.text,
-        html: emailPayload.html,
-      });
-    } catch (mailErr) {
-      console.error("[ForgotPassword] Failed to dispatch temporary password email:", mailErr);
-    }
-
-    return {
-      success: true,
-      message: `A temporary password has been sent to ${cleanEmail}. Please check your email inbox and sign in to set your permanent password.`,
-    };
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : "Failed to reset password.";
-    return { success: false, error: msg };
+export async function getPostLoginRedirectAction(): Promise<{ redirectTo: string | null }> {
+  const user = await getCurrentUser();
+  if (user?.mustChangePassword) {
+    return { redirectTo: "/set-password" };
   }
-}
-
-/**
- * Action to verify if a user with a given email needs to change their temporary password.
- */
-export async function checkUserMustChangePasswordAction(email: string) {
-  try {
-    const cleanEmail = email.trim().toLowerCase();
-    const user = await prisma.user.findUnique({
-      where: { email: cleanEmail },
-      select: {
-        mustChangePassword: true,
-        roles: { select: { role: true } },
-      },
-    });
-
-    return {
-      mustChangePassword: user?.mustChangePassword ?? false,
-      roles: user?.roles.map((r) => r.role) ?? [],
-    };
-  } catch {
-    return { mustChangePassword: false, roles: [] };
-  }
+  return { redirectTo: null };
 }

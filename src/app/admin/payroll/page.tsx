@@ -2,31 +2,31 @@ import React from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { Role } from "@/types/enums";
-import { payrollService } from "@/features/payroll/services/payroll-service";
-import { PayrollManagementClient } from "@/features/payroll/components/payroll-management-client";
+import { loadPayrollPageData } from "@/features/payroll/services/payroll-page-data";
+import { PayrollPageView } from "@/features/payroll/components/payroll-page-view";
 
 export const instant = false;
 
 export const metadata = {
-  title: "Payroll & Compensation Management — Admin Console",
-  description: "Manage monthly payroll cycles, employee banking, and disbursement verifications.",
+  title: "Payroll — Admin Console",
+  description: "Payroll cycles, employee payout profiles, and disbursement records.",
 };
 
-export default async function AdminPayrollPage() {
+export default async function AdminPayrollPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ period?: string | string[] }>;
+}) {
   const user = await getCurrentUser();
   if (!user || !user.roles.includes(Role.ADMIN)) {
     redirect("/admin");
   }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
 
-  const dashboardData = await payrollService.getPayrollDashboardData(user);
+  const { period } = await searchParams;
+  const pageData = await loadPayrollPageData(user, period, { allowSelfView: false });
 
-  return (
-    <div className="w-full">
-      <PayrollManagementClient
-        initialData={dashboardData}
-        currentUserId={user.id}
-        portalRole="ADMIN"
-      />
-    </div>
-  );
+  return <PayrollPageView pageData={pageData} />;
 }

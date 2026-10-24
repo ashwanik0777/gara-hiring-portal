@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useTransition, useMemo } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Calendar,
   CreditCard,
@@ -8,7 +9,6 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
-  FileText,
   Download,
   PlusCircle,
   Search,
@@ -22,14 +22,13 @@ import {
   CheckCheck,
   RefreshCw,
   Lock,
-  ChevronRight,
   ShieldCheck,
   FileSpreadsheet,
   UserX,
   UserCheck,
   Sparkles,
 } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,16 +49,30 @@ import {
 } from "../actions";
 
 interface PayrollManagementClientProps {
+  /** Server-prepared data: account numbers and PANs are already masked. */
   initialData: PayrollDashboardData;
-  currentUserId: string;
-  portalRole: "ADMIN" | "SUBADMIN" | "HRMS";
 }
 
-export function PayrollManagementClient({
-  initialData,
-  currentUserId,
-  portalRole,
-}: PayrollManagementClientProps) {
+const NOT_CONFIGURED = "Not configured";
+
+/** Neutralises spreadsheet formula injection and quotes a CSV cell. */
+function csvCell(value: string | number | null | undefined): string {
+  let text = value === null || value === undefined ? "" : String(value);
+  if (/^[=+\-@\t\r]/.test(text)) {
+    text = `'${text}`;
+  }
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function employmentLabel(type: "INTERN" | "FULL_TIME" | null): string {
+  if (type === "INTERN") return "Intern";
+  if (type === "FULL_TIME") return "Full-Time";
+  return "Type not configured";
+}
+
+export function PayrollManagementClient({ initialData }: PayrollManagementClientProps) {
+  const router = useRouter();
+  const pathname = usePathname();
   const [data, setData] = useState<PayrollDashboardData>(initialData);
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>(
     initialData.activePeriod?.id || (initialData.periods[0]?.id ?? "")
@@ -70,7 +83,6 @@ export function PayrollManagementClient({
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | PayrollStatus>("ALL");
   const [typeFilter, setTypeFilter] = useState<"ALL" | "INTERN" | "FULL_TIME">("ALL");
-  const [departmentFilter, setDepartmentFilter] = useState("ALL");
 
   // Feedback notifications
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
@@ -91,20 +103,22 @@ export function PayrollManagementClient({
 
   const [bulkModal, setBulkModal] = useState<{
     isOpen: boolean;
-    referencePrefix: string;
+    reference: string;
     notes: string;
   }>({
     isOpen: false,
-    referencePrefix: `NEFT-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, "0")}`,
+    reference: "",
     notes: "",
   });
 
+  // Account number and PAN inputs start empty: the browser only ever receives masked
+  // values, and an empty input keeps the stored value.
   const [profileModal, setProfileModal] = useState<{
     isOpen: boolean;
     profile: EmployeePayoutProfile | null;
     isPaid: boolean;
-    employmentType: "INTERN" | "FULL_TIME";
-    stipendAmount: number;
+    employmentType: "INTERN" | "FULL_TIME" | null;
+    stipendAmount: string;
     bankName: string;
     accountNumber: string;
     ifscCode: string;
@@ -113,15 +127,34 @@ export function PayrollManagementClient({
   }>({
     isOpen: false,
     profile: null,
-    isPaid: true,
-    employmentType: "FULL_TIME",
-    stipendAmount: 35000,
+    isPaid: false,
+    employmentType: null,
+    stipendAmount: "",
     bankName: "",
     accountNumber: "",
     ifscCode: "",
     accountHolderName: "",
     panNumber: "",
   });
+
+  const openProfileModal = (profile: EmployeePayoutProfile | null) => {
+    if (!profile) {
+      showFeedback("error", "Employee payout profile could not be found. Reload and try again.");
+      return;
+    }
+    setProfileModal({
+      isOpen: true,
+      profile,
+      isPaid: profile.isPaid === true,
+      employmentType: profile.employmentType,
+      stipendAmount: profile.stipendAmount !== null ? String(profile.stipendAmount) : "",
+      bankName: profile.bankName ?? "",
+      accountNumber: "",
+      ifscCode: profile.ifscCode ?? "",
+      accountHolderName: profile.accountHolderName ?? "",
+      panNumber: "",
+    });
+  };
 
   const [newPeriodModal, setNewPeriodModal] = useState<{
     isOpen: boolean;
@@ -160,13 +193,7 @@ export function PayrollManagementClient({
     );
   }, [data.periods, data.activePeriod, selectedPeriodId]);
 
-  // Unique departments for filter
-  const departments = useMemo(() => {
-    const set = new Set(data.records.map((r) => r.department));
-    return Array.from(set).filter(Boolean);
-  }, [data.records]);
-
-  // Filtered records for selected period (Only Paid employees are here)
+  // Filtered records for the selected period
   const filteredRecords = useMemo(() => {
     return data.records.filter((r) => {
       // Period filter
@@ -177,9 +204,6 @@ export function PayrollManagementClient({
 
       // Type filter (Intern vs Full-Time)
       if (typeFilter !== "ALL" && r.employmentType !== typeFilter) return false;
-
-      // Department filter
-      if (departmentFilter !== "ALL" && r.department !== departmentFilter) return false;
 
       // Search query
       if (searchQuery.trim()) {
@@ -193,7 +217,7 @@ export function PayrollManagementClient({
 
       return true;
     });
-  }, [data.records, activePeriod, statusFilter, typeFilter, departmentFilter, searchQuery]);
+  }, [data.records, activePeriod, statusFilter, typeFilter, searchQuery]);
 
   // Helper date formatter
   const formatDate = (isoStr?: string | null) => {
@@ -210,9 +234,9 @@ export function PayrollManagementClient({
     }
   };
 
-  // Helper currency formatter (Indian Rupee)
+  // Helper currency formatter (Indian Rupee). Unset amounts are never shown as ₹0.
   const formatCurrency = (amount?: number | null) => {
-    if (amount === undefined || amount === null) return "₹0";
+    if (amount === undefined || amount === null) return NOT_CONFIGURED;
     return new Intl.NumberFormat("en-IN", {
       style: "currency",
       currency: "INR",
@@ -269,13 +293,14 @@ export function PayrollManagementClient({
 
     const ref = disburseModal.reference.trim();
     if (!ref) {
-      showFeedback("error", "Please provide a bank UTR / payment reference number.");
+      showFeedback("error", "Please enter the bank UTR / payment reference from your bank.");
       return;
     }
 
+    const record = disburseModal.record;
     startTransition(async () => {
       const res = await recordDisbursementAction({
-        payrollRecordId: disburseModal.record!.id,
+        payrollRecordId: record.id,
         disbursementReference: ref,
         notes: disburseModal.notes.trim() || null,
       });
@@ -285,9 +310,10 @@ export function PayrollManagementClient({
         return;
       }
 
+      const periodPaid = res.data.periodPaid;
       setData((prev) => {
         const updatedRecords = prev.records.map((r) =>
-          r.id === disburseModal.record!.id
+          r.id === record.id
             ? {
                 ...r,
                 status: "PAID" as PayrollStatus,
@@ -298,21 +324,30 @@ export function PayrollManagementClient({
             : r
         );
 
-        const paidCount = updatedRecords.filter((r) => r.status === "PAID").length;
+        const paidRecords = updatedRecords.filter((r) => r.status === "PAID");
         const total = updatedRecords.length;
 
         return {
           ...prev,
+          periods: periodPaid
+            ? prev.periods.map((p) =>
+                p.id === record.payrollPeriodId ? { ...p, status: "PAID" as PayrollStatus } : p
+              )
+            : prev.periods,
           records: updatedRecords,
           stats: {
             ...prev.stats,
-            paidCount,
+            paidCount: paidRecords.length,
             draftCount: updatedRecords.filter((r) => r.status === "DRAFT").length,
             finalizedCount: updatedRecords.filter((r) => r.status === "FINALIZED").length,
-            completionRate: total > 0 ? Math.round((paidCount / total) * 100) : 0,
-            totalDisbursedAmount: updatedRecords
-              .filter((r) => r.status === "PAID")
-              .reduce((sum, r) => sum + (r.stipendAmount || 0), 0),
+            completionRate: total > 0 ? Math.round((paidRecords.length / total) * 100) : 0,
+            totalDisbursedAmount: paidRecords.reduce(
+              (sum, r) => sum + (typeof r.stipendAmount === "number" ? r.stipendAmount : 0),
+              0
+            ),
+            paidRecordsWithoutAmount: paidRecords.filter(
+              (r) => typeof r.stipendAmount !== "number"
+            ).length,
           },
         };
       });
@@ -326,54 +361,32 @@ export function PayrollManagementClient({
     e.preventDefault();
     if (!activePeriod) return;
 
-    const prefix = bulkModal.referencePrefix.trim();
-    if (!prefix) {
-      showFeedback("error", "Please provide a batch reference prefix.");
+    const reference = bulkModal.reference.trim();
+    if (!reference) {
+      showFeedback("error", "Please enter the batch reference from your bank.");
       return;
     }
 
     startTransition(async () => {
       const res = await bulkDisburseAction({
         periodId: activePeriod.id,
-        referencePrefix: prefix,
+        disbursementReference: reference,
         notes: bulkModal.notes.trim() || null,
       });
 
       if (!res.success) {
-        showFeedback("error", res.error || "Failed to execute bulk disbursement.");
+        showFeedback("error", res.error || "Failed to record bulk disbursement.");
         return;
       }
 
-      setData((prev) => {
-        const updatedRecords = prev.records.map((r) =>
-          r.payrollPeriodId === activePeriod.id
-            ? {
-                ...r,
-                status: "PAID" as PayrollStatus,
-                disbursementReference:
-                  r.disbursementReference ||
-                  `${prefix}-${r.employeeCode}-${Math.floor(1000 + Math.random() * 9000)}`,
-                disbursedAt: new Date().toISOString(),
-              }
-            : r
-        );
-
-        return {
-          ...prev,
-          records: updatedRecords,
-          stats: {
-            ...prev.stats,
-            paidCount: updatedRecords.length,
-            draftCount: 0,
-            finalizedCount: 0,
-            completionRate: 100,
-            totalDisbursedAmount: updatedRecords.reduce((sum, r) => sum + (r.stipendAmount || 0), 0),
-          },
-        };
-      });
-
-      setBulkModal({ isOpen: false, referencePrefix: "", notes: "" });
-      showFeedback("success", "Bulk payout completed for all eligible paid employees.");
+      setBulkModal({ isOpen: false, reference: "", notes: "" });
+      const skipped = res.data.skippedNotPaidCount;
+      showFeedback(
+        "success",
+        `Recorded reference ${reference} for ${res.data.updatedCount} finalized record(s).` +
+          (skipped > 0 ? ` ${skipped} record(s) skipped: employee not configured as paid.` : "")
+      );
+      window.location.reload();
     });
   };
 
@@ -383,43 +396,71 @@ export function PayrollManagementClient({
     startTransition(async () => {
       const res = await generatePayrollRecordsAction({ periodId: activePeriod.id });
       if (!res.success) {
-        showFeedback("error", res.error || "Failed to enroll paid employees.");
+        showFeedback("error", res.error || "Failed to enroll employees.");
         return;
       }
 
-      showFeedback("success", "Paid workforce successfully synchronized for this cycle.");
-      window.location.reload();
+      const { enrolledCount, skippedUnconfiguredCount } = res.data;
+      showFeedback(
+        "success",
+        `Enrolled ${enrolledCount} employee(s) configured as paid.` +
+          (skippedUnconfiguredCount > 0
+            ? ` ${skippedUnconfiguredCount} employee(s) skipped: payout profile not configured.`
+            : "")
+      );
+      if (enrolledCount > 0) {
+        window.location.reload();
+      }
     });
   };
 
-  const handleFinalizePeriod = () => {
-    if (!activePeriod) return;
+  const handlePeriodTransition = (
+    period: PayrollPeriodDetail,
+    status: "DRAFT" | "FINALIZED" | "VOID"
+  ) => {
+    if (status === "VOID" && !window.confirm(`Void payroll cycle ${period.code}? This cannot be undone.`)) {
+      return;
+    }
+    if (
+      status === "DRAFT" &&
+      !window.confirm(`Reopen payroll cycle ${period.code} as a draft?`)
+    ) {
+      return;
+    }
 
     startTransition(async () => {
       const res = await updatePayrollPeriodStatusAction({
-        periodId: activePeriod.id,
-        status: "FINALIZED",
+        periodId: period.id,
+        status,
       });
 
       if (!res.success) {
-        showFeedback("error", res.error || "Failed to finalize period.");
+        showFeedback("error", res.error || "Failed to update payroll cycle status.");
         return;
       }
 
+      const recordStatusFrom: PayrollStatus[] =
+        status === "FINALIZED" ? ["DRAFT"] : status === "DRAFT" ? ["FINALIZED"] : ["DRAFT", "FINALIZED"];
       setData((prev) => ({
         ...prev,
         periods: prev.periods.map((p) =>
-          p.id === activePeriod.id ? { ...p, status: "FINALIZED" } : p
+          p.id === period.id ? { ...p, status } : p
         ),
         records: prev.records.map((r) =>
-          r.payrollPeriodId === activePeriod.id && r.status === "DRAFT"
-            ? { ...r, status: "FINALIZED" }
+          r.payrollPeriodId === period.id && recordStatusFrom.includes(r.status)
+            ? { ...r, status }
             : r
         ),
       }));
 
-      showFeedback("success", `Payroll cycle ${activePeriod.code} is now finalized.`);
+      const verb = status === "FINALIZED" ? "finalized" : status === "DRAFT" ? "reopened as draft" : "voided";
+      showFeedback("success", `Payroll cycle ${period.code} ${verb}.`);
     });
+  };
+
+  const handleSelectPeriod = (periodId: string) => {
+    setSelectedPeriodId(periodId);
+    router.push(`${pathname}?period=${encodeURIComponent(periodId)}`);
   };
 
   const handleCreatePeriod = async (e: React.FormEvent) => {
@@ -444,7 +485,7 @@ export function PayrollManagementClient({
 
       showFeedback("success", `Payroll cycle ${newPeriodModal.code} created.`);
       setNewPeriodModal({ isOpen: false, code: "", startDate: "", endDate: "", notes: "" });
-      window.location.reload();
+      router.push(`${pathname}?period=${encodeURIComponent(res.data.id)}`);
     });
   };
 
@@ -452,18 +493,32 @@ export function PayrollManagementClient({
     e.preventDefault();
     if (!profileModal.profile) return;
 
+    const profile = profileModal.profile;
+    const isPaid = profileModal.isPaid;
+    const amountText = profileModal.stipendAmount.trim();
+    const amount = amountText === "" ? null : Number(amountText);
+    if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
+      showFeedback("error", "Configured amount must be a non-negative number, or left empty.");
+      return;
+    }
+
     startTransition(async () => {
-      const isPaid = profileModal.isPaid;
       const res = await updateEmployeePayoutProfileAction({
-        employeeId: profileModal.profile!.employeeId,
+        employeeId: profile.employeeId,
         isPaid,
         employmentType: profileModal.employmentType,
-        stipendAmount: isPaid ? Number(profileModal.stipendAmount) : 0,
-        bankName: isPaid ? profileModal.bankName.trim() || null : null,
-        accountNumber: isPaid ? profileModal.accountNumber.trim() || null : null,
-        ifscCode: isPaid ? profileModal.ifscCode.trim() || null : null,
-        accountHolderName: isPaid ? profileModal.accountHolderName.trim() || null : null,
-        panNumber: isPaid ? profileModal.panNumber.trim() || null : null,
+        // Fields left untouched for unpaid employees keep their stored values.
+        ...(isPaid
+          ? {
+              stipendAmount: amount,
+              bankName: profileModal.bankName.trim() || null,
+              ifscCode: profileModal.ifscCode.trim() || null,
+              accountHolderName: profileModal.accountHolderName.trim() || null,
+              // Empty means "keep the stored value" (the browser never has the full number).
+              accountNumber: profileModal.accountNumber.trim() || undefined,
+              panNumber: profileModal.panNumber.trim() || undefined,
+            }
+          : {}),
       });
 
       if (!res.success) {
@@ -471,24 +526,26 @@ export function PayrollManagementClient({
         return;
       }
 
+      const open = res.data.openRecordCount;
       showFeedback(
         "success",
-        `Updated ${profileModal.profile!.employeeName}: Marked as ${isPaid ? "Paid (" + profileModal.employmentType + ")" : "Unpaid"}.`
+        `Updated ${profile.employeeName}: marked as ${isPaid ? "Paid" : "Unpaid"}.` +
+          (!isPaid && open > 0
+            ? ` ${open} open payroll record(s) remain and cannot be disbursed while unpaid.`
+            : "")
       );
       setProfileModal({ ...profileModal, isOpen: false, profile: null });
       window.location.reload();
     });
   };
 
-  // Toggle quick paid/unpaid from card
+  // Toggle quick paid/unpaid from card. Other payout fields keep their stored values.
   const handleQuickTogglePaid = (emp: EmployeePayoutProfile) => {
     startTransition(async () => {
-      const newPaid = !emp.isPaid;
+      const newPaid = emp.isPaid !== true;
       const res = await updateEmployeePayoutProfileAction({
         employeeId: emp.employeeId,
         isPaid: newPaid,
-        employmentType: emp.employmentType,
-        stipendAmount: newPaid ? (emp.stipendAmount || 25000) : 0,
       });
 
       if (!res.success) {
@@ -504,47 +561,49 @@ export function PayrollManagementClient({
     });
   };
 
-  // Export NEFT CSV for bank upload (Paid records only)
-  const downloadNeftCsv = () => {
+  // Register export. Account numbers are masked (the browser never receives full
+  // numbers); a bank upload file format is pending approval (OD-008).
+  const downloadRegisterCsv = () => {
     if (!filteredRecords.length) return;
 
     const headers = [
-      "Beneficiary Name",
-      "Account Number",
-      "IFSC Code",
-      "Amount",
-      "Payment Mode",
       "Employee Code",
+      "Employee Name",
+      "Account Holder",
+      "Bank",
+      "Account Number (masked)",
+      "IFSC Code",
+      "Configured Amount",
       "Employment Type",
-      "UTR / Reference",
+      "Reference",
       "Status",
     ];
 
     const rows = filteredRecords.map((r) => [
-      `"${r.accountHolderName || r.employeeName}"`,
-      `"${r.accountNumber || "50100482910482"}"`,
-      `"${r.ifscCode || "HDFC0000123"}"`,
-      r.stipendAmount || 35000,
-      "NEFT",
-      `"${r.employeeCode}"`,
-      r.employmentType,
-      `"${r.disbursementReference || ""}"`,
-      r.status,
+      csvCell(r.employeeCode),
+      csvCell(r.employeeName),
+      csvCell(r.accountHolderName ?? NOT_CONFIGURED),
+      csvCell(r.bankName ?? NOT_CONFIGURED),
+      csvCell(r.accountNumberMasked ?? NOT_CONFIGURED),
+      csvCell(r.ifscCode ?? NOT_CONFIGURED),
+      csvCell(typeof r.stipendAmount === "number" ? r.stipendAmount : NOT_CONFIGURED),
+      csvCell(employmentLabel(r.employmentType)),
+      csvCell(r.disbursementReference ?? ""),
+      csvCell(r.status),
     ]);
 
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute(
-      "download",
-      `Payroll_Paid_Disbursement_${activePeriod?.code || "Current"}.csv`
+    const csvContent = [headers.map(csvCell).join(","), ...rows.map((row) => row.join(","))].join(
+      "\n"
     );
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Payroll_Register_${activePeriod?.code || "Current"}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handlePrintSlip = () => {
@@ -616,7 +675,8 @@ export function PayrollManagementClient({
             {/* Cycle Selector Dropdown */}
             <select
               value={selectedPeriodId}
-              onChange={(e) => setSelectedPeriodId(e.target.value)}
+              onChange={(e) => handleSelectPeriod(e.target.value)}
+              aria-label="Select payroll cycle"
               className="h-9 px-3 text-xs rounded-xl border border-border/80 bg-background text-foreground font-mono font-medium cursor-pointer shadow-2xs hover:border-primary/50 transition-colors"
             >
               {data.periods.map((p) => (
@@ -637,15 +697,15 @@ export function PayrollManagementClient({
               New Cycle
             </Button>
 
-            {/* Enroll Paid Workforce Button */}
-            {activePeriod && (
+            {/* Enroll Paid Workforce Button (explicit staff action, DRAFT cycles only) */}
+            {activePeriod && activePeriod.status === "DRAFT" && (
               <Button
                 size="sm"
                 variant="outline"
                 disabled={isPending}
                 onClick={handleGenerateRecords}
                 className="h-9 rounded-xl text-xs gap-1.5 font-medium"
-                title="Synchronize and enroll all Paid Interns & Paid Full-Time staff"
+                title="Enroll active employees whose payout profile is configured as paid"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${isPending ? "animate-spin" : ""}`} />
                 Enroll Paid Workforce
@@ -658,7 +718,7 @@ export function PayrollManagementClient({
                 size="sm"
                 variant="outline"
                 disabled={isPending}
-                onClick={handleFinalizePeriod}
+                onClick={() => handlePeriodTransition(activePeriod, "FINALIZED")}
                 className="h-9 rounded-xl text-xs gap-1.5 text-blue-600 dark:text-blue-400 border-blue-500/30 hover:bg-blue-500/10"
               >
                 <Lock className="h-3.5 w-3.5" />
@@ -666,8 +726,8 @@ export function PayrollManagementClient({
               </Button>
             )}
 
-            {/* Bulk Disburse Button */}
-            {activePeriod && activePeriod.status !== "PAID" && (
+            {/* Bulk Disburse Button (FINALIZED cycles only) */}
+            {activePeriod && activePeriod.status === "FINALIZED" && (
               <Button
                 size="sm"
                 onClick={() => setBulkModal({ ...bulkModal, isOpen: true })}
@@ -682,12 +742,12 @@ export function PayrollManagementClient({
             <Button
               size="sm"
               variant="outline"
-              onClick={downloadNeftCsv}
+              onClick={downloadRegisterCsv}
               className="h-9 rounded-xl text-xs gap-1.5"
-              title="Download CSV for Bank NEFT batch upload"
+              title="Download the payroll register (account numbers masked)"
             >
               <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-              Bank CSV
+              Register CSV
             </Button>
           </div>
         </div>
@@ -717,7 +777,7 @@ export function PayrollManagementClient({
         <div className="bg-card border border-border/80 border-l-4 border-l-purple-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-purple-500/40 transition-all flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Paid Workforce
+              Enrolled Records
             </span>
             <div className="h-8 w-8 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
               <Users className="h-4 w-4" />
@@ -728,7 +788,7 @@ export function PayrollManagementClient({
           </div>
           <div className="mt-2 text-[11px] text-purple-700 dark:text-purple-300 font-medium flex items-center gap-1">
             <Sparkles className="h-3 w-3" />
-            Paid Interns & Full-Time
+            {data.stats.totalPaidWorkforce} configured as paid
           </div>
         </div>
 
@@ -784,7 +844,7 @@ export function PayrollManagementClient({
             {data.stats.totalUnpaidWorkforce}
           </div>
           <div className="mt-2 text-[11px] text-muted-foreground">
-            Excluded from payouts
+            {data.stats.totalUnconfiguredWorkforce} payout {NOT_CONFIGURED.toLowerCase()}
           </div>
         </div>
       </div>
@@ -800,9 +860,9 @@ export function PayrollManagementClient({
           }`}
         >
           <CreditCard className="h-3.5 w-3.5" />
-          Paid Payout Register
+          Payout Register
           <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
-            {data.records.length} Paid
+            {data.records.length} Enrolled
           </span>
         </button>
 
@@ -839,7 +899,7 @@ export function PayrollManagementClient({
           }`}
         >
           <Download className="h-3.5 w-3.5" />
-          Bank NEFT Export
+          Register Export
         </button>
       </div>
 
@@ -901,7 +961,7 @@ export function PayrollManagementClient({
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    {tp === "ALL" ? "All Types" : tp === "INTERN" ? "Paid Interns" : "Paid Full-Time"}
+                    {tp === "ALL" ? "All Types" : tp === "INTERN" ? "Interns" : "Full-Time"}
                   </button>
                 ))}
               </div>
@@ -946,11 +1006,11 @@ export function PayrollManagementClient({
               <table className="w-full text-left text-xs border-collapse table-fixed">
                 <thead>
                   <tr className="border-b border-border/80 bg-muted/40 text-muted-foreground text-[11px] uppercase tracking-wider font-mono font-bold">
-                    <th className="py-3 px-4 w-[28%]">Paid Employee</th>
-                    <th className="py-3 px-4 w-[18%]">Agreed Net Pay</th>
-                    <th className="py-3 px-4 w-[22%]">Bank & Payout Method</th>
-                    <th className="py-3 px-4 w-[18%]">UTR / Payout Status</th>
-                    <th className="py-3 px-4 w-[14%] text-right pr-4">Actions</th>
+                    <th scope="col" className="py-3 px-4 w-[28%]">Employee</th>
+                    <th scope="col" className="py-3 px-4 w-[18%]">Configured Amount</th>
+                    <th scope="col" className="py-3 px-4 w-[22%]">Bank Details</th>
+                    <th scope="col" className="py-3 px-4 w-[18%]">UTR / Payout Status</th>
+                    <th scope="col" className="py-3 px-4 w-[14%] text-right pr-4">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60">
@@ -960,14 +1020,16 @@ export function PayrollManagementClient({
                         <div className="flex flex-col items-center justify-center gap-2">
                           <CreditCard className="h-8 w-8 text-muted-foreground/60 mb-1" />
                           <p className="text-sm font-semibold text-foreground">
-                            No paid records found in this cycle
+                            {activePeriod ? "No payroll records found in this cycle" : "No payroll cycle yet"}
                           </p>
                           <p className="text-xs text-muted-foreground max-w-sm">
-                            {searchQuery || statusFilter !== "ALL" || typeFilter !== "ALL"
-                              ? "Try adjusting search or status filters."
-                              : "Click 'Enroll Paid Workforce' above or mark employees as Paid in the Directory."}
+                            {!activePeriod
+                              ? "Create a payroll cycle with 'New Cycle' to start recording disbursements."
+                              : searchQuery || statusFilter !== "ALL" || typeFilter !== "ALL"
+                                ? "Try adjusting search or status filters."
+                                : "Configure employees as Paid in the Directory, then use 'Enroll Paid Workforce' on a draft cycle."}
                           </p>
-                          {activePeriod && (
+                          {activePeriod && activePeriod.status === "DRAFT" && (
                             <Button
                               variant="outline"
                               size="sm"
@@ -1014,7 +1076,7 @@ export function PayrollManagementClient({
                                       : "bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/20"
                                   }`}
                                 >
-                                  {req.employmentType === "INTERN" ? "Paid Intern" : "Paid Full-Time"}
+                                  {employmentLabel(req.employmentType)}
                                 </span>
                               </div>
                             </div>
@@ -1027,12 +1089,12 @@ export function PayrollManagementClient({
                             <div className="font-mono font-bold text-foreground text-sm">
                               {formatCurrency(req.stipendAmount)}
                             </div>
-                            <div className="text-[10px] text-muted-foreground/80 flex items-center gap-1.5 font-medium">
-                              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                                Monthly Net
-                              </span>
-                              <span>•</span>
-                              <span>Direct Deposit</span>
+                            <div className="text-[10px] text-muted-foreground/80 font-medium">
+                              {req.isPaid === true
+                                ? "From payout profile"
+                                : req.isPaid === false
+                                  ? "Employee marked unpaid"
+                                  : "Payout profile not configured"}
                             </div>
                           </div>
                         </td>
@@ -1041,14 +1103,14 @@ export function PayrollManagementClient({
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-1.5 font-medium text-foreground text-xs">
                             <Building className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                            <span className="truncate">{req.bankName || "HDFC Bank"}</span>
+                            <span className="truncate">{req.bankName ?? NOT_CONFIGURED}</span>
                           </div>
                           <div className="text-[11px] text-muted-foreground mt-1 flex items-center gap-2">
                             <span className="font-mono text-foreground font-semibold bg-muted/80 border border-border/60 px-1.5 py-0.2 rounded text-[10px]">
-                              A/C •••• {req.accountNumber ? req.accountNumber.slice(-4) : "4821"}
+                              A/C {req.accountNumberMasked ?? NOT_CONFIGURED}
                             </span>
                             <span className="text-[10px] font-mono text-muted-foreground/75 truncate">
-                              IFSC: {req.ifscCode || "HDFC0000123"}
+                              IFSC: {req.ifscCode ?? NOT_CONFIGURED}
                             </span>
                           </div>
                         </td>
@@ -1074,7 +1136,11 @@ export function PayrollManagementClient({
                               </button>
                             ) : (
                               <div className="text-[10px] text-muted-foreground/70">
-                                {req.status === "FINALIZED" ? "Ready for disbursement" : "Pending processing"}
+                                {req.status === "FINALIZED"
+                                  ? "Ready for disbursement"
+                                  : req.status === "VOID"
+                                    ? "Voided"
+                                    : "Draft: finalize the cycle first"}
                               </div>
                             )}
                           </div>
@@ -1093,15 +1159,15 @@ export function PayrollManagementClient({
                               <Eye className="h-4 w-4 group-hover/eye:scale-110 transition-transform" />
                             </button>
 
-                            {/* Record Disbursement Button (Only for Non-PAID) */}
-                            {req.status !== "PAID" && (
+                            {/* Record Disbursement Button (FINALIZED records of a FINALIZED cycle) */}
+                            {req.status === "FINALIZED" && activePeriod?.status === "FINALIZED" && (
                               <button
                                 type="button"
                                 onClick={() =>
                                   setDisburseModal({
                                     isOpen: true,
                                     record: req,
-                                    reference: `UTR-${req.payrollPeriodCode.replace("-", "")}-${Math.floor(100000 + Math.random() * 900000)}`,
+                                    reference: "",
                                     notes: "",
                                   })
                                 }
@@ -1115,21 +1181,11 @@ export function PayrollManagementClient({
                             {/* Edit Bank & Compensation */}
                             <button
                               type="button"
-                              onClick={() => {
-                                const profile = data.employees.find((e) => e.employeeId === req.employeeId) || null;
-                                setProfileModal({
-                                  isOpen: true,
-                                  profile,
-                                  isPaid: req.isPaid,
-                                  employmentType: req.employmentType,
-                                  stipendAmount: req.stipendAmount || 35000,
-                                  bankName: req.bankName || "HDFC Bank Ltd",
-                                  accountNumber: req.accountNumber || "50100482910482",
-                                  ifscCode: req.ifscCode || "HDFC0000123",
-                                  accountHolderName: req.accountHolderName || req.employeeName,
-                                  panNumber: req.panNumber || "ABCDE1234F",
-                                });
-                              }}
+                              onClick={() =>
+                                openProfileModal(
+                                  data.employees.find((e) => e.employeeId === req.employeeId) ?? null
+                                )
+                              }
                               className="h-8 w-8 rounded-lg border border-border/80 bg-background hover:bg-muted text-muted-foreground hover:text-foreground transition-all flex items-center justify-center shadow-2xs cursor-pointer"
                               title="Edit Employee Bank & Stipend Settings"
                             >
@@ -1170,6 +1226,9 @@ export function PayrollManagementClient({
               <span className="text-xs font-mono font-bold text-muted-foreground bg-muted/60 px-2.5 py-1 rounded-xl border border-border/60">
                 {data.stats.totalUnpaidWorkforce} Unpaid
               </span>
+              <span className="text-xs font-mono font-bold text-amber-700 dark:text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-xl border border-amber-500/20">
+                {data.stats.totalUnconfiguredWorkforce} {NOT_CONFIGURED}
+              </span>
             </div>
           </div>
 
@@ -1178,7 +1237,7 @@ export function PayrollManagementClient({
               <Card
                 key={emp.employeeId}
                 className={`rounded-2xl border p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between ${
-                  emp.isPaid
+                  emp.isPaid !== false
                     ? "border-border/80 bg-card"
                     : "border-border/60 bg-muted/20 opacity-90"
                 }`}
@@ -1204,48 +1263,57 @@ export function PayrollManagementClient({
 
                     {/* Paid / Unpaid Status Badge */}
                     <div className="text-right">
-                      {emp.isPaid ? (
+                      {emp.isPaid === true ? (
                         <div>
                           <div className="font-mono font-extrabold text-foreground text-base">
                             {formatCurrency(emp.stipendAmount)}
                           </div>
                           <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 font-mono">
-                            {emp.employmentType === "INTERN" ? "Paid Intern" : "Paid Full-Time"}
+                            Paid · {employmentLabel(emp.employmentType)}
+                          </span>
+                        </div>
+                      ) : emp.isPaid === false ? (
+                        <div>
+                          <div className="font-mono font-bold text-muted-foreground text-sm">
+                            Unpaid
+                          </div>
+                          <span className="text-[10px] font-bold text-muted-foreground font-mono bg-muted/60 px-2 py-0.5 rounded">
+                            Non-Stipendiary
                           </span>
                         </div>
                       ) : (
                         <div>
-                          <div className="font-mono font-bold text-muted-foreground text-sm">
-                            ₹0 (Unpaid)
+                          <div className="font-mono font-bold text-amber-700 dark:text-amber-400 text-sm">
+                            {NOT_CONFIGURED}
                           </div>
                           <span className="text-[10px] font-bold text-muted-foreground font-mono bg-muted/60 px-2 py-0.5 rounded">
-                            Non-Stipendiary
+                            Payout profile missing
                           </span>
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Bank Details Box (If Paid) or Non-Stipendiary Note (If Unpaid) */}
-                  {emp.isPaid ? (
+                  {/* Bank Details Box (Paid / not configured) or Non-Stipendiary Note (Unpaid) */}
+                  {emp.isPaid !== false ? (
                     <div className="p-3 rounded-xl bg-muted/40 border border-border/60 text-xs space-y-1.5">
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Bank Name:</span>
-                        <span className="font-medium text-foreground">{emp.bankName || "HDFC Bank Ltd"}</span>
+                        <span className="font-medium text-foreground">{emp.bankName ?? NOT_CONFIGURED}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Account Number:</span>
                         <span className="font-mono font-medium text-foreground">
-                          {emp.accountNumber ? `•••• •••• ${emp.accountNumber.slice(-4)}` : "•••• •••• 4821"}
+                          {emp.accountNumberMasked ?? NOT_CONFIGURED}
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">IFSC Code:</span>
-                        <span className="font-mono font-medium text-foreground">{emp.ifscCode || "HDFC0000123"}</span>
+                        <span className="font-mono font-medium text-foreground">{emp.ifscCode ?? NOT_CONFIGURED}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">PAN ID:</span>
-                        <span className="font-mono font-medium text-foreground">{emp.panNumber || "ABCDE1234F"}</span>
+                        <span className="text-muted-foreground">PAN:</span>
+                        <span className="font-mono font-medium text-foreground">{emp.panMasked ?? NOT_CONFIGURED}</span>
                       </div>
                     </div>
                   ) : (
@@ -1266,26 +1334,13 @@ export function PayrollManagementClient({
                     onClick={() => handleQuickTogglePaid(emp)}
                     className="text-xs rounded-xl h-8 text-muted-foreground hover:text-foreground cursor-pointer"
                   >
-                    {emp.isPaid ? "Switch to Unpaid" : "Switch to Paid"}
+                    {emp.isPaid === true ? "Switch to Unpaid" : "Mark as Paid"}
                   </Button>
 
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() =>
-                      setProfileModal({
-                        isOpen: true,
-                        profile: emp,
-                        isPaid: emp.isPaid,
-                        employmentType: emp.employmentType,
-                        stipendAmount: emp.stipendAmount || (emp.employmentType === "INTERN" ? 25000 : 45000),
-                        bankName: emp.bankName || "HDFC Bank Ltd",
-                        accountNumber: emp.accountNumber || "50100482910482",
-                        ifscCode: emp.ifscCode || "HDFC0000123",
-                        accountHolderName: emp.accountHolderName || emp.employeeName,
-                        panNumber: emp.panNumber || "ABCDE1234F",
-                      })
-                    }
+                    onClick={() => openProfileModal(emp)}
                     className="text-xs rounded-xl gap-1.5 h-8"
                   >
                     <Pencil className="h-3.5 w-3.5" />
@@ -1387,8 +1442,10 @@ export function PayrollManagementClient({
                       size="sm"
                       variant={isSelected ? "secondary" : "outline"}
                       onClick={() => {
-                        setSelectedPeriodId(period.id);
                         setActiveTab("records");
+                        if (period.id !== activePeriod?.id) {
+                          handleSelectPeriod(period.id);
+                        }
                       }}
                       className="text-xs rounded-xl h-8 flex-1"
                     >
@@ -1399,15 +1456,36 @@ export function PayrollManagementClient({
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => {
-                          setSelectedPeriodId(period.id);
-                          handleFinalizePeriod();
-                        }}
+                        disabled={isPending}
+                        onClick={() => handlePeriodTransition(period, "FINALIZED")}
                         className="text-xs rounded-xl h-8 text-blue-600 dark:text-blue-400 border-blue-500/30"
                       >
                         Finalize
                       </Button>
                     )}
+                    {period.status === "FINALIZED" && period.paidRecords === 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isPending}
+                        onClick={() => handlePeriodTransition(period, "DRAFT")}
+                        className="text-xs rounded-xl h-8"
+                      >
+                        Reopen
+                      </Button>
+                    )}
+                    {(period.status === "DRAFT" || period.status === "FINALIZED") &&
+                      period.paidRecords === 0 && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={isPending}
+                          onClick={() => handlePeriodTransition(period, "VOID")}
+                          className="text-xs rounded-xl h-8 text-destructive border-destructive/30"
+                        >
+                          Void
+                        </Button>
+                      )}
                   </div>
                 </Card>
               );
@@ -1417,7 +1495,7 @@ export function PayrollManagementClient({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════
-          TAB 4: BANK NEFT & RTGS EXPORT TOOL
+          TAB 4: PAYROLL REGISTER EXPORT (MASKED)
           ══════════════════════════════════════════════════════════════════ */}
       {activeTab === "export" && (
         <Card className="rounded-2xl border border-border/80 bg-card p-6 shadow-2xs space-y-6">
@@ -1425,18 +1503,18 @@ export function PayrollManagementClient({
             <div>
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <FileSpreadsheet className="h-4 w-4 text-primary" />
-                Corporate Bank NEFT / RTGS Upload Generator
+                Payroll Register Export
               </h3>
-              {/* <p className="text-xs text-muted-foreground mt-0.5">
-                Export standard corporate net-banking batch files for <strong>Paid Employees</strong> only (compatible with HDFC, ICICI, SBI, and Axis Bank CMS portals).
-              </p> */}
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Account numbers are masked. A bank upload file format has not been approved yet (OD-008).
+              </p>
             </div>
             <Button
-              onClick={downloadNeftCsv}
+              onClick={downloadRegisterCsv}
               className="gap-2 text-xs rounded-xl bg-primary text-primary-foreground shadow-2xs"
             >
               <Download className="h-4 w-4" />
-              Download Bank Upload CSV
+              Download Register CSV
             </Button>
           </div>
 
@@ -1444,7 +1522,7 @@ export function PayrollManagementClient({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
               <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-                Total Paid Payout Entries
+                Register Entries
               </span>
               <div className="text-2xl font-bold font-mono text-foreground mt-1">
                 {filteredRecords.length}
@@ -1452,21 +1530,29 @@ export function PayrollManagementClient({
             </div>
             <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
               <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-                Batch Net Amount
+                Configured Amount Total
               </span>
               <div className="text-2xl font-bold font-mono text-foreground mt-1 text-emerald-600 dark:text-emerald-400">
                 {formatCurrency(
-                  filteredRecords.reduce((sum, r) => sum + (r.stipendAmount || 0), 0)
+                  filteredRecords.reduce(
+                    (sum, r) => sum + (typeof r.stipendAmount === "number" ? r.stipendAmount : 0),
+                    0
+                  )
                 )}
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-1">
+                Excludes{" "}
+                {filteredRecords.filter((r) => typeof r.stipendAmount !== "number").length}{" "}
+                record(s) without a configured amount
               </div>
             </div>
             <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
               <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-                Payment Channel
+                Bank Upload Format
               </span>
-              <div className="text-lg font-bold text-foreground mt-1 flex items-center gap-2">
-                <ShieldCheck className="h-5 w-5 text-emerald-500" />
-                NEFT / RTGS Verified
+              <div className="text-sm font-bold text-foreground mt-1 flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-muted-foreground" />
+                Pending approval (OD-008)
               </div>
             </div>
           </div>
@@ -1491,7 +1577,7 @@ export function PayrollManagementClient({
                       GARA INNOVATION
                     </h3>
                     <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-mono">
-                      Official Salary & Payout Statement
+                      Payroll Record Details (not a payslip)
                     </p>
                   </div>
                 </div>
@@ -1504,7 +1590,7 @@ export function PayrollManagementClient({
                   className="h-8 text-xs gap-1.5 rounded-xl"
                 >
                   <Printer className="h-3.5 w-3.5" />
-                  Print / Save PDF
+                  Print Record
                 </Button>
                 <button
                   onClick={() => setDetailsModal({ isOpen: false, record: null })}
@@ -1531,7 +1617,7 @@ export function PayrollManagementClient({
                 </span>
                 <div className="mt-0.5">
                   <Badge variant="outline" className="font-mono text-xs">
-                    {detailsModal.record.employmentType === "INTERN" ? "Paid Intern" : "Paid Full-Time"}
+                    {employmentLabel(detailsModal.record.employmentType)}
                   </Badge>
                 </div>
               </div>
@@ -1578,24 +1664,26 @@ export function PayrollManagementClient({
                 <div>
                   <span className="text-muted-foreground text-[11px]">Beneficiary Bank:</span>
                   <div className="font-medium text-foreground">
-                    {detailsModal.record.bankName || "HDFC Bank Ltd"}
+                    {detailsModal.record.bankName ?? NOT_CONFIGURED}
                   </div>
                 </div>
                 <div>
                   <span className="text-muted-foreground text-[11px]">Account Number:</span>
                   <div className="font-mono font-medium text-foreground">
-                    •••• •••• {detailsModal.record.accountNumber ? detailsModal.record.accountNumber.slice(-4) : "4821"}
+                    {detailsModal.record.accountNumberMasked ?? NOT_CONFIGURED}
                   </div>
                 </div>
                 <div>
                   <span className="text-muted-foreground text-[11px]">IFSC Code:</span>
                   <div className="font-mono font-medium text-foreground">
-                    {detailsModal.record.ifscCode || "HDFC0000123"}
+                    {detailsModal.record.ifscCode ?? NOT_CONFIGURED}
                   </div>
                 </div>
                 <div>
-                  <span className="text-muted-foreground text-[11px]">Payment Mode:</span>
-                  <div className="font-medium text-foreground">Bank NEFT / Direct Deposit</div>
+                  <span className="text-muted-foreground text-[11px]">Account Holder:</span>
+                  <div className="font-medium text-foreground">
+                    {detailsModal.record.accountHolderName ?? NOT_CONFIGURED}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1604,13 +1692,13 @@ export function PayrollManagementClient({
             <div className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between">
               <div>
                 <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider font-mono">
-                  Net Disbursed Compensation
+                  Configured Amount
                 </span>
                 <div className="text-2xl sm:text-3xl font-extrabold font-mono text-emerald-700 dark:text-emerald-400 mt-0.5">
                   {formatCurrency(detailsModal.record.stipendAmount)}
                 </div>
                 <span className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80">
-                  Fixed monthly stipend for services rendered
+                  As entered in the employee payout profile. No salary calculation is performed (OD-008).
                 </span>
               </div>
               <ShieldCheck className="h-10 w-10 text-emerald-600 dark:text-emerald-400/50" />
@@ -1642,8 +1730,8 @@ export function PayrollManagementClient({
               </div>
             )}
 
-            {/* Quick Action inside modal if not yet disbursed */}
-            {detailsModal.record.status !== "PAID" && (
+            {/* Quick Action inside modal for finalized, not yet disbursed records */}
+            {detailsModal.record.status === "FINALIZED" && activePeriod?.status === "FINALIZED" && (
               <div className="pt-2 flex items-center justify-end gap-2 print:hidden">
                 <Button
                   onClick={() => {
@@ -1652,7 +1740,7 @@ export function PayrollManagementClient({
                     setDisburseModal({
                       isOpen: true,
                       record: rec,
-                      reference: `UTR-${rec.payrollPeriodCode.replace("-", "")}-${Math.floor(100000 + Math.random() * 900000)}`,
+                      reference: "",
                       notes: "",
                     });
                   }}
@@ -1708,29 +1796,17 @@ export function PayrollManagementClient({
               <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                 Bank Transfer / UTR Reference *
               </label>
-              <div className="flex gap-2">
-                <Input
-                  required
-                  placeholder="e.g. UTR202610280918"
-                  value={disburseModal.reference}
-                  onChange={(e) => setDisburseModal({ ...disburseModal, reference: e.target.value })}
-                  className="font-mono text-xs rounded-xl h-9"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    setDisburseModal({
-                      ...disburseModal,
-                      reference: `UTR-${disburseModal.record!.payrollPeriodCode.replace("-", "")}-${Math.floor(100000 + Math.random() * 900000)}`,
-                    })
-                  }
-                  className="text-[11px] rounded-xl h-9 shrink-0"
-                >
-                  Generate
-                </Button>
-              </div>
+              <Input
+                required
+                aria-label="Bank transfer or UTR reference"
+                placeholder="Reference issued by your bank"
+                value={disburseModal.reference}
+                onChange={(e) => setDisburseModal({ ...disburseModal, reference: e.target.value })}
+                className="font-mono text-xs rounded-xl h-9"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Enter the reference exactly as issued by the bank. The system never generates references.
+              </p>
             </div>
 
             <div className="space-y-1.5">
@@ -1783,7 +1859,7 @@ export function PayrollManagementClient({
                   Bulk Payout & Batch Disbursement
                 </h3>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  Process all pending paid records in {activePeriod.code}
+                  Record one bank batch reference for {activePeriod.code}
                 </p>
               </div>
               <button
@@ -1800,20 +1876,25 @@ export function PayrollManagementClient({
                 Action Summary:
               </div>
               <div className="text-amber-700 dark:text-amber-400">
-                This will generate unique UTR references and mark all unpaid records in cycle{" "}
-                <strong>{activePeriod.code}</strong> as <strong>PAID</strong>.
+                Every <strong>FINALIZED</strong> record in cycle <strong>{activePeriod.code}</strong>{" "}
+                whose employee is configured as paid will be marked <strong>PAID</strong> with the
+                reference below. Records of employees not configured as paid are skipped.
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
-                Batch Reference Prefix *
+              <label
+                htmlFor="bulk-disbursement-reference"
+                className="text-[11px] font-bold text-muted-foreground uppercase font-mono"
+              >
+                Bank Batch Reference *
               </label>
               <Input
+                id="bulk-disbursement-reference"
                 required
-                placeholder="e.g. NEFT-202610"
-                value={bulkModal.referencePrefix}
-                onChange={(e) => setBulkModal({ ...bulkModal, referencePrefix: e.target.value })}
+                placeholder="Batch reference issued by your bank"
+                value={bulkModal.reference}
+                onChange={(e) => setBulkModal({ ...bulkModal, reference: e.target.value })}
                 className="font-mono text-xs rounded-xl h-9"
               />
             </div>
@@ -1846,7 +1927,7 @@ export function PayrollManagementClient({
                 disabled={isPending}
                 className="text-xs rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white"
               >
-                {isPending ? "Executing Payout..." : "Execute Bulk Disbursement"}
+                {isPending ? "Recording..." : "Record Bulk Disbursement"}
               </Button>
             </div>
           </form>
@@ -1900,7 +1981,7 @@ export function PayrollManagementClient({
                     Paid (Stipend/Salary)
                   </div>
                   <div className="text-[10px] text-muted-foreground mt-1">
-                    Eligible for monthly bank payouts & payslips.
+                    Can be enrolled into payroll cycles.
                   </div>
                 </button>
 
@@ -1918,7 +1999,7 @@ export function PayrollManagementClient({
                     Unpaid (Non-stipendiary)
                   </div>
                   <div className="text-[10px] text-muted-foreground mt-1">
-                    Excluded from payroll cycles & bank payouts.
+                    Not enrolled; existing open records cannot be disbursed.
                   </div>
                 </button>
               </div>
@@ -1927,7 +2008,7 @@ export function PayrollManagementClient({
             {/* Employment Nature (Intern vs Full-Time) */}
             <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
-                Employment Category *
+                Employment Category {profileModal.employmentType === null && `(${NOT_CONFIGURED})`}
               </label>
               <div className="flex gap-2">
                 <button
@@ -1959,17 +2040,21 @@ export function PayrollManagementClient({
             {profileModal.isPaid ? (
               <div className="grid grid-cols-2 gap-3 pt-1">
                 <div className="space-y-1.5 col-span-2">
-                  <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
-                    Monthly Stipend / CTC Amount (₹) *
+                  <label
+                    htmlFor="payout-amount"
+                    className="text-[11px] font-bold text-muted-foreground uppercase font-mono"
+                  >
+                    Configured Amount (₹)
                   </label>
                   <Input
-                    required
+                    id="payout-amount"
                     type="number"
                     min="0"
-                    step="500"
+                    step="any"
+                    placeholder={NOT_CONFIGURED}
                     value={profileModal.stipendAmount}
                     onChange={(e) =>
-                      setProfileModal({ ...profileModal, stipendAmount: Number(e.target.value) })
+                      setProfileModal({ ...profileModal, stipendAmount: e.target.value })
                     }
                     className="font-mono text-xs rounded-xl h-9"
                   />
@@ -1980,7 +2065,7 @@ export function PayrollManagementClient({
                     Bank Name
                   </label>
                   <Input
-                    placeholder="e.g. HDFC Bank"
+                    placeholder={NOT_CONFIGURED}
                     value={profileModal.bankName}
                     onChange={(e) =>
                       setProfileModal({ ...profileModal, bankName: e.target.value })
@@ -1990,11 +2075,20 @@ export function PayrollManagementClient({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+                  <label
+                    htmlFor="payout-account-number"
+                    className="text-[11px] font-bold text-muted-foreground uppercase font-mono"
+                  >
                     Account Number
                   </label>
                   <Input
-                    placeholder="e.g. 50100482910482"
+                    id="payout-account-number"
+                    autoComplete="off"
+                    placeholder={
+                      profileModal.profile?.accountNumberMasked
+                        ? `Current ${profileModal.profile.accountNumberMasked}; leave blank to keep`
+                        : NOT_CONFIGURED
+                    }
                     value={profileModal.accountNumber}
                     onChange={(e) =>
                       setProfileModal({ ...profileModal, accountNumber: e.target.value })
@@ -2008,7 +2102,7 @@ export function PayrollManagementClient({
                     IFSC Code
                   </label>
                   <Input
-                    placeholder="e.g. HDFC0000123"
+                    placeholder={NOT_CONFIGURED}
                     value={profileModal.ifscCode}
                     onChange={(e) =>
                       setProfileModal({ ...profileModal, ifscCode: e.target.value.toUpperCase() })
@@ -2030,6 +2124,29 @@ export function PayrollManagementClient({
                     className="text-xs rounded-xl h-9"
                   />
                 </div>
+
+                <div className="space-y-1.5 col-span-2">
+                  <label
+                    htmlFor="payout-pan"
+                    className="text-[11px] font-bold text-muted-foreground uppercase font-mono"
+                  >
+                    PAN
+                  </label>
+                  <Input
+                    id="payout-pan"
+                    autoComplete="off"
+                    placeholder={
+                      profileModal.profile?.panMasked
+                        ? `Current ${profileModal.profile.panMasked}; leave blank to keep`
+                        : NOT_CONFIGURED
+                    }
+                    value={profileModal.panNumber}
+                    onChange={(e) =>
+                      setProfileModal({ ...profileModal, panNumber: e.target.value.toUpperCase() })
+                    }
+                    className="font-mono text-xs rounded-xl h-9 uppercase"
+                  />
+                </div>
               </div>
             ) : (
               <div className="p-3.5 rounded-xl bg-muted/60 text-xs text-muted-foreground space-y-1">
@@ -2037,8 +2154,8 @@ export function PayrollManagementClient({
                   Unpaid status active:
                 </p>
                 <p>
-                  Banking details and monthly stipend are disabled. This member will not appear in
-                  monthly payroll cycles or corporate bank NEFT payout files.
+                  This member will not be enrolled into payroll cycles. Stored banking details are kept
+                  unchanged; existing payroll records are kept for the audit trail.
                 </p>
               </div>
             )}

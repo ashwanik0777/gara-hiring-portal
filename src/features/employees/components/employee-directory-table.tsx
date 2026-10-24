@@ -17,6 +17,11 @@ import {
 interface EmployeeDirectoryTableProps {
   employees: PublicEmployeeDirectoryItem[];
   departments: string[];
+  /**
+   * Portal route that opens an employee record (`/admin/employees` or `/subadmin/employees`),
+   * or null when the viewer may not open employee records.
+   */
+  detailHrefBase?: string | null;
 }
 
 function getStatusBadge(status: EmployeeStatus) {
@@ -37,6 +42,7 @@ function getStatusBadge(status: EmployeeStatus) {
 export function EmployeeDirectoryTable({
   employees,
   departments,
+  detailHrefBase = "/admin/employees",
 }: EmployeeDirectoryTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState<string>("ALL");
@@ -179,11 +185,13 @@ export function EmployeeDirectoryTable({
                       </td>
                       <td className="py-3.5 px-4">{getStatusBadge(emp.status)}</td>
                       <td className="py-3.5 px-4 text-right">
-                        <Link href={`/recruitment/employees/${emp.id}`}>
-                          <Button variant="outline" size="sm" className="h-7 text-xs">
-                            View Cockpit <ArrowRight className="h-3 w-3 ml-1" />
-                          </Button>
-                        </Link>
+                        {detailHrefBase && (
+                          <Link href={`${detailHrefBase}/${emp.id}`}>
+                            <Button variant="outline" size="sm" className="h-7 text-xs">
+                              View Cockpit <ArrowRight className="h-3 w-3 ml-1" />
+                            </Button>
+                          </Link>
+                        )}
                       </td>
                     </tr>
                   ))

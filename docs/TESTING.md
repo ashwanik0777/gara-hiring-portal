@@ -251,7 +251,7 @@ function createTestUser(overrides?: Partial<UserInput>): UserInput {
 ## 7. Test Environment Rules
 
 - Test database is separate from development database.
-- Test environment variables are in `.env.test` (not committed; documented in `.env.example`).
+- Test environment variables are in `.env.test` (not committed; variables documented in `docs/RUNBOOK.md` section 2).
 - Tests must not depend on external services (email, AI, storage) being available. Mock infrastructure adapters.
 - Tests must not depend on specific data in the development database.
 - CI runs tests in an isolated environment with its own database.

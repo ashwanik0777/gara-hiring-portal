@@ -3,14 +3,15 @@ import {
   OpeningStatus,
   OpeningType,
   WorkplaceType,
-  Role,
   Prisma,
 } from "@prisma/client";
+import type { z } from "zod";
 import {
   CreateOpeningInput,
   UpdateOpeningInput,
   createOpeningSchema,
   updateOpeningSchema,
+  openingStatusSchema,
   VALID_STATUS_TRANSITIONS,
 } from "../schemas";
 import {
@@ -19,9 +20,36 @@ import {
 } from "@/features/application-forms/schemas";
 import { getDefaultApplicationFormSchema } from "@/features/application-forms/default-form";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
-import { NotFoundError, ValidationError, ForbiddenError } from "@/lib/errors";
-import { AuthenticatedUser } from "@/lib/auth/guards";
+import { NotFoundError, ValidationError, ConflictError } from "@/lib/errors";
+import { assertPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { logger } from "@/lib/logging/logger";
+
+/**
+ * Staff access to openings is gated by the granular `canOpenings` module permission
+ * (ADMIN always holds it; sub-admin roles hold it through their configured permissions).
+ * No additional role rule is applied: the permission matrix is pending OD-019 and the
+ * sub-admin configuration UI describes `canOpenings` as "create and publish job postings".
+ */
+async function assertOpeningsAccess(user: AuthenticatedUser): Promise<void> {
+  await assertPermission(user, "canOpenings");
+}
+
+function parseOrThrow<T>(schema: z.ZodType<T>, input: unknown, message: string): T {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.issues[0]?.message ?? message, parsed.error.issues);
+  }
+  return parsed.data;
+}
+
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code: unknown }).code === "P2002"
+  );
+}
 
 /**
  * Public Query: Lists all currently published openings.
@@ -112,9 +140,7 @@ export async function getPublicOpeningBySlug(slug: string) {
  * Administrative Query: Lists all openings across all lifecycle statuses.
  */
 export async function getAdminOpenings(user: AuthenticatedUser) {
-  if (!user.roles.includes(Role.ADMIN) && !user.roles.includes(Role.HR)) {
-    throw new ForbiddenError("Administrative authorization required to access opening records.");
-  }
+  await assertOpeningsAccess(user);
 
   return prisma.opening.findMany({
     include: {
@@ -134,9 +160,7 @@ export async function getAdminOpenings(user: AuthenticatedUser) {
  * Administrative Query: Fetches detailed opening by ID including all form versions.
  */
 export async function getAdminOpeningById(id: string, user: AuthenticatedUser) {
-  if (!user.roles.includes(Role.ADMIN) && !user.roles.includes(Role.HR)) {
-    throw new ForbiddenError("Administrative authorization required to access opening details.");
-  }
+  await assertOpeningsAccess(user);
 
   const opening = await prisma.opening.findUnique({
     where: { id },
@@ -151,28 +175,29 @@ export async function getAdminOpeningById(id: string, user: AuthenticatedUser) {
   });
 
   if (!opening) {
-    throw new NotFoundError(`Opening with ID "${id}" does not exist.`);
+    throw new NotFoundError("Opening does not exist.");
   }
 
   return opening;
 }
 
+export type AdminOpeningDetail = Awaited<ReturnType<typeof getAdminOpeningById>>;
+
 /**
  * Administrative Mutation: Creates a new opening in DRAFT status with an initial form version.
  */
 export async function createOpening(rawInput: CreateOpeningInput, user: AuthenticatedUser) {
-  if (!user.roles.includes(Role.ADMIN) && !user.roles.includes(Role.HR)) {
-    throw new ForbiddenError("Only Administrators and HR personnel can create job openings.");
-  }
+  await assertOpeningsAccess(user);
 
-  const input = createOpeningSchema.parse(rawInput);
+  const input = parseOrThrow(createOpeningSchema, rawInput, "Invalid opening details");
 
-  // Check slug uniqueness
+  // Friendly pre-check; the unique constraint on slug remains the source of truth.
   const existing = await prisma.opening.findUnique({
     where: { slug: input.slug },
+    select: { id: true },
   });
   if (existing) {
-    throw new ValidationError(`An opening with slug "${input.slug}" already exists. Please choose a unique slug.`);
+    throw new ConflictError(`An opening with slug "${input.slug}" already exists. Please choose a unique slug.`);
   }
 
   const defaultFormSchema = getDefaultApplicationFormSchema(input.type);
@@ -233,126 +258,151 @@ export async function createOpening(rawInput: CreateOpeningInput, user: Authenti
 
 /**
  * Administrative Mutation: Updates opening details.
+ * Read, slug check, update and audit run in one transaction.
  */
 export async function updateOpening(id: string, rawInput: UpdateOpeningInput, user: AuthenticatedUser) {
-  if (!user.roles.includes(Role.ADMIN) && !user.roles.includes(Role.HR)) {
-    throw new ForbiddenError("Only Administrators and HR personnel can update job openings.");
-  }
+  await assertOpeningsAccess(user);
 
-  const input = updateOpeningSchema.parse(rawInput);
+  const input = parseOrThrow(updateOpeningSchema, rawInput, "Invalid opening details");
 
-  const existing = await prisma.opening.findUnique({ where: { id } });
-  if (!existing) {
-    throw new NotFoundError(`Opening with ID "${id}" does not exist.`);
-  }
-
-  if (input.slug && input.slug !== existing.slug) {
-    const slugTaken = await prisma.opening.findUnique({ where: { slug: input.slug } });
-    if (slugTaken) {
-      throw new ValidationError(`Slug "${input.slug}" is already in use by another opening.`);
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.opening.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundError("Opening does not exist.");
     }
-  }
 
-  const updated = await prisma.opening.update({
-    where: { id },
-    data: {
-      ...input,
-      updatedAt: new Date(),
-    },
+    if (input.slug && input.slug !== existing.slug) {
+      const slugTaken = await tx.opening.findUnique({
+        where: { slug: input.slug },
+        select: { id: true },
+      });
+      if (slugTaken) {
+        throw new ConflictError(`Slug "${input.slug}" is already in use by another opening.`);
+      }
+    }
+
+    // Guard against a concurrent edit that changed the record after it was read.
+    const result = await tx.opening.updateMany({
+      where: { id, updatedAt: existing.updatedAt },
+      data: { ...input, updatedAt: new Date() },
+    });
+    if (result.count !== 1) {
+      throw new ConflictError("This opening was modified by someone else. Refresh and try again.");
+    }
+
+    await tx.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorRole: user.roles[0],
+        action: "OPENING_UPDATED",
+        resourceType: "opening",
+        resourceId: id,
+        diffPayload: input as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    return tx.opening.findUniqueOrThrow({ where: { id } });
   });
-
-  await prisma.auditLog.create({
-    data: {
-      actorId: user.id,
-      actorRole: user.roles[0],
-      action: "OPENING_UPDATED",
-      resourceType: "opening",
-      resourceId: id,
-      diffPayload: input as unknown as Prisma.InputJsonValue,
-    },
-  });
-
-  return updated;
 }
 
 /**
  * Administrative Mutation: Enforces valid state machine transitions for an opening.
+ * The read, form auto-publish, conditional status update and audit log are atomic;
+ * a concurrent transition makes the conditional update fail instead of overwriting it.
  */
 export async function updateOpeningStatus(
   id: string,
-  newStatus: OpeningStatus,
+  rawStatus: OpeningStatus,
   user: AuthenticatedUser
 ) {
-  if (!user.roles.includes(Role.ADMIN) && !user.roles.includes(Role.HR)) {
-    throw new ForbiddenError("Only Administrators and HR personnel can change opening status.");
-  }
+  await assertOpeningsAccess(user);
 
-  const opening = await prisma.opening.findUnique({ where: { id } });
-  if (!opening) {
-    throw new NotFoundError(`Opening with ID "${id}" does not exist.`);
-  }
+  const newStatus = parseOrThrow(openingStatusSchema, rawStatus, "Invalid opening status");
 
-  if (opening.status === newStatus) {
-    return opening;
-  }
+  const outcome = await prisma.$transaction(async (tx) => {
+    const opening = await tx.opening.findUnique({ where: { id } });
+    if (!opening) {
+      throw new NotFoundError("Opening does not exist.");
+    }
 
-  const allowedTransitions = VALID_STATUS_TRANSITIONS[opening.status];
-  if (!allowedTransitions.includes(newStatus)) {
-    throw new ValidationError(
-      `Invalid status transition: Cannot change opening status from ${opening.status} to ${newStatus}. Valid transitions are: ${allowedTransitions.join(", ") || "none (terminal state)"}`
-    );
-  }
+    if (opening.status === newStatus) {
+      return { opening, changed: false };
+    }
 
-  // Publishing requires that an active published form version exists
-  if (newStatus === OpeningStatus.PUBLISHED) {
-    const activeForm = await prisma.openingFormVersion.findFirst({
-      where: { openingId: id, isPublished: true },
-    });
+    const allowedTransitions = VALID_STATUS_TRANSITIONS[opening.status];
+    if (!allowedTransitions.includes(newStatus)) {
+      throw new ValidationError(
+        `Invalid status transition: Cannot change opening status from ${opening.status} to ${newStatus}. Valid transitions are: ${allowedTransitions.join(", ") || "none (terminal state)"}`
+      );
+    }
 
-    if (!activeForm) {
-      // Auto-publish latest form version if not yet marked published
-      const latestForm = await prisma.openingFormVersion.findFirst({
-        where: { openingId: id },
+    // Publishing requires an application form version that candidates can use.
+    let activeFormVersionId = opening.activeFormVersionId;
+    if (newStatus === OpeningStatus.PUBLISHED) {
+      const activeForm = await tx.openingFormVersion.findFirst({
+        where: { openingId: id, isPublished: true },
         orderBy: { versionNumber: "desc" },
+        select: { id: true },
       });
 
-      if (latestForm) {
-        await prisma.openingFormVersion.update({
+      if (!activeForm) {
+        // Publish the latest form version if none has been published yet
+        const latestForm = await tx.openingFormVersion.findFirst({
+          where: { openingId: id },
+          orderBy: { versionNumber: "desc" },
+          select: { id: true },
+        });
+        if (!latestForm) {
+          throw new ValidationError(
+            "This opening has no application form. Save a form version before publishing."
+          );
+        }
+        await tx.openingFormVersion.update({
           where: { id: latestForm.id },
           data: { isPublished: true },
         });
-        await prisma.opening.update({
-          where: { id },
-          data: { activeFormVersionId: latestForm.id },
-        });
+        activeFormVersionId = latestForm.id;
       }
     }
+
+    const result = await tx.opening.updateMany({
+      where: { id, status: opening.status },
+      data: { status: newStatus, activeFormVersionId },
+    });
+    if (result.count !== 1) {
+      throw new ConflictError(
+        "The opening status was changed by someone else. Refresh the page and try again."
+      );
+    }
+
+    await tx.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorRole: user.roles[0],
+        action: "OPENING_STATUS_CHANGED",
+        resourceType: "opening",
+        resourceId: id,
+        diffPayload: { fromStatus: opening.status, toStatus: newStatus },
+      },
+    });
+
+    return {
+      opening: { ...opening, status: newStatus, activeFormVersionId },
+      changed: true,
+      fromStatus: opening.status,
+    };
+  });
+
+  if (outcome.changed) {
+    logger.info(`Opening ${id} status transitioned from ${outcome.fromStatus} to ${newStatus}`);
   }
-
-  const updated = await prisma.opening.update({
-    where: { id },
-    data: { status: newStatus },
-  });
-
-  await prisma.auditLog.create({
-    data: {
-      actorId: user.id,
-      actorRole: user.roles[0],
-      action: "OPENING_STATUS_CHANGED",
-      resourceType: "opening",
-      resourceId: id,
-      diffPayload: { fromStatus: opening.status, toStatus: newStatus },
-    },
-  });
-
-  logger.info(`Opening ${id} status transitioned from ${opening.status} to ${newStatus}`);
-  return updated;
+  return outcome.opening;
 }
 
 /**
  * Administrative Mutation: Dynamic Form Builder Versioning.
  * Ensures historical candidate applications are never reinterpreted by bumping version numbers
- * when updating a published form.
+ * when updating a published form. Published versions are never modified in place.
  */
 export async function saveOpeningFormVersion(
   openingId: string,
@@ -360,50 +410,92 @@ export async function saveOpeningFormVersion(
   shouldPublish = true,
   user: AuthenticatedUser
 ) {
-  if (!user.roles.includes(Role.ADMIN) && !user.roles.includes(Role.HR)) {
-    throw new ForbiddenError("Only Administrators and HR personnel can modify application form definitions.");
-  }
+  await assertOpeningsAccess(user);
 
-  const validatedSchema = formSchemaDefinitionSchema.parse(rawSchema);
+  const validatedSchema = parseOrThrow(
+    formSchemaDefinitionSchema,
+    rawSchema,
+    "Invalid application form definition"
+  );
 
-  const opening = await prisma.opening.findUnique({
-    where: { id: openingId },
-    include: {
-      formVersions: {
-        orderBy: { versionNumber: "desc" },
-        take: 1,
-      },
-    },
-  });
-
-  if (!opening) {
-    throw new NotFoundError(`Opening with ID "${openingId}" does not exist.`);
-  }
-
-  const latestVersion = opening.formVersions[0];
-
-  // If the latest version was already published or opening is published, we MUST create a new version
-  // to protect historical integrity
-  const mustCreateNewVersion = !latestVersion || latestVersion.isPublished || opening.status === OpeningStatus.PUBLISHED;
-
-  if (mustCreateNewVersion) {
-    const newVersionNumber = latestVersion ? latestVersion.versionNumber + 1 : 1;
-
-    const newFormVersion = await prisma.$transaction(async (tx) => {
-      const created = await tx.openingFormVersion.create({
-        data: {
-          openingId,
-          versionNumber: newVersionNumber,
-          schemaDefinition: validatedSchema as unknown as Prisma.InputJsonValue,
-          isPublished: shouldPublish,
-          createdById: user.id,
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const opening = await tx.opening.findUnique({
+        where: { id: openingId },
+        include: {
+          formVersions: {
+            orderBy: { versionNumber: "desc" },
+            take: 1,
+          },
         },
       });
+
+      if (!opening) {
+        throw new NotFoundError("Opening does not exist.");
+      }
+
+      const latestVersion = opening.formVersions[0];
+
+      // If the latest version was already published or the opening is live, a new version
+      // MUST be created to protect historical integrity.
+      const mustCreateNewVersion =
+        !latestVersion || latestVersion.isPublished || opening.status === OpeningStatus.PUBLISHED;
+
+      if (mustCreateNewVersion) {
+        const newVersionNumber = latestVersion ? latestVersion.versionNumber + 1 : 1;
+
+        // The (openingId, versionNumber) unique constraint rejects a concurrent save.
+        const created = await tx.openingFormVersion.create({
+          data: {
+            openingId,
+            versionNumber: newVersionNumber,
+            schemaDefinition: validatedSchema as unknown as Prisma.InputJsonValue,
+            isPublished: shouldPublish,
+            createdById: user.id,
+          },
+        });
+
+        if (shouldPublish) {
+          await tx.opening.update({
+            where: { id: openingId },
+            data: { activeFormVersionId: created.id },
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            actorId: user.id,
+            actorRole: user.roles[0],
+            action: "FORM_VERSION_CREATED",
+            resourceType: "opening_form_version",
+            resourceId: created.id,
+            diffPayload: { versionNumber: newVersionNumber, isPublished: shouldPublish },
+          },
+        });
+
+        logger.info(`New Form Version ${newVersionNumber} created for Opening ${openingId}`);
+        return created;
+      }
+
+      // The latest version is still an unpublished draft: update it in place, but only
+      // while it is still unpublished (it may have been published concurrently).
+      const result = await tx.openingFormVersion.updateMany({
+        where: { id: latestVersion.id, isPublished: false },
+        data: {
+          schemaDefinition: validatedSchema as unknown as Prisma.InputJsonValue,
+          isPublished: shouldPublish,
+        },
+      });
+      if (result.count !== 1) {
+        throw new ConflictError(
+          "This form version was published in the meantime. Refresh the page to edit a new version."
+        );
+      }
 
       if (shouldPublish) {
         await tx.opening.update({
           where: { id: openingId },
-          data: { activeFormVersionId: created.id },
+          data: { activeFormVersionId: latestVersion.id },
         });
       }
 
@@ -411,35 +503,25 @@ export async function saveOpeningFormVersion(
         data: {
           actorId: user.id,
           actorRole: user.roles[0],
-          action: "FORM_VERSION_CREATED",
+          action: "FORM_VERSION_UPDATED",
           resourceType: "opening_form_version",
-          resourceId: created.id,
-          diffPayload: { versionNumber: newVersionNumber, isPublished: shouldPublish },
+          resourceId: latestVersion.id,
+          diffPayload: { versionNumber: latestVersion.versionNumber, isPublished: shouldPublish },
         },
       });
 
-      return created;
-    });
-
-    logger.info(`New Form Version ${newVersionNumber} created for Opening ${openingId}`);
-    return newFormVersion;
-  } else {
-    // If current latest version was still an unpublished draft, update in-place
-    const updated = await prisma.openingFormVersion.update({
-      where: { id: latestVersion.id },
-      data: {
-        schemaDefinition: validatedSchema as unknown as Prisma.InputJsonValue,
+      return {
+        ...latestVersion,
+        schemaDefinition: validatedSchema as unknown as Prisma.JsonValue,
         isPublished: shouldPublish,
-      },
+      };
     });
-
-    if (shouldPublish) {
-      await prisma.opening.update({
-        where: { id: openingId },
-        data: { activeFormVersionId: updated.id },
-      });
+  } catch (error) {
+    if (isUniqueConstraintViolation(error)) {
+      throw new ConflictError(
+        "Another form version was saved at the same time. Refresh the page and try again."
+      );
     }
-
-    return updated;
+    throw error;
   }
 }

@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/db";
-import { AuthenticatedUser } from "@/lib/auth/guards";
+import { locatePayoutProfileBlock } from "@/features/payroll/payout-notes";
+import { assertPermission, type AuthenticatedUser } from "@/lib/auth/guards";
+import { getUserPermissions } from "@/lib/auth/permissions";
 import {
-  Role,
   Prisma,
   IdCardStatus,
   OnboardingStatus,
@@ -33,31 +34,86 @@ import {
   PayrollCycleTrend,
   AnalyticsChartsData,
 } from "../types";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { ValidationError } from "@/lib/errors";
 
-const AUTHORIZED_REPORT_ROLES: Role[] = [Role.ADMIN, Role.HR, Role.MANAGER];
-
-function escapeCsvCell(value: string | number | boolean | null | undefined): string {
+/**
+ * Escapes a CSV cell and neutralises spreadsheet formula injection: cells that
+ * start with `=`, `+`, `-`, `@`, a tab or a carriage return are prefixed with `'`.
+ */
+export function escapeCsvCell(value: string | number | boolean | null | undefined): string {
   if (value === null || value === undefined) return "";
   const str = String(value);
-  // Prevent CSV formula injection
-  const safeStr = /^[=+\-@]/.test(str) ? `'${str}` : str;
-  if (/[",\n\r]/.test(safeStr)) {
+  const safeStr = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
+  if (/[",\n\r\t]/.test(safeStr)) {
     return `"${safeStr.replace(/"/g, '""')}"`;
   }
   return safeStr;
 }
 
-export class ReportService {
-  private assertReportAccess(user: AuthenticatedUser): void {
-    const isAuthorized = user.roles.some((r) =>
-      AUTHORIZED_REPORT_ROLES.includes(r)
-    );
-    if (!isAuthorized) {
-      throw new ForbiddenError(
-        "Operational reporting and exports are restricted to authorized Administrators, HR, and Managers."
-      );
+interface RecordedPayoutProfile {
+  isPaid: boolean | null;
+  stipendAmount: number | null;
+}
+
+/**
+ * Reads the staff-entered payout profile stored after the `PAYROLL_PROFILE:` marker
+ * in `Employee.internalNotes`. The JSON object is extracted with a string-aware
+ * brace scan (so values containing `}` do not truncate it). Missing or malformed
+ * data yields `null` fields — never a default amount.
+ */
+export function readRecordedPayoutProfile(
+  internalNotes: string | null | undefined
+): RecordedPayoutProfile {
+  const empty: RecordedPayoutProfile = { isPaid: null, stipendAmount: null };
+  if (!internalNotes) return empty;
+  const block = locatePayoutProfileBlock(internalNotes);
+  if (!block) return empty;
+
+  try {
+    const parsed: unknown = JSON.parse(block.json);
+    if (typeof parsed !== "object" || parsed === null) return empty;
+    const record = parsed as Record<string, unknown>;
+    const amount = record.stipendAmount;
+    return {
+      isPaid: typeof record.isPaid === "boolean" ? record.isPaid : null,
+      stipendAmount:
+        typeof amount === "number" && Number.isFinite(amount) && amount >= 0 ? amount : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+/**
+ * Sums the amounts snapshotted at disbursement for PAID records; records without a
+ * recorded amount are counted, never guessed from the current payout profile.
+ */
+function summarisePaidRecords(
+  records: Array<{ status: string; disbursedAmount: { toNumber(): number } | null }>
+): { disbursed: number; paid: number; unpaid: number; paidWithoutRecordedAmount: number } {
+  let disbursed = 0;
+  let paid = 0;
+  let unpaid = 0;
+  let paidWithoutRecordedAmount = 0;
+  for (const rec of records) {
+    if (rec.status !== "PAID") {
+      unpaid++;
+      continue;
     }
+    paid++;
+    if (rec.disbursedAmount == null) {
+      paidWithoutRecordedAmount++;
+    } else {
+      disbursed += rec.disbursedAmount.toNumber();
+    }
+  }
+  return { disbursed, paid, unpaid, paidWithoutRecordedAmount };
+}
+
+export class ReportService {
+  /** Reports require the granular `canReports` permission (ADMIN always passes). */
+  private async assertReportAccess(user: AuthenticatedUser): Promise<void> {
+    await assertPermission(user, "canReports");
   }
 
   private buildDateWindow(
@@ -89,8 +145,14 @@ export class ReportService {
     user: AuthenticatedUser,
     rawFilters: ReportFilterInput = {}
   ): Promise<ComprehensiveOperationsReport> {
-    this.assertReportAccess(user);
+    await this.assertReportAccess(user);
+    return this.buildOperationsReport(user, rawFilters);
+  }
 
+  private async buildOperationsReport(
+    user: AuthenticatedUser,
+    rawFilters: ReportFilterInput
+  ): Promise<ComprehensiveOperationsReport> {
     const parsed = ReportFilterSchema.safeParse(rawFilters);
     if (!parsed.success) {
       throw new ValidationError(
@@ -311,9 +373,11 @@ export class ReportService {
     user: AuthenticatedUser,
     rawFilters: ReportFilterInput = {}
   ): Promise<ComprehensiveAnalyticsDashboardData> {
-    this.assertReportAccess(user);
+    await this.assertReportAccess(user);
+    // Payroll figures are only included for viewers who also hold `canPayroll`.
+    const { canPayroll } = await getUserPermissions(user.id, user.roles);
 
-    const opsReport = await this.getOperationsReport(user, rawFilters);
+    const opsReport = await this.buildOperationsReport(user, rawFilters);
 
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
@@ -330,13 +394,12 @@ export class ReportService {
       allApplications,
       allPayrollPeriods,
     ] = await Promise.all([
-      prisma.opening.count({ where: { status: "PUBLISHED" } }).catch(() => 0),
+      prisma.opening.count({ where: { status: "PUBLISHED" } }),
       prisma.attendanceRecord
         .findMany({
           select: { status: true, date: true },
-        })
-        .catch(() => []),
-      prisma.attendanceRegularization.count({ where: { status: "PENDING" } }).catch(() => 0),
+        }),
+      prisma.attendanceRegularization.count({ where: { status: "PENDING" } }),
       prisma.leaveRequest
         .findMany({
           select: {
@@ -345,55 +408,54 @@ export class ReportService {
             endDate: true,
             leaveType: { select: { name: true } },
           },
-        })
-        .catch(() => []),
-      prisma.payrollPeriod
-        .findFirst({
-          orderBy: { startDate: "desc" },
-          include: {
-            records: {
-              select: {
-                status: true,
-                disbursementReference: true,
-                employee: { select: { designation: true, internalNotes: true } },
+        }),
+      canPayroll
+        ? prisma.payrollPeriod
+            .findFirst({
+              orderBy: { startDate: "desc" },
+              include: {
+                records: {
+                  select: {
+                    status: true,
+                    disbursedAmount: true,
+                  },
+                },
               },
-            },
-          },
-        })
-        .catch(() => null),
+            })
+        : Promise.resolve(null),
       prisma.employee
         .findMany({
           select: {
             designation: true,
             department: true,
-            internalNotes: true,
+            // Payout profiles live in internalNotes; only read them for payroll viewers.
+            internalNotes: canPayroll,
             status: true,
           },
-        })
-        .catch(() => []),
-      prisma.siteVisitor.count().catch(() => 0),
+        }),
+      prisma.siteVisitor.count(),
       prisma.application
         .findMany({
           select: {
             createdAt: true,
             status: true,
           },
-        })
-        .catch(() => []),
-      prisma.payrollPeriod
-        .findMany({
-          orderBy: { startDate: "desc" },
-          take: 5,
-          include: {
-            records: {
-              select: {
-                status: true,
-                employee: { select: { internalNotes: true } },
+        }),
+      canPayroll
+        ? prisma.payrollPeriod
+            .findMany({
+              orderBy: { startDate: "desc" },
+              take: 5,
+              include: {
+                records: {
+                  select: {
+                    status: true,
+                    disbursedAmount: true,
+                  },
+                },
               },
-            },
-          },
-        })
-        .catch(() => []),
+            })
+        : Promise.resolve([]),
     ]);
 
     // 1. Funnel Stages Breakdown
@@ -499,9 +561,10 @@ export class ReportService {
       })),
     };
 
-    // 4. Payroll Analytics
+    // 4. Workforce composition and (permission-gated) payroll analytics
     let paidWorkforceCount = 0;
     let unpaidWorkforceCount = 0;
+    let payoutNotConfiguredCount = 0;
     let fullTimeCount = 0;
     let internCount = 0;
 
@@ -512,66 +575,40 @@ export class ReportService {
       if (isIntern) internCount++;
       else fullTimeCount++;
 
-      let isPaid = true;
-      if (emp.internalNotes?.includes("PAYROLL_PROFILE:")) {
-        try {
-          const match = emp.internalNotes.match(/PAYROLL_PROFILE:(\{.*?\})/);
-          if (match && match[1]) {
-            const parsed = JSON.parse(match[1]);
-            if (parsed.isPaid !== undefined) isPaid = Boolean(parsed.isPaid);
-          }
-        } catch {}
+      if (canPayroll) {
+        // Only explicit, staff-recorded payout flags are counted; nothing is assumed.
+        const { isPaid } = readRecordedPayoutProfile(emp.internalNotes);
+        if (isPaid === true) paidWorkforceCount++;
+        else if (isPaid === false) unpaidWorkforceCount++;
+        else payoutNotConfiguredCount++;
       }
-
-      if (isPaid) paidWorkforceCount++;
-      else unpaidWorkforceCount++;
     }
 
-    let disbursedTotal = 0;
-    let paidRecordsCount = 0;
-    let pendingRecordsCount = 0;
-    const activeCycleCode = latestPayrollPeriod?.code || "2026-10";
-    const cycleStatus = latestPayrollPeriod?.status || "DRAFT";
-    const totalEnrolled = latestPayrollPeriod?.records.length || 0;
+    const latestSummary = summarisePaidRecords(latestPayrollPeriod?.records ?? []);
+    const totalEnrolled = latestPayrollPeriod?.records.length ?? 0;
 
-    if (latestPayrollPeriod) {
-      for (const rec of latestPayrollPeriod.records) {
-        if (rec.status === "PAID") {
-          paidRecordsCount++;
-          let amt = 35000;
-          if (rec.employee?.internalNotes?.includes("PAYROLL_PROFILE:")) {
-            try {
-              const match = rec.employee.internalNotes.match(/PAYROLL_PROFILE:(\{.*?\})/);
-              if (match && match[1]) {
-                const parsed = JSON.parse(match[1]);
-                amt = parsed.stipendAmount ?? 35000;
-              }
-            } catch {}
-          }
-          disbursedTotal += amt;
-        } else {
-          pendingRecordsCount++;
+    const payroll: PayrollAnalytics | null = canPayroll
+      ? {
+          activeCycleCode: latestPayrollPeriod?.code ?? null,
+          cycleStatus: latestPayrollPeriod?.status ?? null,
+          totalEnrolled,
+          paidCount: latestSummary.paid,
+          pendingCount: latestSummary.unpaid,
+          disbursedAmount: latestSummary.disbursed,
+          paidWithoutRecordedAmount: latestSummary.paidWithoutRecordedAmount,
+          paidWorkforce: paidWorkforceCount,
+          unpaidWorkforce: unpaidWorkforceCount,
+          payoutNotConfigured: payoutNotConfiguredCount,
         }
-      }
-    }
+      : null;
 
-    const payroll: PayrollAnalytics = {
-      activeCycleCode,
-      cycleStatus,
-      totalEnrolled,
-      paidCount: paidRecordsCount,
-      pendingCount: pendingRecordsCount,
-      disbursedAmount: disbursedTotal,
-      paidWorkforce: paidWorkforceCount,
-      unpaidWorkforce: unpaidWorkforceCount,
-    };
-
-    // 5. Platform Telemetry
-    const uniqueVisitors = Math.max(visitorCount, 1);
+    // 5. Platform Telemetry (raw count of recorded visitor rows; no baseline)
+    const uniqueVisitors = visitorCount;
     const telemetry: PlatformTelemetry = {
       uniqueVisitors,
       totalApplications: totalApps,
-      conversionRate: Math.round((totalApps / uniqueVisitors) * 100),
+      conversionRate:
+        uniqueVisitors > 0 ? Math.round((totalApps / uniqueVisitors) * 100) : 0,
     };
 
     // 6. KPIs
@@ -587,12 +624,15 @@ export class ReportService {
       activeEmployees: activeStaff,
       fullTimeCount,
       internCount,
-      paidWorkforceCount,
-      unpaidWorkforceCount,
-      payrollDisbursedAmount: disbursedTotal,
-      activePayrollCycle: activeCycleCode,
-      payrollCompletionRate:
-        totalEnrolled > 0 ? Math.round((paidRecordsCount / totalEnrolled) * 100) : 0,
+      paidWorkforceCount: payroll ? payroll.paidWorkforce : null,
+      unpaidWorkforceCount: payroll ? payroll.unpaidWorkforce : null,
+      payrollDisbursedAmount: payroll ? payroll.disbursedAmount : null,
+      activePayrollCycle: payroll ? payroll.activeCycleCode : null,
+      payrollCompletionRate: payroll
+        ? totalEnrolled > 0
+          ? Math.round((payroll.paidCount / totalEnrolled) * 100)
+          : 0
+        : null,
       todayAttendancePresent: todayPresent,
       todayOnLeave,
       pendingLeavesCount: pendingLeaves,
@@ -717,45 +757,19 @@ export class ReportService {
       });
     }
 
-    const payrollCycleTrends: PayrollCycleTrend[] = [];
-    if (allPayrollPeriods && allPayrollPeriods.length > 0) {
-      for (const p of allPayrollPeriods.slice(0, 5)) {
-        let pDisbursed = 0;
-        let pPaid = 0;
-        let pUnpaid = 0;
-        for (const r of p.records) {
-          if (r.status === "PAID") {
-            pPaid++;
-            let amt = 35000;
-            if (r.employee?.internalNotes?.includes("PAYROLL_PROFILE:")) {
-              try {
-                const match = r.employee.internalNotes.match(/PAYROLL_PROFILE:(\{.*?\})/);
-                if (match && match[1]) {
-                  const parsed = JSON.parse(match[1]);
-                  amt = parsed.stipendAmount ?? 35000;
-                }
-              } catch {}
-            }
-            pDisbursed += amt;
-          } else {
-            pUnpaid++;
-          }
-        }
-        payrollCycleTrends.push({
+    // Only real payroll periods are charted; with no periods the chart is empty.
+    const payrollCycleTrends: PayrollCycleTrend[] = allPayrollPeriods
+      .slice(0, 5)
+      .map((p) => {
+        const summary = summarisePaidRecords(p.records);
+        return {
           cycle: p.code,
-          disbursedAmount: pDisbursed,
-          paidCount: pPaid,
-          unpaidCount: pUnpaid,
-        });
-      }
-    } else {
-      payrollCycleTrends.push({
-        cycle: activeCycleCode,
-        disbursedAmount: disbursedTotal,
-        paidCount: paidRecordsCount,
-        unpaidCount: pendingRecordsCount,
+          disbursedAmount: summary.disbursed,
+          paidCount: summary.paid,
+          unpaidCount: summary.unpaid,
+          paidWithoutRecordedAmount: summary.paidWithoutRecordedAmount,
+        };
       });
-    }
 
     const charts: AnalyticsChartsData = {
       monthlyRecruitmentTrends,
@@ -789,7 +803,7 @@ export class ReportService {
     user: AuthenticatedUser,
     rawInput: ExportReportInput
   ): Promise<ReportCsvExportResult> {
-    this.assertReportAccess(user);
+    await this.assertReportAccess(user);
 
     const parsed = ExportReportSchema.safeParse(rawInput);
     if (!parsed.success) {
@@ -920,7 +934,8 @@ export class ReportService {
           },
           onboarding: { select: { status: true } },
           idCard: { select: { status: true, cardNumber: true } },
-          certificate: { select: { status: true, verificationCode: true } },
+          // Verification codes grant public access to certificate details; never exported.
+          certificate: { select: { status: true } },
         },
         orderBy: { createdAt: "desc" },
       });
@@ -936,7 +951,6 @@ export class ReportService {
         "IdCardStatus",
         "IdCardNumber",
         "CertificateStatus",
-        "CertificateVerificationCode",
       ];
 
       rows = enrollments.map((enr) => [
@@ -950,7 +964,6 @@ export class ReportService {
         escapeCsvCell(enr.idCard?.status ?? "NOT_ISSUED"),
         escapeCsvCell(enr.idCard?.cardNumber ?? ""),
         escapeCsvCell(enr.certificate?.status ?? "NOT_ISSUED"),
-        escapeCsvCell(enr.certificate?.verificationCode ?? ""),
       ]);
     } else {
       // EMPLOYEE_HEADCOUNT: Strictly omit personalPhone, emergencyContact, internalNotes

@@ -55,6 +55,16 @@ export interface OutboxProcessingSummary {
   exhaustedMaxAttempts: number;
 }
 
+/** Claims older than this are treated as abandoned by a crashed worker. */
+export const STALE_CLAIM_MS = 10 * 60 * 1000;
+
+export type OutboxRecordOutcome =
+  | "SENT"
+  | "FAILED"
+  | "SKIPPED_SENT"
+  | "SKIPPED_CLAIMED"
+  | "EXHAUSTED";
+
 /**
  * Durable NotificationOutbox processor with idempotent email delivery and bounded retries.
  */
@@ -133,8 +143,13 @@ export class OutboxProcessorService {
   /**
    * Processes a single outbox record idempotently.
    * Never re-sends a notification that is already marked SENT or has exhausted maxAttempts.
+   * The row is claimed with a conditional update, so two concurrent workers can never
+   * both send the same notification.
    */
-  public async processSingleRecord(outboxId: string): Promise<"SENT" | "FAILED" | "SKIPPED_SENT" | "EXHAUSTED"> {
+  public async processSingleRecord(
+    outboxId: string,
+    nowMs = Date.now()
+  ): Promise<OutboxRecordOutcome> {
     const record = await prisma.notificationOutbox.findUnique({
       where: { id: outboxId },
     });
@@ -148,20 +163,42 @@ export class OutboxProcessorService {
       return "SKIPPED_SENT";
     }
 
-    // Bounded retry guard
+    // Bounded retry guard: park exhausted rows so they stop blocking the queue
     if (record.attempts >= record.maxAttempts) {
+      if (record.status !== "DEAD_LETTER") {
+        await prisma.notificationOutbox.updateMany({
+          where: { id: record.id, status: record.status },
+          data: { status: "DEAD_LETTER" },
+        });
+      }
       return "EXHAUSTED";
+    }
+
+    const isStaleClaim =
+      record.status === "PROCESSING" &&
+      (record.claimedAt === null || nowMs - record.claimedAt.getTime() > STALE_CLAIM_MS);
+    if (record.status === "PROCESSING" && !isStaleClaim) {
+      return "SKIPPED_CLAIMED";
     }
 
     const nextAttemptCount = record.attempts + 1;
 
-    await prisma.notificationOutbox.update({
-      where: { id: record.id },
+    const claim = await prisma.notificationOutbox.updateMany({
+      where: {
+        id: record.id,
+        status: record.status,
+        attempts: record.attempts,
+      },
       data: {
         status: "PROCESSING",
         attempts: nextAttemptCount,
+        claimedAt: new Date(nowMs),
       },
     });
+
+    if (claim.count === 0) {
+      return "SKIPPED_CLAIMED";
+    }
 
     const rendered = this.renderTemplate(record.templateName, record.payload);
 
@@ -190,7 +227,7 @@ export class OutboxProcessorService {
       await prisma.notificationOutbox.update({
         where: { id: record.id },
         data: {
-          status: "FAILED",
+          status: nextAttemptCount >= record.maxAttempts ? "DEAD_LETTER" : "FAILED",
           lastError: errorMessage.slice(0, 500),
         },
       });
@@ -200,14 +237,22 @@ export class OutboxProcessorService {
   }
 
   public async processPendingBatch(
-    batchSize = 20
+    batchSize = 20,
+    nowMs = Date.now()
   ): Promise<OutboxProcessingSummary> {
     const candidates = await prisma.notificationOutbox.findMany({
       where: {
-        status: { in: ["PENDING", "FAILED"] },
+        OR: [
+          { status: { in: ["PENDING", "FAILED"] } },
+          {
+            status: "PROCESSING",
+            claimedAt: { lt: new Date(nowMs - STALE_CLAIM_MS) },
+          },
+        ],
       },
       orderBy: { createdAt: "asc" },
       take: batchSize,
+      select: { id: true },
     });
 
     const summary: OutboxProcessingSummary = {
@@ -219,11 +264,11 @@ export class OutboxProcessorService {
     };
 
     for (const item of candidates) {
-      const outcome = await this.processSingleRecord(item.id);
+      const outcome = await this.processSingleRecord(item.id, nowMs);
       summary.processed += 1;
       if (outcome === "SENT") summary.sent += 1;
       else if (outcome === "FAILED") summary.failed += 1;
-      else if (outcome === "SKIPPED_SENT") summary.skippedAlreadySent += 1;
+      else if (outcome === "SKIPPED_SENT" || outcome === "SKIPPED_CLAIMED") summary.skippedAlreadySent += 1;
       else if (outcome === "EXHAUSTED") summary.exhaustedMaxAttempts += 1;
     }
 

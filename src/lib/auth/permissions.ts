@@ -16,6 +16,8 @@ export interface SubAdminPermissions {
   canManageSubAdmins: boolean;
 }
 
+export type SubAdminPermissionKey = keyof SubAdminPermissions;
+
 export const ALL_ADMIN_PERMISSIONS: SubAdminPermissions = {
   canApplications: true,
   canOpenings: true,
@@ -122,12 +124,11 @@ export async function getUserPermissions(
     return NO_PERMISSIONS;
   }
 
-  // 3. Query customized database permissions
-  const custom = await prisma.subAdminPermission
-    .findUnique({
-      where: { userId },
-    })
-    .catch(() => null);
+  // 3. Query customized database permissions. Errors propagate so a database
+  // failure never silently grants the broader role defaults.
+  const custom = await prisma.subAdminPermission.findUnique({
+    where: { userId },
+  });
 
   if (custom) {
     return {

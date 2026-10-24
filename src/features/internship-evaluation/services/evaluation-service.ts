@@ -1,25 +1,41 @@
 import crypto from "node:crypto";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { AuthenticatedUser } from "@/lib/auth/guards";
+import type { AuthenticatedUser } from "@/lib/auth/guards";
 import {
-  Role,
   ApplicationStatus,
   EvaluationStatus,
   CheckpointStatus,
   OnboardingStatus,
   IdCardStatus,
+  OpeningType,
   Prisma,
 } from "@prisma/client";
+import { VALID_APPLICATION_TRANSITIONS } from "@/features/recruitment/schemas";
 import { workingDayService, DEFAULT_WORKING_CALENDAR } from "./working-day-service";
+import {
+  assertEnrollmentInScope,
+  assertEvaluationAccess,
+  assertEvaluationDecisionAuthority,
+  enrollmentScopeWhere,
+  primaryActorRole,
+  rethrowUniqueAsConflict,
+  SUPERVISOR_ELIGIBLE_ROLES,
+} from "./enrollment-access";
 import {
   WorkingDayCalendarConfig,
   EvaluationEnrollmentDetail,
+  EvaluationEnrollmentListItem,
   OnboardingChecklistItem,
 } from "../types";
-import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
-
-const STAFF_ROLES: Role[] = [Role.ADMIN, Role.HR, Role.MENTOR, Role.MANAGER];
-const DECISION_ROLES: Role[] = [Role.ADMIN, Role.HR];
+import { CHECKPOINT_REVIEW_OUTCOMES } from "../schemas";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  PolicyBlockedError,
+  ValidationError,
+} from "@/lib/errors";
 
 const DEFAULT_CHECKPOINTS = [
   { day: 1, title: "Day 1: Orientation & Development Environment", desc: "Complete portal sign-in, repository setup, and local build verification." },
@@ -31,6 +47,7 @@ const DEFAULT_CHECKPOINTS = [
   { day: 7, title: "Day 7: Final Milestone Presentation & Supervised Review", desc: "Present final deliverable to mentor and complete 7-working-day evaluation." },
 ];
 
+// Default onboarding items are pending product-owner approval (POL-13 / OD-014); unchanged.
 const DEFAULT_ONBOARDING_CHECKLIST: OnboardingChecklistItem[] = [
   { id: "id-doc", label: "Government ID & Educational Records Verified", required: true, completed: false },
   { id: "nda-agree", label: "Confidentiality & Code of Conduct Signed", required: true, completed: false },
@@ -38,27 +55,103 @@ const DEFAULT_ONBOARDING_CHECKLIST: OnboardingChecklistItem[] = [
   { id: "mentor-assign", label: "Assigned Mentor Induction Completed", required: true, completed: false },
 ];
 
-export class EvaluationService {
-  private assertStaff(user: AuthenticatedUser): void {
-    const isStaff = user.roles.some((r) => STAFF_ROLES.includes(r));
-    if (!isStaff) throw new ForbiddenError("Staff authorization required.");
-  }
+// ---------------------------------------------------------------------------
+// Explicit state machines (BUG-05 / BUG-06)
+// ---------------------------------------------------------------------------
 
-  private assertDecisionAuthority(user: AuthenticatedUser): void {
-    const isDecision = user.roles.some((r) => DECISION_ROLES.includes(r));
-    if (!isDecision) throw new ForbiddenError("Administrative or HR authorization required.");
+/** Evaluation statuses from which a final PASSED / FAILED outcome may be recorded (once). */
+export const FINALIZABLE_EVALUATION_STATUSES: EvaluationStatus[] = [
+  EvaluationStatus.IN_PROGRESS,
+  EvaluationStatus.UNDER_REVIEW,
+  EvaluationStatus.EXTENDED,
+];
+
+/** Final outcomes; once recorded they cannot be changed or restarted. */
+export const FINAL_EVALUATION_OUTCOMES: EvaluationStatus[] = [
+  EvaluationStatus.PASSED,
+  EvaluationStatus.FAILED,
+];
+
+/** Checkpoint statuses the intern may submit (or resubmit) notes from. REVIEWED is final for the intern. */
+export const CHECKPOINT_SUBMITTABLE_STATUSES: CheckpointStatus[] = [
+  CheckpointStatus.PENDING,
+  CheckpointStatus.SUBMITTED,
+  CheckpointStatus.BLOCKED,
+];
+
+/**
+ * Checkpoint statuses a supervisor may review from while the evaluation runs. The daily
+ * checkpoint review is supervisor-led, so a PENDING checkpoint (no intern notes yet) can be
+ * reviewed directly; amending an existing review is allowed too. Every review records an
+ * explicitly chosen outcome and is audit-logged with the previous status.
+ */
+export const CHECKPOINT_REVIEWABLE_STATUSES: CheckpointStatus[] = [
+  CheckpointStatus.PENDING,
+  CheckpointStatus.SUBMITTED,
+  CheckpointStatus.REVIEWED,
+  CheckpointStatus.BLOCKED,
+];
+
+const OnboardingChecklistItemsSchema = z.array(
+  z.object({
+    id: z.string(),
+    label: z.string(),
+    description: z.string().optional(),
+    required: z.boolean(),
+    completed: z.boolean(),
+    verifiedAt: z.string().nullable().optional(),
+    verifiedBy: z.string().nullable().optional(),
+    verifiedById: z.string().nullable().optional(),
+  })
+);
+
+function parseOnboardingItems(value: Prisma.JsonValue): OnboardingChecklistItem[] {
+  const parsed = OnboardingChecklistItemsSchema.safeParse(value ?? []);
+  if (!parsed.success) {
+    // Stored data does not match the expected shape: internal integrity failure.
+    throw new Error("Stored onboarding checklist has an unexpected format.");
+  }
+  return parsed.data;
+}
+
+/**
+ * Provisional intern ID card number (POL-10 / OD-014): neutral prefix plus a random suffix.
+ * The official numbering series has not been approved and must replace this format.
+ */
+function generateProvisionalCardNumber(): string {
+  return `IDC-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+}
+
+export interface IssueIdCardResult {
+  cardNumber: string;
+  alreadyIssued: boolean;
+  reissued: boolean;
+}
+
+export class EvaluationService {
+  private async assertSupervisorEligible(supervisorId: string, candidateUserId: string): Promise<void> {
+    if (supervisorId === candidateUserId) {
+      throw new ValidationError("The candidate cannot supervise their own evaluation.");
+    }
+    const supervisor = await prisma.user.findUnique({
+      where: { id: supervisorId },
+      select: { id: true, roles: { select: { role: true } } },
+    });
+    if (!supervisor || !supervisor.roles.some((r) => SUPERVISOR_ELIGIBLE_ROLES.includes(r.role))) {
+      throw new ValidationError("The selected supervisor must be a staff member.");
+    }
   }
 
   /**
-   * Enrolls a selected candidate into the 7-working-day supervised evaluation pipeline.
-   * Status defaults safely to PENDING_TRIGGER pending approved start trigger policy (OD-001).
+   * Enrolls a selected internship candidate into the supervised evaluation pipeline.
+   * Status defaults safely to PENDING_TRIGGER pending the approved start trigger policy (OD-001).
    */
   async enrollCandidate(
     user: AuthenticatedUser,
     applicationId: string,
     supervisorId?: string
-  ): Promise<{ enrollmentId: string }> {
-    this.assertDecisionAuthority(user);
+  ): Promise<{ enrollmentId: string; created: boolean }> {
+    await assertEvaluationDecisionAuthority(user);
 
     const app = await prisma.application.findUnique({
       where: { id: applicationId },
@@ -71,75 +164,114 @@ export class EvaluationService {
 
     if (!app) throw new NotFoundError("Application record not found.");
     if (app.enrollment) {
-      return { enrollmentId: app.enrollment.id };
+      return { enrollmentId: app.enrollment.id, created: false };
     }
 
-    const enrollment = await prisma.$transaction(async (tx) => {
-      const createdEnrollment = await tx.internshipEnrollment.create({
-        data: {
-          applicationId: app.id,
-          userId: app.candidate.userId,
-          supervisorId: supervisorId || null,
-          status: EvaluationStatus.PENDING_TRIGGER,
-          workingDaysTarget: 7,
-        },
-      });
+    if (app.opening.type !== OpeningType.INTERNSHIP) {
+      throw new ValidationError("Only internship applications can enter the supervised evaluation.");
+    }
+    if (app.candidate.userId === user.id) {
+      throw new ForbiddenError("You cannot enroll your own application.");
+    }
 
-      // Scaffold 7 checkpoint records
-      for (const cp of DEFAULT_CHECKPOINTS) {
-        await tx.evaluationCheckpoint.create({
+    const needsTransition = app.status !== ApplicationStatus.EVALUATION_SELECTED;
+    if (
+      needsTransition &&
+      !VALID_APPLICATION_TRANSITIONS[app.status].includes(ApplicationStatus.EVALUATION_SELECTED)
+    ) {
+      throw new ValidationError(
+        `An application in status ${app.status} cannot be moved to EVALUATION_SELECTED.`
+      );
+    }
+
+    if (supervisorId) {
+      await this.assertSupervisorEligible(supervisorId, app.candidate.userId);
+    }
+
+    try {
+      const enrollment = await prisma.$transaction(async (tx) => {
+        if (needsTransition) {
+          const moved = await tx.application.updateMany({
+            where: { id: app.id, status: app.status },
+            data: { status: ApplicationStatus.EVALUATION_SELECTED },
+          });
+          if (moved.count !== 1) {
+            throw new ConflictError("The application status changed. Please reload and try again.");
+          }
+
+          await tx.applicationStatusHistory.create({
+            data: {
+              applicationId: app.id,
+              fromStatus: app.status,
+              toStatus: ApplicationStatus.EVALUATION_SELECTED,
+              actorId: user.id,
+              internalNotes: "Candidate selected for the 7-working-day supervised evaluation.",
+              candidateMessage:
+                "You have been selected for the GARA Innovation 7-working-day supervised evaluation period.",
+            },
+          });
+        }
+
+        const createdEnrollment = await tx.internshipEnrollment.create({
           data: {
+            applicationId: app.id,
+            userId: app.candidate.userId,
+            supervisorId: supervisorId ?? null,
+            status: EvaluationStatus.PENDING_TRIGGER,
+            workingDaysTarget: 7,
+          },
+        });
+
+        await tx.evaluationCheckpoint.createMany({
+          data: DEFAULT_CHECKPOINTS.map((cp) => ({
             enrollmentId: createdEnrollment.id,
             dayNumber: cp.day,
             title: cp.title,
             description: cp.desc,
             status: CheckpointStatus.PENDING,
-          },
-        });
-      }
-
-      // Update application status to EVALUATION_SELECTED
-      if (app.status !== ApplicationStatus.EVALUATION_SELECTED) {
-        await tx.application.update({
-          where: { id: app.id },
-          data: { status: ApplicationStatus.EVALUATION_SELECTED },
+          })),
         });
 
-        await tx.applicationStatusHistory.create({
+        await tx.notificationOutbox.create({
           data: {
-            applicationId: app.id,
-            fromStatus: app.status,
-            toStatus: ApplicationStatus.EVALUATION_SELECTED,
-            actorId: user.id,
-            internalNotes: `Candidate selected for 7-working-day supervised evaluation. Enrollment ID: ${createdEnrollment.id}`,
-            candidateMessage: `Congratulations! You have been selected for the GARA Innovation 7-working-day supervised evaluation period.`,
+            recipientEmail: app.candidate.user.email,
+            templateName: "EVALUATION_SELECTION_NOTIFICATION",
+            payload: {
+              candidateName: app.candidate.user.name,
+              openingTitle: app.opening.title,
+              workingDays: 7,
+            },
+            status: "PENDING",
           },
         });
-      }
 
-      // Queue candidate notification
-      await tx.notificationOutbox.create({
-        data: {
-          recipientEmail: app.candidate.user.email,
-          templateName: "EVALUATION_SELECTION_NOTIFICATION",
-          payload: {
-            candidateName: app.candidate.user.name,
-            openingTitle: app.opening.title,
-            workingDays: 7,
+        await tx.auditLog.create({
+          data: {
+            actorId: user.id,
+            actorRole: primaryActorRole(user),
+            action: "EVALUATION_ENROLLED",
+            resourceType: "InternshipEnrollment",
+            resourceId: createdEnrollment.id,
+            diffPayload: {
+              applicationId: app.id,
+              applicationFromStatus: app.status,
+              supervisorId: supervisorId ?? null,
+            },
           },
-          status: "PENDING",
-        },
+        });
+
+        return createdEnrollment;
       });
 
-      return createdEnrollment;
-    });
-
-    return { enrollmentId: enrollment.id };
+      return { enrollmentId: enrollment.id, created: true };
+    } catch (error) {
+      rethrowUniqueAsConflict(error, "This application is already enrolled in an evaluation.");
+    }
   }
 
   /**
    * Explicitly triggers the start of the 7-working-day evaluation window (OD-001).
-   * Computes the 7th working day end date via workingDayService (OD-002).
+   * Only PENDING_TRIGGER → IN_PROGRESS is allowed; a started or finalized evaluation is never reset.
    */
   async triggerEvaluationStart(
     user: AuthenticatedUser,
@@ -147,7 +279,7 @@ export class EvaluationService {
     startDate: Date,
     calendar: WorkingDayCalendarConfig = DEFAULT_WORKING_CALENDAR
   ): Promise<{ startDate: Date; endDate: Date }> {
-    this.assertStaff(user);
+    const access = await assertEvaluationAccess(user);
 
     const enrollment = await prisma.internshipEnrollment.findUnique({
       where: { id: enrollmentId },
@@ -155,13 +287,19 @@ export class EvaluationService {
         application: {
           include: {
             candidate: { include: { user: true } },
-            opening: true,
           },
         },
       },
     });
 
     if (!enrollment) throw new NotFoundError("Evaluation enrollment not found.");
+    assertEnrollmentInScope(access, user, enrollment);
+
+    if (enrollment.status !== EvaluationStatus.PENDING_TRIGGER) {
+      throw new ConflictError(
+        `The evaluation can only be started once. Current status: ${enrollment.status}.`
+      );
+    }
 
     const computedEndDate = workingDayService.addWorkingDays(
       startDate,
@@ -170,20 +308,24 @@ export class EvaluationService {
     );
 
     await prisma.$transaction(async (tx) => {
-      await tx.internshipEnrollment.update({
-        where: { id: enrollment.id },
+      const started = await tx.internshipEnrollment.updateMany({
+        where: { id: enrollment.id, status: EvaluationStatus.PENDING_TRIGGER },
         data: {
           startDate,
           endDate: computedEndDate,
           status: EvaluationStatus.IN_PROGRESS,
         },
       });
+      if (started.count !== 1) {
+        throw new ConflictError("The evaluation was already started. Please reload the page.");
+      }
 
+      // The application status is unchanged; the row records the evaluation start on the timeline.
       await tx.applicationStatusHistory.create({
         data: {
           applicationId: enrollment.applicationId,
-          fromStatus: ApplicationStatus.EVALUATION_SELECTED,
-          toStatus: ApplicationStatus.EVALUATION_SELECTED,
+          fromStatus: enrollment.application.status,
+          toStatus: enrollment.application.status,
           actorId: user.id,
           internalNotes: `Evaluation started on ${startDate.toDateString()}. 7-working-day end date scheduled for ${computedEndDate.toDateString()}.`,
           candidateMessage: `Your 7-working-day supervised evaluation has commenced. End date: ${computedEndDate.toLocaleDateString()}.`,
@@ -202,64 +344,148 @@ export class EvaluationService {
           status: "PENDING",
         },
       });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: primaryActorRole(user),
+          action: "EVALUATION_STARTED",
+          resourceType: "InternshipEnrollment",
+          resourceId: enrollment.id,
+          diffPayload: {
+            fromStatus: EvaluationStatus.PENDING_TRIGGER,
+            toStatus: EvaluationStatus.IN_PROGRESS,
+            startDate: startDate.toISOString(),
+            endDate: computedEndDate.toISOString(),
+          },
+        },
+      });
     });
 
     return { startDate, endDate: computedEndDate };
   }
 
   /**
-   * Intern submits daily progress report for a checkpoint.
+   * Intern submits (or resubmits) notes for a daily checkpoint of their own running evaluation.
    */
   async submitCheckpoint(
     user: AuthenticatedUser,
     checkpointId: string,
     submissionNotes: string
-  ): Promise<void> {
+  ): Promise<{ enrollmentId: string }> {
     const cp = await prisma.evaluationCheckpoint.findUnique({
       where: { id: checkpointId },
       include: { enrollment: true },
     });
 
     if (!cp) throw new NotFoundError("Checkpoint not found.");
-    if (cp.enrollment.userId !== user.id && !user.roles.includes(Role.ADMIN)) {
+    if (cp.enrollment.userId !== user.id) {
       throw new ForbiddenError("You can only submit checkpoints for your own evaluation.");
     }
+    if (cp.enrollment.status !== EvaluationStatus.IN_PROGRESS) {
+      throw new ValidationError("Checkpoint notes can only be submitted while the evaluation is in progress.");
+    }
+    if (!CHECKPOINT_SUBMITTABLE_STATUSES.includes(cp.status)) {
+      throw new ConflictError("This checkpoint has already been reviewed and can no longer be changed.");
+    }
 
-    await prisma.evaluationCheckpoint.update({
-      where: { id: checkpointId },
+    const result = await prisma.evaluationCheckpoint.updateMany({
+      where: {
+        id: cp.id,
+        status: cp.status,
+        enrollment: { status: EvaluationStatus.IN_PROGRESS },
+      },
       data: {
         submissionNotes,
         status: CheckpointStatus.SUBMITTED,
       },
     });
+    if (result.count !== 1) {
+      throw new ConflictError("The checkpoint changed while you were submitting. Please reload and try again.");
+    }
+
+    return { enrollmentId: cp.enrollmentId };
   }
 
   /**
-   * Supervisor or HR reviews checkpoint and leaves structured feedback.
+   * Supervisor or HR reviews a checkpoint (submitted by the intern or not) and leaves structured
+   * feedback with an explicit outcome. Every review (including amendments) is audit-logged with
+   * the previous status and feedback.
    */
   async reviewCheckpoint(
     user: AuthenticatedUser,
     checkpointId: string,
     feedback: string,
     status: CheckpointStatus
-  ): Promise<void> {
-    this.assertStaff(user);
+  ): Promise<{ enrollmentId: string }> {
+    if (!(CHECKPOINT_REVIEW_OUTCOMES as readonly CheckpointStatus[]).includes(status)) {
+      throw new ValidationError("Review status must be REVIEWED or BLOCKED.");
+    }
 
-    await prisma.evaluationCheckpoint.update({
+    const access = await assertEvaluationAccess(user);
+
+    const cp = await prisma.evaluationCheckpoint.findUnique({
       where: { id: checkpointId },
-      data: {
-        supervisorFeedback: feedback,
-        status,
-        reviewedById: user.id,
-        reviewedAt: new Date(),
-      },
+      include: { enrollment: true },
     });
+
+    if (!cp) throw new NotFoundError("Checkpoint not found.");
+    assertEnrollmentInScope(access, user, cp.enrollment);
+
+    if (cp.enrollment.status !== EvaluationStatus.IN_PROGRESS) {
+      throw new ValidationError("Checkpoints can only be reviewed while the evaluation is in progress.");
+    }
+    if (!CHECKPOINT_REVIEWABLE_STATUSES.includes(cp.status)) {
+      throw new ConflictError(`A checkpoint in status ${cp.status} cannot be reviewed.`);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const reviewed = await tx.evaluationCheckpoint.updateMany({
+        where: {
+          id: cp.id,
+          status: cp.status,
+          enrollment: { status: EvaluationStatus.IN_PROGRESS },
+        },
+        data: {
+          supervisorFeedback: feedback,
+          status,
+          reviewedById: user.id,
+          reviewedAt: new Date(),
+        },
+      });
+      if (reviewed.count !== 1) {
+        throw new ConflictError("The checkpoint changed while you were reviewing. Please reload and try again.");
+      }
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: primaryActorRole(user),
+          action: "EVALUATION_CHECKPOINT_REVIEWED",
+          resourceType: "EvaluationCheckpoint",
+          resourceId: cp.id,
+          diffPayload: {
+            enrollmentId: cp.enrollmentId,
+            dayNumber: cp.dayNumber,
+            fromStatus: cp.status,
+            toStatus: status,
+            reviewedWithoutInternSubmission: cp.status === CheckpointStatus.PENDING,
+            previousFeedback: cp.supervisorFeedback,
+            feedback,
+          },
+        },
+      });
+    });
+
+    return { enrollmentId: cp.enrollmentId };
   }
 
   /**
-   * Finalizes the 7-working-day supervised evaluation.
-   * Gated: Only authorized HR or Admin can finalize pass/fail (OD-003).
-   * On approved pass, scaffolds intern onboarding checklist.
+   * Records the final evaluation outcome (OD-003: human decision by HR/Admin).
+   * Only a running evaluation can be finalized, and only once (PASSED / FAILED are final).
+   *
+   * POL-07: the outcome is recorded on the enrollment only. The application status, offers and
+   * the INTERN role are NOT changed here; those remain explicit staff actions (OD-003 / OD-020).
    */
   async finalizeEvaluation(
     user: AuthenticatedUser,
@@ -267,10 +493,16 @@ export class EvaluationService {
     status: EvaluationStatus,
     finalReviewNotes: string
   ): Promise<void> {
-    this.assertDecisionAuthority(user);
+    const access = await assertEvaluationDecisionAuthority(user);
 
-    if (status !== EvaluationStatus.PASSED && status !== EvaluationStatus.FAILED && status !== EvaluationStatus.EXTENDED) {
-      throw new ValidationError("Final status must be PASSED, FAILED, or EXTENDED.");
+    if (status === EvaluationStatus.EXTENDED) {
+      throw new PolicyBlockedError(
+        "OD-003",
+        "Evaluation extensions are not configured. Record PASSED or FAILED, or wait for an approved extension policy."
+      );
+    }
+    if (!FINAL_EVALUATION_OUTCOMES.includes(status)) {
+      throw new ValidationError("Final status must be PASSED or FAILED.");
     }
 
     const enrollment = await prisma.internshipEnrollment.findUnique({
@@ -286,10 +518,20 @@ export class EvaluationService {
     });
 
     if (!enrollment) throw new NotFoundError("Evaluation enrollment not found.");
+    assertEnrollmentInScope(access, user, enrollment);
+
+    if (enrollment.status === EvaluationStatus.PENDING_TRIGGER) {
+      throw new ValidationError("The evaluation has not started yet. Start it before recording a final outcome.");
+    }
+    if (!FINALIZABLE_EVALUATION_STATUSES.includes(enrollment.status)) {
+      throw new ConflictError(
+        `A final outcome (${enrollment.status}) has already been recorded for this evaluation.`
+      );
+    }
 
     await prisma.$transaction(async (tx) => {
-      await tx.internshipEnrollment.update({
-        where: { id: enrollment.id },
+      const finalized = await tx.internshipEnrollment.updateMany({
+        where: { id: enrollment.id, status: { in: FINALIZABLE_EVALUATION_STATUSES } },
         data: {
           status,
           finalReviewNotes,
@@ -297,25 +539,12 @@ export class EvaluationService {
           evaluatedAt: new Date(),
         },
       });
+      if (finalized.count !== 1) {
+        throw new ConflictError("A final outcome was already recorded for this evaluation. Please reload.");
+      }
 
       if (status === EvaluationStatus.PASSED) {
-        // Upgrade role to INTERN if not already present
-        await tx.userRole.upsert({
-          where: {
-            userId_role: {
-              userId: enrollment.userId,
-              role: Role.INTERN,
-            },
-          },
-          create: {
-            userId: enrollment.userId,
-            role: Role.INTERN,
-            assignedBy: user.id,
-          },
-          update: {},
-        });
-
-        // Scaffold Onboarding Checklist
+        // Scaffold the onboarding checklist so HR can verify the onboarding items.
         await tx.internOnboarding.upsert({
           where: { enrollmentId: enrollment.id },
           create: {
@@ -326,29 +555,22 @@ export class EvaluationService {
           },
           update: {},
         });
-
-        await tx.applicationStatusHistory.create({
-          data: {
-            applicationId: enrollment.applicationId,
-            fromStatus: ApplicationStatus.EVALUATION_SELECTED,
-            toStatus: ApplicationStatus.OFFERED,
-            actorId: user.id,
-            internalNotes: `Evaluation PASSED by ${user.name}. Final Review: ${finalReviewNotes}`,
-            candidateMessage: `Congratulations! You have successfully passed the 7-working-day supervised evaluation! Welcome to the GARA Innovation Internship programme.`,
-          },
-        });
-      } else if (status === EvaluationStatus.FAILED) {
-        await tx.applicationStatusHistory.create({
-          data: {
-            applicationId: enrollment.applicationId,
-            fromStatus: ApplicationStatus.EVALUATION_SELECTED,
-            toStatus: ApplicationStatus.REJECTED,
-            actorId: user.id,
-            internalNotes: `Evaluation FAILED. Reason: ${finalReviewNotes}`,
-            candidateMessage: `Thank you for participating in the 7-working-day evaluation. Regrettably, your submission did not meet the required milestone threshold.`,
-          },
-        });
       }
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: primaryActorRole(user),
+          action: "EVALUATION_FINALIZED",
+          resourceType: "InternshipEnrollment",
+          resourceId: enrollment.id,
+          diffPayload: {
+            fromStatus: enrollment.status,
+            toStatus: status,
+            finalReviewNotes,
+          },
+        },
+      });
 
       await tx.notificationOutbox.create({
         data: {
@@ -366,7 +588,7 @@ export class EvaluationService {
   }
 
   /**
-   * Updates an onboarding checklist item.
+   * Updates an onboarding checklist item. The JSON read-modify-write runs under a row lock.
    */
   async updateOnboardingChecklistItem(
     user: AuthenticatedUser,
@@ -374,40 +596,76 @@ export class EvaluationService {
     itemId: string,
     completed: boolean
   ): Promise<void> {
-    this.assertStaff(user);
+    const access = await assertEvaluationAccess(user);
 
-    const onboarding = await prisma.internOnboarding.findUnique({
-      where: { enrollmentId },
+    const enrollment = await prisma.internshipEnrollment.findUnique({
+      where: { id: enrollmentId },
+      select: { id: true, userId: true, supervisorId: true, status: true },
     });
 
-    if (!onboarding) throw new NotFoundError("Onboarding record not found.");
+    if (!enrollment) throw new NotFoundError("Enrollment record not found.");
+    assertEnrollmentInScope(access, user, enrollment);
 
-    const items = (onboarding.checklistItems ?? []) as unknown as OnboardingChecklistItem[];
-    const updatedItems = items.map((item) => {
-      if (item.id === itemId) {
-        return {
-          ...item,
-          completed,
-          verifiedAt: completed ? new Date().toISOString() : null,
-          verifiedBy: completed ? user.name : null,
-        };
+    if (enrollment.status !== EvaluationStatus.PASSED) {
+      throw new ValidationError("Onboarding is only available after the evaluation is recorded as PASSED.");
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // Serialize concurrent checklist edits for this enrollment.
+      await tx.$queryRaw`SELECT "id" FROM "intern_onboardings" WHERE "enrollmentId" = ${enrollmentId} FOR UPDATE`;
+
+      const onboarding = await tx.internOnboarding.findUnique({
+        where: { enrollmentId },
+      });
+      if (!onboarding) throw new NotFoundError("Onboarding record not found.");
+
+      const items = parseOnboardingItems(onboarding.checklistItems);
+      const target = items.find((item) => item.id === itemId);
+      if (!target) throw new NotFoundError("Onboarding checklist item not found.");
+      if (target.completed === completed) {
+        return;
       }
-      return item;
-    });
 
-    const allRequiredCompleted = updatedItems
-      .filter((i) => i.required)
-      .every((i) => i.completed);
+      const now = new Date();
+      const updatedItems = items.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              completed,
+              verifiedAt: completed ? now.toISOString() : null,
+              verifiedBy: completed ? user.name : null,
+              verifiedById: completed ? user.id : null,
+            }
+          : item
+      );
 
-    const newStatus = allRequiredCompleted ? OnboardingStatus.COMPLETED : OnboardingStatus.IN_PROGRESS;
+      const requiredItems = updatedItems.filter((i) => i.required);
+      const allRequiredCompleted = requiredItems.length > 0 && requiredItems.every((i) => i.completed);
 
-    await prisma.internOnboarding.update({
-      where: { enrollmentId },
-      data: {
-        checklistItems: updatedItems as unknown as Prisma.InputJsonValue,
-        status: newStatus,
-        completedAt: allRequiredCompleted ? new Date() : null,
-      },
+      await tx.internOnboarding.update({
+        where: { id: onboarding.id },
+        data: {
+          checklistItems: updatedItems as unknown as Prisma.InputJsonValue,
+          status: allRequiredCompleted ? OnboardingStatus.COMPLETED : OnboardingStatus.IN_PROGRESS,
+          completedAt: allRequiredCompleted ? now : null,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: primaryActorRole(user),
+          action: "ONBOARDING_ITEM_UPDATED",
+          resourceType: "InternOnboarding",
+          resourceId: onboarding.id,
+          diffPayload: {
+            enrollmentId,
+            itemId,
+            fromCompleted: target.completed,
+            toCompleted: completed,
+          },
+        },
+      });
     });
   }
 
@@ -419,86 +677,188 @@ export class EvaluationService {
    * 2. Onboarding MUST be fully COMPLETED.
    * 3. Must be authorized ADMIN or HR.
    * Never issue an ID card merely because 7 days elapsed!
+   *
+   * Idempotent: an already issued card is returned unchanged. Generating a new number for an
+   * existing card requires an explicit justification and is audit-logged.
+   *
+   * The gates are evaluated inside the transaction while the onboarding row is locked (the same
+   * lock `updateOnboardingChecklistItem` takes), so un-verifying an onboarding item concurrently
+   * cannot lose to issuance.
    */
   async approveAndIssueIdCard(
     user: AuthenticatedUser,
-    enrollmentId: string
-  ): Promise<{ cardNumber: string }> {
-    this.assertDecisionAuthority(user);
+    enrollmentId: string,
+    reissueReason?: string
+  ): Promise<IssueIdCardResult> {
+    const access = await assertEvaluationDecisionAuthority(user);
 
-    const enrollment = await prisma.internshipEnrollment.findUnique({
-      where: { id: enrollmentId },
-      include: {
-        onboarding: true,
-        user: true,
-      },
-    });
+    try {
+      return await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "intern_onboardings" WHERE "enrollmentId" = ${enrollmentId} FOR UPDATE`;
 
-    if (!enrollment) throw new NotFoundError("Enrollment record not found.");
-
-    // GATE 1: Evaluation must be passed
-    if (enrollment.status !== EvaluationStatus.PASSED) {
-      throw new ValidationError(
-        `[Policy Gate Violation]: Intern ID card cannot be issued because evaluation status is ${enrollment.status}. Evaluation must be approved as PASSED first.`
-      );
-    }
-
-    // GATE 2: Onboarding must be completed
-    if (enrollment.onboarding?.status !== OnboardingStatus.COMPLETED) {
-      throw new ValidationError(
-        `[Policy Gate Violation]: Intern ID card cannot be issued because onboarding checklist is not complete. Status: ${enrollment.onboarding?.status ?? "NOT_STARTED"}.`
-      );
-    }
-
-    const randomSuffix = crypto.randomBytes(3).toString("hex").toUpperCase();
-    const cardNumber = `GARA-INT-2026-${randomSuffix}`;
-
-    await prisma.$transaction(async (tx) => {
-      await tx.internIdCard.upsert({
-        where: { enrollmentId: enrollment.id },
-        create: {
-          enrollmentId: enrollment.id,
-          userId: enrollment.userId,
-          cardNumber,
-          status: IdCardStatus.ISSUED,
-          approvedById: user.id,
-          approvedAt: new Date(),
-          issuedAt: new Date(),
-        },
-        update: {
-          cardNumber,
-          status: IdCardStatus.ISSUED,
-          approvedById: user.id,
-          approvedAt: new Date(),
-          issuedAt: new Date(),
-        },
-      });
-
-      await tx.notificationOutbox.create({
-        data: {
-          recipientEmail: enrollment.user.email,
-          templateName: "ID_CARD_ISSUED_NOTIFICATION",
-          payload: {
-            cardNumber,
-            recipientName: enrollment.user.name,
-            issuedAt: new Date().toISOString(),
+        const enrollment = await tx.internshipEnrollment.findUnique({
+          where: { id: enrollmentId },
+          include: {
+            onboarding: true,
+            user: true,
+            idCard: true,
           },
-          status: "PENDING",
-        },
-      });
-    });
+        });
 
-    return { cardNumber };
+        if (!enrollment) throw new NotFoundError("Enrollment record not found.");
+        assertEnrollmentInScope(access, user, enrollment);
+
+        // GATE 1: Evaluation must be passed
+        if (enrollment.status !== EvaluationStatus.PASSED) {
+          throw new ValidationError(
+            `[Policy Gate Violation]: Intern ID card cannot be issued because evaluation status is ${enrollment.status}. Evaluation must be approved as PASSED first.`
+          );
+        }
+
+        // GATE 2: Onboarding must be completed
+        if (enrollment.onboarding?.status !== OnboardingStatus.COMPLETED) {
+          throw new ValidationError(
+            `[Policy Gate Violation]: Intern ID card cannot be issued because onboarding checklist is not complete. Status: ${enrollment.onboarding?.status ?? "NOT_STARTED"}.`
+          );
+        }
+
+        const existing = enrollment.idCard;
+        if (existing?.cardNumber && !reissueReason) {
+          if (existing.status === IdCardStatus.ISSUED) {
+            return { cardNumber: existing.cardNumber, alreadyIssued: true, reissued: false };
+          }
+          throw new ConflictError(
+            `An ID card number was already generated for this intern (status: ${existing.status}). Provide a justification to reissue it.`
+          );
+        }
+        if (reissueReason && !existing?.cardNumber) {
+          throw new ValidationError("There is no issued ID card to reissue.");
+        }
+
+        const cardNumber = generateProvisionalCardNumber();
+        const now = new Date();
+        const isReissue = Boolean(existing?.cardNumber);
+
+        let cardId = existing?.id ?? null;
+        if (!existing) {
+          const created = await tx.internIdCard.create({
+            data: {
+              enrollmentId: enrollment.id,
+              userId: enrollment.userId,
+              cardNumber,
+              status: IdCardStatus.ISSUED,
+              approvedById: user.id,
+              approvedAt: now,
+              issuedAt: now,
+            },
+            select: { id: true },
+          });
+          cardId = created.id;
+        } else {
+          const updated = await tx.internIdCard.updateMany({
+            where: { id: existing.id, cardNumber: existing.cardNumber },
+            data: {
+              cardNumber,
+              status: IdCardStatus.ISSUED,
+              approvedById: user.id,
+              approvedAt: now,
+              issuedAt: now,
+            },
+          });
+          if (updated.count !== 1) {
+            throw new ConflictError("The ID card changed while it was being issued. Please reload.");
+          }
+        }
+
+        await tx.auditLog.create({
+          data: {
+            actorId: user.id,
+            actorRole: primaryActorRole(user),
+            action: isReissue ? "ID_CARD_REISSUED" : "ID_CARD_ISSUED",
+            resourceType: "InternIdCard",
+            resourceId: cardId ?? enrollment.id,
+            diffPayload: {
+              enrollmentId: enrollment.id,
+              previousCardNumber: existing?.cardNumber ?? null,
+              previousStatus: existing?.status ?? null,
+              cardNumber,
+              reason: reissueReason ?? null,
+            },
+          },
+        });
+
+        await tx.notificationOutbox.create({
+          data: {
+            recipientEmail: enrollment.user.email,
+            templateName: "ID_CARD_ISSUED_NOTIFICATION",
+            payload: {
+              cardNumber,
+              recipientName: enrollment.user.name,
+              issuedAt: now.toISOString(),
+            },
+            status: "PENDING",
+          },
+        });
+
+        return { cardNumber, alreadyIssued: false, reissued: isReissue };
+      });
+    } catch (error) {
+      rethrowUniqueAsConflict(error, "An ID card was issued for this intern at the same time. Please reload.");
+    }
   }
 
   /**
-   * Retrieves full evaluation details for the cockpit.
+   * Lists enrollments visible to the staff member (all for ADMIN/HR, assigned ones for supervisors).
+   */
+  async listEnrollmentsForStaff(user: AuthenticatedUser): Promise<EvaluationEnrollmentListItem[]> {
+    const access = await assertEvaluationAccess(user);
+
+    const enrollments = await prisma.internshipEnrollment.findMany({
+      where: {
+        ...enrollmentScopeWhere(access, user),
+        // Staff never review their own enrollment.
+        userId: { not: user.id },
+      },
+      include: {
+        user: { select: { name: true, email: true } },
+        application: {
+          select: {
+            referenceCode: true,
+            opening: { select: { title: true, department: true } },
+          },
+        },
+        supervisor: { select: { name: true } },
+        checkpoints: { select: { status: true } },
+        idCard: { select: { cardNumber: true, status: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return enrollments.map((enr) => ({
+      id: enr.id,
+      referenceCode: enr.application.referenceCode,
+      candidateName: enr.user.name,
+      candidateEmail: enr.user.email,
+      openingTitle: enr.application.opening.title,
+      openingDepartment: enr.application.opening.department,
+      supervisorName: enr.supervisor?.name ?? null,
+      status: enr.status,
+      startDate: enr.startDate,
+      endDate: enr.endDate,
+      reviewedCheckpoints: enr.checkpoints.filter((c) => c.status === CheckpointStatus.REVIEWED).length,
+      totalCheckpoints: enr.checkpoints.length,
+      idCardNumber: enr.idCard?.cardNumber ?? null,
+    }));
+  }
+
+  /**
+   * Retrieves full evaluation details for the cockpit (record-level scoped).
    */
   async getEvaluationDetail(
     enrollmentId: string,
     user: AuthenticatedUser
   ): Promise<EvaluationEnrollmentDetail> {
-    this.assertStaff(user);
+    const access = await assertEvaluationAccess(user);
 
     const enrollment = await prisma.internshipEnrollment.findUnique({
       where: { id: enrollmentId },
@@ -537,6 +897,7 @@ export class EvaluationService {
     });
 
     if (!enrollment) throw new NotFoundError("Evaluation enrollment not found.");
+    assertEnrollmentInScope(access, user, enrollment);
 
     return {
       id: enrollment.id,
@@ -566,7 +927,7 @@ export class EvaluationService {
         ? {
             id: enrollment.onboarding.id,
             status: enrollment.onboarding.status,
-            checklistItems: (enrollment.onboarding.checklistItems ?? []) as unknown as OnboardingChecklistItem[],
+            checklistItems: parseOnboardingItems(enrollment.onboarding.checklistItems),
             completedAt: enrollment.onboarding.completedAt,
           }
         : null,

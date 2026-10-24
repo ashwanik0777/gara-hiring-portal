@@ -14,7 +14,9 @@ export const RATE_LIMIT_POLICIES: Record<
   | "FORGOT_PASSWORD"
   | "CERTIFICATE_VERIFY"
   | "FILE_UPLOAD"
-  | "CHATBOT",
+  | "CHATBOT"
+  | "APPLICATION_SUBMIT"
+  | "VISITOR_TRACK",
   RateLimitPolicy
 > = {
   LOGIN: { scope: "auth:login", maxRequests: 5, windowSeconds: 15 * 60 },
@@ -38,6 +40,16 @@ export const RATE_LIMIT_POLICIES: Record<
     scope: "portal:chatbot",
     maxRequests: 20,
     windowSeconds: 60,
+  },
+  APPLICATION_SUBMIT: {
+    scope: "public:application_submit",
+    maxRequests: 5,
+    windowSeconds: 60 * 60,
+  },
+  VISITOR_TRACK: {
+    scope: "public:visitor_track",
+    maxRequests: 10,
+    windowSeconds: 60 * 60,
   },
 };
 
@@ -63,6 +75,10 @@ export interface RateLimitStore {
  * Distributed PostgreSQL-backed rate limit store for multi-instance deployments.
  * Uses the `verifications` table with `RL:<scope>:<actor>` identifiers and TTL expiration
  * so rate-limit state is shared across all horizontal Node.js instances.
+ *
+ * The purge → count → insert sequence runs inside one transaction guarded by a
+ * transaction-scoped advisory lock on the key, so concurrent requests for the same
+ * actor are serialized and cannot all pass the check before any of them records a hit.
  */
 export class PostgresRateLimitStore implements RateLimitStore {
   public async checkAndConsume(
@@ -74,51 +90,55 @@ export class PostgresRateLimitStore implements RateLimitStore {
     const now = new Date(nowMs);
     const expiresAt = new Date(nowMs + policy.windowSeconds * 1000);
 
-    // 1. Purge expired entries for this key
-    await prisma.verification.deleteMany({
-      where: {
-        identifier: key,
-        expiresAt: { lte: now },
-      },
-    });
+    return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
 
-    // 2. Count active hits within the current window
-    const activeHits = await prisma.verification.findMany({
-      where: {
-        identifier: key,
-        expiresAt: { gt: now },
-      },
-      orderBy: { expiresAt: "asc" },
-      select: { expiresAt: true },
-    });
+      // 1. Purge expired entries for this key
+      await tx.verification.deleteMany({
+        where: {
+          identifier: key,
+          expiresAt: { lte: now },
+        },
+      });
 
-    if (activeHits.length >= policy.maxRequests) {
-      const oldestExpiry = activeHits[0]?.expiresAt.getTime() ?? expiresAt.getTime();
-      const retryAfterSeconds = Math.max(
-        1,
-        Math.ceil((oldestExpiry - nowMs) / 1000)
-      );
+      // 2. Count active hits within the current window
+      const activeHits = await tx.verification.findMany({
+        where: {
+          identifier: key,
+          expiresAt: { gt: now },
+        },
+        orderBy: { expiresAt: "asc" },
+        select: { expiresAt: true },
+      });
+
+      if (activeHits.length >= policy.maxRequests) {
+        const oldestExpiry = activeHits[0]?.expiresAt.getTime() ?? expiresAt.getTime();
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil((oldestExpiry - nowMs) / 1000)
+        );
+        return {
+          allowed: false,
+          remaining: 0,
+          retryAfterSeconds,
+        };
+      }
+
+      // 3. Record this hit with a unique token value
+      await tx.verification.create({
+        data: {
+          identifier: key,
+          value: crypto.randomUUID(),
+          expiresAt,
+        },
+      });
+
       return {
-        allowed: false,
-        remaining: 0,
-        retryAfterSeconds,
+        allowed: true,
+        remaining: Math.max(0, policy.maxRequests - (activeHits.length + 1)),
+        retryAfterSeconds: 0,
       };
-    }
-
-    // 3. Record this hit with a unique token value
-    await prisma.verification.create({
-      data: {
-        identifier: key,
-        value: crypto.randomUUID(),
-        expiresAt,
-      },
     });
-
-    return {
-      allowed: true,
-      remaining: Math.max(0, policy.maxRequests - (activeHits.length + 1)),
-      retryAfterSeconds: 0,
-    };
   }
 }
 

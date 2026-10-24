@@ -1,7 +1,9 @@
 import React from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
+import { ForbiddenError, NotFoundError } from "@/lib/errors";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { employeeService } from "@/features/employees/services/employee-service";
 import { EmployeeStatus } from "@/features/employees/types";
 import { EmployeeLifecycleCard } from "@/features/employees/components/employee-lifecycle-card";
@@ -48,17 +50,29 @@ export default async function EmployeeDetailPage({ params }: EmployeeDetailPageP
   if (!user) {
     redirect("/login");
   }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
 
   const { id } = await params;
   let employee;
   try {
+    // The service allows HR/Admin with canEmployees, or the employee themselves.
     employee = await employeeService.getEmployeeDetail(user, id);
-  } catch {
-    notFound();
+  } catch (err: unknown) {
+    if (err instanceof ForbiddenError) {
+      return <UnauthorizedState message="You are not authorized to view this employee record." />;
+    }
+    if (err instanceof NotFoundError) {
+      notFound();
+    }
+    throw err;
   }
 
-  const allStaff = await employeeService.getEmployeeDirectory(user);
-  const isStaffAdmin = user.roles.includes("ADMIN") || user.roles.includes("HR");
+  const isStaffAdmin =
+    (user.roles.includes("ADMIN") || user.roles.includes("HR")) &&
+    (await hasPermission(user, "canEmployees"));
+  const allStaff = isStaffAdmin ? await employeeService.getEmployeeDirectory(user) : [];
   const isSelf = employee.email === user.email;
 
   return (
@@ -301,7 +315,7 @@ export default async function EmployeeDetailPage({ params }: EmployeeDetailPageP
             <EmployeeOnboardingChecklist
               employeeId={employee.id}
               checklist={employee.onboardingChecklist}
-              canEdit={isStaffAdmin || isSelf}
+              canEdit={isStaffAdmin}
             />
           )}
 
@@ -324,10 +338,14 @@ export default async function EmployeeDetailPage({ params }: EmployeeDetailPageP
             <Card className="border-destructive/30 bg-destructive/5 shadow-xs">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm text-destructive flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4" /> Offboarding Record Finalized
+                  <AlertTriangle className="h-4 w-4" /> Exit Record
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-xs">
+                <div>
+                  <span className="text-muted-foreground">Clearance Status:</span>{" "}
+                  <span className="font-medium text-foreground">{employee.exitRecord.status}</span>
+                </div>
                 <div>
                   <span className="text-muted-foreground">Last Working Date:</span>{" "}
                   <span className="font-medium text-foreground">

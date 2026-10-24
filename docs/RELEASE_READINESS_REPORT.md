@@ -1,5 +1,7 @@
 # Production Readiness & Release Gate Report — GARA Innovation Platform (Prompt 10)
 
+> **Superseded (2026-10-24).** A later full audit found critical issues that this report missed (unauthenticated password overwrite, fail-open environment validation, unenforced sub-admin permissions, fabricated payroll data, vulnerable Next.js version, among others). The figures below (94 tests, 0 lint errors) are no longer accurate. Current status, evidence and remaining owner actions are tracked in [`docs/SECURITY_REMEDIATION_CHECKLIST.md`](SECURITY_REMEDIATION_CHECKLIST.md).
+
 ---
 
 ## 1. Executive Summary

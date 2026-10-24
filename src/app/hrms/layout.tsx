@@ -1,8 +1,10 @@
 import React from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
+import { prisma } from "@/lib/db";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
-import { HRMS_NAV_ITEMS } from "@/config/dashboard-nav";
+import { HRMS_NAV_ITEMS, INTERN_NAV_ITEMS } from "@/config/dashboard-nav";
+import { Role } from "@/types/enums";
 
 export const instant = false;
 
@@ -20,10 +22,18 @@ export default async function HrmsLayout({
     redirect("/set-password");
   }
 
-  const { Role } = await import("@prisma/client");
-  const HRMS_ROLES: (typeof Role)[keyof typeof Role][] = [Role.ADMIN, Role.HR, Role.MANAGER, Role.INTERN];
-  const hasAccess = user.roles.some((r) => HRMS_ROLES.includes(r));
-  if (!hasAccess) {
+  // The layout only decides who sees the HRMS shell. It is not a security boundary:
+  // every HRMS page authorizes itself and scopes data (team view requires the module
+  // permission; interns and employees only see their own records).
+  const HRMS_ROLES: Role[] = [Role.ADMIN, Role.HR, Role.MANAGER, Role.INTERN, Role.EMPLOYEE];
+  const hasHrmsRole = user.roles.some((r) => HRMS_ROLES.includes(r));
+  // Evaluation outcomes no longer grant the INTERN role (POL-07), so, as in the intern layout,
+  // owning an internship enrollment also admits the user to the self-service views. No role is
+  // granted; the pages scope such users to their own records.
+  const ownsEnrollment = hasHrmsRole
+    ? false
+    : (await prisma.internshipEnrollment.count({ where: { userId: user.id } })) > 0;
+  if (!hasHrmsRole && !ownsEnrollment) {
     redirect("/candidate/dashboard");
   }
 
@@ -38,7 +48,7 @@ export default async function HrmsLayout({
         email: user.email,
         role: primaryRole,
       }}
-      navItems={HRMS_NAV_ITEMS}
+      navItems={hasHrmsRole ? HRMS_NAV_ITEMS : INTERN_NAV_ITEMS}
     >
       {children}
     </DashboardShell>

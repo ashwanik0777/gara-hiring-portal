@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
-import { Role } from "@prisma/client";
+import { ValidationError } from "@/lib/errors";
 import { Navbar } from "@/components/navigation/navbar";
 import { reportService } from "@/features/reports/services/report-service";
 import { ReportsExportPanel } from "@/features/reports/components/reports-export-panel";
@@ -46,18 +46,18 @@ export default async function OperationalReportsPage({
 }: ReportsPageProps) {
   const user = await getCurrentUser();
 
+  // The page authorizes itself with the granular reports permission.
   const canViewReports =
-    user &&
-    (user.roles.includes(Role.ADMIN) ||
-      user.roles.includes(Role.HR) ||
-      user.roles.includes(Role.MANAGER));
+    user !== null &&
+    !user.mustChangePassword &&
+    (await hasPermission(user, "canReports"));
 
-  if (!canViewReports) {
+  if (!user || !canViewReports) {
     return (
       <div className="min-h-screen flex flex-col bg-background">
         <Navbar />
         <div className="flex-1 flex items-center justify-center p-8">
-          <UnauthorizedState message="Operational reports and exports are restricted to authorized Administrators, HR, and Managers." />
+          <UnauthorizedState message="Operational reports and exports require the reports permission." />
         </div>
       </div>
     );
@@ -69,12 +69,32 @@ export default async function OperationalReportsPage({
   const department = resolvedParams.department || undefined;
   const openingId = resolvedParams.openingId || undefined;
 
-  const report = await reportService.getOperationsReport(user, {
-    startDate,
-    endDate,
-    department,
-    openingId,
-  });
+  let report: Awaited<ReturnType<typeof reportService.getOperationsReport>>;
+  try {
+    report = await reportService.getOperationsReport(user, {
+      startDate,
+      endDate,
+      department,
+      openingId,
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      return (
+        <div className="min-h-screen flex flex-col bg-background">
+          <Navbar />
+          <div className="flex-1 flex items-center justify-center p-8">
+            <div
+              role="alert"
+              className="max-w-lg rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+            >
+              Invalid report filters: {error.message}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    throw error;
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">

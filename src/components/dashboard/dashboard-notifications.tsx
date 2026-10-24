@@ -1,7 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useTransition } from "react";
-import Link from "next/link";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useTransition,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   Bell,
@@ -13,7 +18,6 @@ import {
   Activity,
   CheckCheck,
   X,
-  ExternalLink,
   Loader2,
 } from "lucide-react";
 import {
@@ -21,8 +25,32 @@ import {
   markNotificationAsReadAction,
   markAllNotificationsAsReadAction,
   dismissNotificationAction,
-  SystemNotification,
 } from "@/features/notifications/actions";
+import type { SystemNotification } from "@/features/notifications/types";
+
+const subscribeNoop = () => () => {};
+
+/** Reads a persisted id list from localStorage (empty on the server or on error). */
+function loadStoredIds(key: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((v): v is string => typeof v === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function storeIds(key: string, ids: Set<string>): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(Array.from(ids).slice(-100)));
+  } catch {
+    // Ignore storage errors (private mode, quota)
+  }
+}
 
 function formatRelativeTime(dateString: string): string {
   try {
@@ -96,33 +124,19 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
   const [activeTab, setActiveTab] = useState<"all" | "unread">("all");
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
   const [loading, setLoading] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  // true only on the client after hydration (server snapshot is false)
+  const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const [readIds, setReadIds] = useState<Set<string>>(new Set());
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  // Read/dismissed ids are stored per user so accounts sharing a browser do not mix.
+  const readKey = `gara_notifications_read_${userId ?? "anonymous"}`;
+  const dismissedKey = `gara_notifications_dismissed_${userId ?? "anonymous"}`;
 
-  // 1. Client mount effect: load persisted read & dismissed IDs from localStorage immediately
-  useEffect(() => {
-    setMounted(true);
-    try {
-      const userRead = userId ? localStorage.getItem(`gara_notifications_read_${userId}`) : null;
-      const globalRead = localStorage.getItem("gara_notifications_read");
-      const readRaw = userRead || globalRead;
-      if (readRaw) {
-        setReadIds(new Set(JSON.parse(readRaw)));
-      }
-
-      const userDismissed = userId ? localStorage.getItem(`gara_notifications_dismissed_${userId}`) : null;
-      const globalDismissed = localStorage.getItem("gara_notifications_dismissed");
-      const dismissedRaw = userDismissed || globalDismissed;
-      if (dismissedRaw) {
-        setDismissedIds(new Set(JSON.parse(dismissedRaw)));
-      }
-    } catch {
-      // Ignore parsing errors
-    }
-  }, [userId]);
+  // 1. Persisted read & dismissed IDs are loaded lazily (no setState inside an effect).
+  const [readIds, setReadIds] = useState<Set<string>>(() => loadStoredIds(readKey));
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() =>
+    loadStoredIds(dismissedKey)
+  );
 
   // 2. Fetch notifications on mount and when popover opens
   useEffect(() => {
@@ -139,15 +153,7 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
           if (serverRead.length > 0) {
             setReadIds((prev) => {
               const merged = new Set([...Array.from(prev), ...serverRead]);
-              try {
-                const payload = JSON.stringify(Array.from(merged));
-                if (userId) {
-                  localStorage.setItem(`gara_notifications_read_${userId}`, payload);
-                }
-                localStorage.setItem("gara_notifications_read", payload);
-              } catch {
-                // Ignore storage errors
-              }
+              storeIds(readKey, merged);
               return merged;
             });
           }
@@ -163,7 +169,7 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
     return () => {
       isMounted = false;
     };
-  }, [open, userId]);
+  }, [open, readKey]);
 
   // 3. Handle outside click & Escape key to close popover
   useEffect(() => {
@@ -216,16 +222,7 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
     const next = new Set(readIds);
     next.add(id);
     setReadIds(next);
-
-    try {
-      const payload = JSON.stringify(Array.from(next));
-      if (userId) {
-        localStorage.setItem(`gara_notifications_read_${userId}`, payload);
-      }
-      localStorage.setItem("gara_notifications_read", payload);
-    } catch {
-      // Ignore
-    }
+    storeIds(readKey, next);
 
     startTransition(async () => {
       await markNotificationAsReadAction(id);
@@ -237,17 +234,7 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
     const next = new Set(readIds);
     visibleNotifications.forEach((n) => next.add(n.id));
     setReadIds(next);
-
-    const idsArray = Array.from(next);
-    try {
-      const payload = JSON.stringify(idsArray);
-      if (userId) {
-        localStorage.setItem(`gara_notifications_read_${userId}`, payload);
-      }
-      localStorage.setItem("gara_notifications_read", payload);
-    } catch {
-      // Ignore
-    }
+    storeIds(readKey, next);
 
     startTransition(async () => {
       await markAllNotificationsAsReadAction(visibleNotifications.map((n) => n.id));
@@ -260,16 +247,7 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
     const next = new Set(dismissedIds);
     next.add(id);
     setDismissedIds(next);
-
-    try {
-      const payload = JSON.stringify(Array.from(next));
-      if (userId) {
-        localStorage.setItem(`gara_notifications_dismissed_${userId}`, payload);
-      }
-      localStorage.setItem("gara_notifications_dismissed", payload);
-    } catch {
-      // Ignore
-    }
+    storeIds(dismissedKey, next);
 
     startTransition(async () => {
       await dismissNotificationAction(id);
@@ -457,16 +435,8 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
           {/* Footer Bar */}
           <div className="px-4 py-2.5 border-t border-border/60 bg-muted/20 flex items-center justify-between text-xs">
             <span className="text-[11px] text-muted-foreground">
-              Live Real-Time Alerts
+              Recent activity for your account
             </span>
-            <Link
-              href="/admin/applications"
-              onClick={() => setOpen(false)}
-              className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
-            >
-              <span>Platform Activity</span>
-              <ExternalLink className="h-3 w-3" />
-            </Link>
           </div>
 
         </div>

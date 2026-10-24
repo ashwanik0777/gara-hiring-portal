@@ -1,16 +1,19 @@
 import React from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/guards";
-import { getUserPermissions, STAFF_ROLES } from "@/lib/auth/permissions";
+import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { getAdminOpenings } from "@/features/openings/services/opening-service";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import { ForbiddenError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
   Briefcase,
+  Edit,
   Eye,
   ExternalLink,
+  Plus,
   ShieldCheck,
 } from "lucide-react";
 
@@ -22,17 +25,25 @@ export default async function SubAdminOpeningsPage() {
     redirect("/login?callbackUrl=/subadmin/openings");
   }
 
-  const hasStaffOrAdminRole = user.roles.some((r) => STAFF_ROLES.includes(r));
-  if (!hasStaffOrAdminRole) {
-    redirect("/candidate/dashboard");
+  if (user.mustChangePassword) {
+    redirect("/set-password");
   }
 
-  const permissions = await getUserPermissions(user.id, user.roles);
-  if (!permissions.canOpenings) {
-    redirect("/subadmin");
+  // Page-level guard: the granular `canOpenings` permission is the gate (layouts are not a
+  // security boundary). Candidates and staff without it are refused.
+  if (!(await hasPermission(user, "canOpenings"))) {
+    return <UnauthorizedState message="You do not have permission to manage job openings." />;
   }
 
-  const openings = await getAdminOpenings(user);
+  let openings: Awaited<ReturnType<typeof getAdminOpenings>>;
+  try {
+    openings = await getAdminOpenings(user);
+  } catch (error) {
+    if (error instanceof ForbiddenError) {
+      return <UnauthorizedState message="You do not have permission to manage job openings." />;
+    }
+    throw error;
+  }
 
   return (
     <div className="space-y-6">
@@ -53,6 +64,12 @@ export default async function SubAdminOpeningsPage() {
             Browse published vacancies, application formats, and live requisition statuses.
           </p>
         </div>
+        <Link href="/subadmin/openings/new">
+          <Button size="sm" className="gap-1.5">
+            <Plus className="h-4 w-4" />
+            Create New Opening
+          </Button>
+        </Link>
       </div>
 
       {/* Table / List */}
@@ -113,7 +130,13 @@ export default async function SubAdminOpeningsPage() {
                           {activeVersion ? `v${activeVersion.versionNumber} (Live)` : "v1 (Draft)"}
                         </td>
                         <td className="py-3.5 px-4 text-right space-x-2">
-                          <Link href={`/admin/openings/${opening.id}/preview`}>
+                          <Link href={`/subadmin/openings/${opening.id}/edit`}>
+                            <Button variant="outline" size="sm" className="h-7 text-xs px-2.5 gap-1">
+                              <Edit className="h-3 w-3" />
+                              Edit & Form
+                            </Button>
+                          </Link>
+                          <Link href={`/subadmin/openings/${opening.id}/preview`}>
                             <Button variant="ghost" size="sm" className="h-7 text-xs px-2 gap-1">
                               <Eye className="h-3 w-3" />
                               Preview

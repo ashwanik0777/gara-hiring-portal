@@ -1,124 +1,119 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getCurrentUser } from "@/lib/auth/guards";
-import { attendanceService } from "./services/attendance-service";
-import { LogAttendanceSchema } from "./schemas";
+import { requireAuth, requirePermission } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
-import { AttendanceStatus, AttendanceEntryMethod, EmployeeStatus, Role } from "@prisma/client";
+import { toActionError, ValidationError } from "@/lib/errors";
+import { ApplicationStatus, OfferStatus, Role } from "@prisma/client";
+import { attendanceService } from "./services/attendance-service";
+import { EnsureEmployeeForUserSchema, LogAttendanceSchema } from "./schemas";
+import type { AttendanceRecordView } from "./types";
 
-export async function recordAttendanceAction(rawInput: {
-  employeeId: string;
-  date: string;
-  checkInTime?: string | null;
-  checkOutTime?: string | null;
-  status?: AttendanceStatus;
-  entryMethod?: AttendanceEntryMethod;
-  notes?: string | null;
-}) {
+type AttendanceActionResult =
+  | { success: true; record: AttendanceRecordView }
+  | { success: false; error: string };
+
+function revalidateAttendancePages() {
+  revalidatePath("/admin/attendance");
+  revalidatePath("/subadmin/attendance");
+  revalidatePath("/hrms/attendance");
+}
+
+/**
+ * Staff entry or correction of another employee's attendance.
+ * Requires `canAttendance`; audit logged by the service.
+ */
+export async function recordAttendanceAction(rawInput: unknown): Promise<AttendanceActionResult> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Authentication required to record attendance." };
-    }
+    const user = await requireAuth();
 
     const parsed = LogAttendanceSchema.safeParse(rawInput);
     if (!parsed.success) {
-      const firstError = parsed.error.issues[0]?.message || "Invalid input data";
-      return { success: false, error: firstError };
+      return { success: false, error: parsed.error.issues[0]?.message || "Invalid input data" };
     }
 
-    const record = await attendanceService.recordDailyAttendance(user, parsed.data);
-
-    revalidatePath("/admin/attendance");
-    revalidatePath("/subadmin/attendance");
-    revalidatePath("/hrms/attendance");
-
+    const record = await attendanceService.recordAttendanceForEmployee(user, parsed.data);
+    revalidateAttendancePages();
     return { success: true, record };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to record attendance";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(error, "Failed to record attendance.") };
   }
 }
 
-export async function ensureEmployeeForUserAction(userId: string) {
+/**
+ * Self-service check-in for the signed-in employee. Takes no client input: the
+ * employee, date, time, status and entry method are all determined on the server.
+ */
+export async function selfCheckInAction(): Promise<AttendanceActionResult> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Authentication required" };
-    }
+    const user = await requireAuth();
+    const record = await attendanceService.selfCheckIn(user);
+    revalidateAttendancePages();
+    return { success: true, record };
+  } catch (error) {
+    return { success: false, error: toActionError(error, "Check-in failed.") };
+  }
+}
 
-    // Authorization: only ADMIN or HR can create employee profiles
-    const staffRoles: Role[] = [Role.ADMIN, Role.HR, Role.MANAGER];
-    const isStaff = user.roles.some((r) => staffRoles.includes(r as Role));
-    if (!isStaff) {
-      return { success: false, error: "You do not have permission to manage employee profiles." };
-    }
+/**
+ * Self-service check-out for the signed-in employee (server time only).
+ */
+export async function selfCheckOutAction(): Promise<AttendanceActionResult> {
+  try {
+    const user = await requireAuth();
+    const record = await attendanceService.selfCheckOut(user);
+    revalidateAttendancePages();
+    return { success: true, record };
+  } catch (error) {
+    return { success: false, error: toActionError(error, "Check-out failed.") };
+  }
+}
 
-    // Validate userId format to prevent injection
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!userId || !uuidRegex.test(userId)) {
+/**
+ * Looks up the employee record of a user. Restricted to ADMIN/HR with `canEmployees`.
+ *
+ * This action never creates employee records: hiring belongs to the Employees module,
+ * which requires an accepted offer and records employment history, roles and audit
+ * entries. Users without an accepted hire path are refused outright.
+ */
+export async function ensureEmployeeForUserAction(
+  rawUserId: unknown
+): Promise<{ success: true; employeeId: string } | { success: false; error: string }> {
+  try {
+    await requirePermission("canEmployees", { roles: [Role.ADMIN, Role.HR] });
+
+    const parsed = EnsureEmployeeForUserSchema.safeParse(rawUserId);
+    if (!parsed.success) {
       return { success: false, error: "Invalid user ID format." };
     }
+    const userId = parsed.data;
 
-    // Check if target user has employee profile
     const existing = await prisma.employee.findUnique({
       where: { userId },
-      select: { id: true, employeeCode: true },
+      select: { id: true },
     });
-
     if (existing) {
       return { success: true, employeeId: existing.id };
     }
 
-    // Verify the target user actually exists
-    const targetUser = await prisma.user.findUnique({
-      where: { id: userId },
+    const acceptedHire = await prisma.application.findFirst({
+      where: {
+        candidate: { userId },
+        status: ApplicationStatus.OFFER_ACCEPTED,
+        jobOffer: { status: OfferStatus.ACCEPTED },
+      },
       select: { id: true },
     });
-    if (!targetUser) {
-      return { success: false, error: "Target user not found." };
+    if (!acceptedHire) {
+      throw new ValidationError(
+        "This user has no accepted job offer, so an employee record cannot be created for them."
+      );
     }
 
-    // Use transaction for race-condition-safe employee code generation
-    const newEmp = await prisma.$transaction(async (tx) => {
-      const count = await tx.employee.count();
-      const employeeCode = `EMP-${String(count + 1).padStart(4, "0")}`;
-
-      const emp = await tx.employee.create({
-        data: {
-          userId,
-          employeeCode,
-          designation: "Staff Member",
-          department: "Operations",
-          joiningDate: new Date(),
-          status: EmployeeStatus.ACTIVE,
-        },
-        select: { id: true, employeeCode: true },
-      });
-
-      // Audit log
-      await tx.auditLog.create({
-        data: {
-          actorId: user.id,
-          actorRole: user.roles[0] || "ADMIN",
-          action: "EMPLOYEE_PROFILE_CREATED",
-          resourceType: "EMPLOYEE",
-          resourceId: emp.id,
-          diffPayload: { targetUserId: userId, employeeCode },
-        },
-      });
-
-      return emp;
-    });
-
-    revalidatePath("/admin/attendance");
-    revalidatePath("/subadmin/attendance");
-    revalidatePath("/hrms/attendance");
-
-    return { success: true, employeeId: newEmp.id };
+    throw new ValidationError(
+      "Create the employee record from the accepted application in the Employees module so onboarding, employment history and audit entries are recorded."
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to create employee profile";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(error, "Failed to resolve the employee profile.") };
   }
 }

@@ -1,16 +1,48 @@
 import { prisma } from "@/lib/db";
-import { AuthenticatedUser } from "@/lib/auth/guards";
-import { Role, LeaveRequestStatus, AttendanceStatus, AttendanceEntryMethod } from "@/types/enums";
+import { assertPermission, hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
+import {
+  AttendanceEntryMethod,
+  AttendanceStatus,
+  EmployeeStatus,
+  LeaveRequestStatus,
+  Role,
+  type Prisma,
+} from "@prisma/client";
 import {
   CreateLeaveRequestInput,
   ReviewLeaveRequestInput,
   CreateLeaveTypeInput,
+  MAX_LEAVE_REQUEST_SPAN_DAYS,
 } from "../schemas";
-import { LeaveTypeItem, LeaveRequestItem, LeaveStats, EmployeeOption } from "../types";
-import { PolicyBlockedError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
+import type {
+  LeaveTypeItem,
+  LeaveRequestItem,
+  LeaveStats,
+  EmployeeOption,
+  LeaveReviewResult,
+} from "../types";
+import {
+  PolicyBlockedError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+} from "@/lib/errors";
+import {
+  inclusiveUtcDaySpan,
+  listUtcDays,
+  toUtcDateOnly,
+  utcDateKey,
+} from "@/features/attendance/services/attendance-dates";
 
-const LEAVE_ADMIN_ROLES: Role[] = [Role.ADMIN, Role.HR, Role.MANAGER];
+/** Roles that may manage the leave-type catalogue (together with `canLeave`). */
+const LEAVE_CATALOGUE_ROLES: Role[] = [Role.ADMIN, Role.HR];
 
+/**
+ * Suggested leave-type catalogue. NOT APPROVED (OD-007 / POL-13): names, paid flags and
+ * descriptions are pending product-owner approval. It is only inserted when an ADMIN
+ * explicitly runs the seeding action; it is never seeded automatically.
+ */
 export const DEFAULT_LEAVE_TYPES = [
   {
     code: "CASUAL",
@@ -56,198 +88,271 @@ export const DEFAULT_LEAVE_TYPES = [
   },
 ];
 
+/** Statuses that block an overlapping new request for the same employee. */
+const OPEN_LEAVE_STATUSES: LeaveRequestStatus[] = [
+  LeaveRequestStatus.PENDING,
+  LeaveRequestStatus.APPROVED,
+];
+
+const leaveRequestInclude = {
+  employee: {
+    select: {
+      id: true,
+      employeeCode: true,
+      department: true,
+      designation: true,
+      user: { select: { id: true, name: true, email: true } },
+    },
+  },
+  leaveType: { select: { id: true, code: true, name: true, isPaid: true } },
+  reviewedBy: { select: { id: true, name: true } },
+} satisfies Prisma.LeaveRequestInclude;
+
+type LeaveRequestRow = Prisma.LeaveRequestGetPayload<{ include: typeof leaveRequestInclude }>;
+
+function toLeaveRequestItem(r: LeaveRequestRow, viewerId: string): LeaveRequestItem {
+  return {
+    id: r.id,
+    employeeId: r.employeeId,
+    employeeName: r.employee.user.name,
+    employeeCode: r.employee.employeeCode,
+    employeeDepartment: r.employee.department,
+    employeeDesignation: r.employee.designation,
+    employeeEmail: r.employee.user.email,
+    leaveTypeId: r.leaveTypeId,
+    leaveTypeCode: r.leaveType.code,
+    leaveTypeName: r.leaveType.name,
+    isPaid: r.leaveType.isPaid,
+    startDate: r.startDate.toISOString(),
+    endDate: r.endDate.toISOString(),
+    durationDays: Math.max(1, inclusiveUtcDaySpan(r.startDate, r.endDate)),
+    reason: r.reason,
+    status: r.status,
+    reviewNotes: r.reviewNotes,
+    reviewedById: r.reviewedById,
+    reviewedByName: r.reviewedBy?.name ?? null,
+    reviewedAt: r.reviewedAt ? r.reviewedAt.toISOString() : null,
+    createdAt: r.createdAt.toISOString(),
+    isOwnRequest: r.employee.user.id === viewerId,
+  };
+}
+
+function toLeaveTypeItem(t: {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  isPaid: boolean;
+  requiresApproval: boolean;
+  isActive: boolean;
+  createdAt: Date;
+  _count?: { leaveRequests: number };
+}): LeaveTypeItem {
+  return {
+    id: t.id,
+    code: t.code,
+    name: t.name,
+    description: t.description,
+    isPaid: t.isPaid,
+    requiresApproval: t.requiresApproval,
+    isActive: t.isActive,
+    createdAt: t.createdAt.toISOString(),
+    _count: t._count,
+  };
+}
+
+function computeStats(requests: LeaveRequestItem[]): LeaveStats {
+  const todayKey = utcDateKey(new Date());
+  const approved = requests.filter((r) => r.status === LeaveRequestStatus.APPROVED);
+  return {
+    totalRequests: requests.length,
+    pendingCount: requests.filter((r) => r.status === LeaveRequestStatus.PENDING).length,
+    approvedCount: approved.length,
+    rejectedCount: requests.filter((r) => r.status === LeaveRequestStatus.REJECTED).length,
+    onLeaveTodayCount: approved.filter(
+      (r) => r.startDate.slice(0, 10) <= todayKey && r.endDate.slice(0, 10) >= todayKey
+    ).length,
+    paidLeavesCount: approved.filter((r) => r.isPaid).length,
+  };
+}
+
 export class LeaveService {
-  private assertAdminAccess(user: AuthenticatedUser): void {
-    const isAuthorized = user.roles.some((r) => LEAVE_ADMIN_ROLES.includes(r));
-    if (!isAuthorized) {
-      throw new ForbiddenError(
-        "Leave management and approvals require HR, Manager, or Admin authority."
-      );
-    }
+  /** Team view, reviews and on-behalf submissions require `canLeave`. */
+  async canManageLeave(user: AuthenticatedUser): Promise<boolean> {
+    return hasPermission(user, "canLeave");
+  }
+
+  /** Leave-type catalogue changes require ADMIN, or HR holding `canLeave`. */
+  async canManageLeaveTypes(user: AuthenticatedUser): Promise<boolean> {
+    if (user.roles.includes(Role.ADMIN)) return true;
+    if (!user.roles.some((r) => LEAVE_CATALOGUE_ROLES.includes(r))) return false;
+    return hasPermission(user, "canLeave");
+  }
+
+  private async assertCatalogueAccess(user: AuthenticatedUser): Promise<void> {
+    await assertPermission(user, "canLeave", { roles: LEAVE_CATALOGUE_ROLES });
   }
 
   /**
-   * Seeds default leave categories into PostgreSQL if none exist.
+   * Inserts the suggested (unapproved, OD-007) leave-type catalogue when no leave types
+   * exist. ADMIN only, explicit action only, audit logged.
    */
-  async ensureDefaultLeaveTypes(): Promise<void> {
-    const count = await prisma.leaveType.count();
-    if (count > 0) return;
+  async ensureDefaultLeaveTypes(user: AuthenticatedUser): Promise<{ created: number }> {
+    if (!user.roles.includes(Role.ADMIN)) {
+      throw new ForbiddenError("Only administrators can load the suggested leave categories.");
+    }
 
-    for (const def of DEFAULT_LEAVE_TYPES) {
-      await prisma.leaveType.upsert({
-        where: { code: def.code },
-        update: {},
-        create: {
-          code: def.code,
-          name: def.name,
-          description: def.description,
-          isPaid: def.isPaid,
-          requiresApproval: def.requiresApproval,
-          isActive: true,
+    return prisma.$transaction(async (tx) => {
+      const count = await tx.leaveType.count();
+      if (count > 0) {
+        throw new ConflictError("Leave categories already exist; the suggested catalogue was not loaded.");
+      }
+
+      const result = await tx.leaveType.createMany({
+        data: DEFAULT_LEAVE_TYPES.map((def) => ({ ...def, isActive: true })),
+        skipDuplicates: true,
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: user.roles[0] ?? null,
+          action: "SEED_SUGGESTED_LEAVE_TYPES",
+          resourceType: "LeaveType",
+          resourceId: "catalogue",
+          diffPayload: {
+            codes: DEFAULT_LEAVE_TYPES.map((d) => d.code),
+            approvalStatus: "PENDING_OD_007",
+          },
         },
       });
-    }
+
+      return { created: result.count };
+    });
   }
 
   /**
-   * Retrieves leave types configured in the platform with usage count.
+   * Leave types configured in the platform with usage count. Never seeds data.
    */
   async getLeaveTypes(includeInactive: boolean = false): Promise<LeaveTypeItem[]> {
-    await this.ensureDefaultLeaveTypes();
-
     const types = await prisma.leaveType.findMany({
       where: includeInactive ? {} : { isActive: true },
-      include: {
-        _count: {
-          select: { leaveRequests: true },
-        },
-      },
+      include: { _count: { select: { leaveRequests: true } } },
       orderBy: { name: "asc" },
     });
-
-    return types.map((t) => ({
-      id: t.id,
-      code: t.code,
-      name: t.name,
-      description: t.description,
-      isPaid: t.isPaid,
-      requiresApproval: t.requiresApproval,
-      isActive: t.isActive,
-      createdAt: t.createdAt.toISOString(),
-      _count: t._count,
-    }));
+    return types.map(toLeaveTypeItem);
   }
 
   /**
-   * Creates a new custom leave category in the database.
+   * Creates a new leave category (ADMIN, or HR with `canLeave`). Audit logged.
    */
   async createLeaveType(
     user: AuthenticatedUser,
     input: CreateLeaveTypeInput
   ): Promise<LeaveTypeItem> {
-    this.assertAdminAccess(user);
+    await this.assertCatalogueAccess(user);
 
     const normalizedCode = input.code.trim().toUpperCase();
-    const existing = await prisma.leaveType.findUnique({
-      where: { code: normalizedCode },
+
+    return prisma.$transaction(async (tx) => {
+      const existing = await tx.leaveType.findUnique({ where: { code: normalizedCode } });
+      if (existing) {
+        throw new ConflictError(`Leave type code "${normalizedCode}" already exists.`);
+      }
+
+      const created = await tx.leaveType.create({
+        data: {
+          code: normalizedCode,
+          name: input.name.trim(),
+          description: input.description?.trim() || null,
+          isPaid: input.isPaid ?? true,
+          requiresApproval: input.requiresApproval ?? true,
+          isActive: true,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: user.roles[0] ?? null,
+          action: "CREATE_LEAVE_TYPE",
+          resourceType: "LeaveType",
+          resourceId: created.id,
+          diffPayload: { code: created.code, name: created.name, isPaid: created.isPaid },
+        },
+      });
+
+      return toLeaveTypeItem(created);
     });
-
-    if (existing) {
-      throw new ValidationError(`Leave type code "${normalizedCode}" already exists.`);
-    }
-
-    const created = await prisma.leaveType.create({
-      data: {
-        code: normalizedCode,
-        name: input.name.trim(),
-        description: input.description?.trim() || null,
-        isPaid: input.isPaid ?? true,
-        requiresApproval: input.requiresApproval ?? true,
-        isActive: true,
-      },
-    });
-
-    // Record audit log
-    await prisma.auditLog.create({
-      data: {
-        actorId: user.id,
-        actorRole: user.roles[0] || "ADMIN",
-        action: "CREATE_LEAVE_TYPE",
-        resourceType: "LeaveType",
-        resourceId: created.id,
-        diffPayload: { code: created.code, name: created.name, isPaid: created.isPaid },
-      },
-    }).catch(() => null);
-
-    return {
-      id: created.id,
-      code: created.code,
-      name: created.name,
-      description: created.description,
-      isPaid: created.isPaid,
-      requiresApproval: created.requiresApproval,
-      isActive: created.isActive,
-      createdAt: created.createdAt.toISOString(),
-    };
   }
 
   /**
-   * Toggles the active status of a leave type.
+   * Toggles the active status of a leave type (ADMIN, or HR with `canLeave`). Audit logged.
    */
   async toggleLeaveType(
     user: AuthenticatedUser,
     id: string,
     isActive: boolean
   ): Promise<void> {
-    this.assertAdminAccess(user);
+    await this.assertCatalogueAccess(user);
 
-    const type = await prisma.leaveType.findUnique({ where: { id } });
-    if (!type) throw new NotFoundError("Leave type not found.");
+    await prisma.$transaction(async (tx) => {
+      const type = await tx.leaveType.findUnique({ where: { id } });
+      if (!type) throw new NotFoundError("Leave type not found.");
 
-    await prisma.leaveType.update({
-      where: { id },
-      data: { isActive },
+      await tx.leaveType.update({ where: { id }, data: { isActive } });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: user.roles[0] ?? null,
+          action: isActive ? "ENABLE_LEAVE_TYPE" : "DISABLE_LEAVE_TYPE",
+          resourceType: "LeaveType",
+          resourceId: id,
+          diffPayload: { previous: type.isActive, next: isActive },
+        },
+      });
     });
-
-    await prisma.auditLog.create({
-      data: {
-        actorId: user.id,
-        actorRole: user.roles[0] || "ADMIN",
-        action: isActive ? "ENABLE_LEAVE_TYPE" : "DISABLE_LEAVE_TYPE",
-        resourceType: "LeaveType",
-        resourceId: id,
-        diffPayload: { previous: type.isActive, next: isActive },
-      },
-    }).catch(() => null);
   }
 
   /**
-   * Retrieves high-level leave metrics for admin dashboard.
+   * Organisation-wide leave counts (requires `canLeave`). No balances are computed (OD-007).
    */
-  async getLeaveStats(): Promise<LeaveStats> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  async getLeaveStats(user: AuthenticatedUser): Promise<LeaveStats> {
+    await assertPermission(user, "canLeave");
 
-    const [totalRequests, pendingCount, approvedCount, rejectedCount, activeToday] =
+    const today = toUtcDateOnly(new Date());
+
+    const [totalRequests, pendingCount, approvedCount, rejectedCount, onLeaveTodayCount, paidLeavesCount] =
       await Promise.all([
         prisma.leaveRequest.count(),
-        prisma.leaveRequest.count({
-          where: { status: LeaveRequestStatus.PENDING },
-        }),
-        prisma.leaveRequest.count({
-          where: { status: LeaveRequestStatus.APPROVED },
-        }),
-        prisma.leaveRequest.count({
-          where: { status: LeaveRequestStatus.REJECTED },
-        }),
+        prisma.leaveRequest.count({ where: { status: LeaveRequestStatus.PENDING } }),
+        prisma.leaveRequest.count({ where: { status: LeaveRequestStatus.APPROVED } }),
+        prisma.leaveRequest.count({ where: { status: LeaveRequestStatus.REJECTED } }),
         prisma.leaveRequest.count({
           where: {
             status: LeaveRequestStatus.APPROVED,
-            startDate: { lte: new Date() },
+            startDate: { lte: today },
             endDate: { gte: today },
           },
         }),
+        prisma.leaveRequest.count({
+          where: { status: LeaveRequestStatus.APPROVED, leaveType: { isPaid: true } },
+        }),
       ]);
-
-    const paidLeavesCount = await prisma.leaveRequest.count({
-      where: {
-        status: LeaveRequestStatus.APPROVED,
-        leaveType: { isPaid: true },
-      },
-    });
 
     return {
       totalRequests,
       pendingCount,
       approvedCount,
       rejectedCount,
-      onLeaveTodayCount: activeToday,
+      onLeaveTodayCount,
       paidLeavesCount,
     };
   }
 
   /**
-   * Retrieves all leave requests for admin review with employee & reviewer details.
+   * All leave requests for review (requires `canLeave`).
    */
   async getAllLeaveRequests(
     user: AuthenticatedUser,
@@ -257,83 +362,75 @@ export class LeaveService {
       employeeId?: string;
     }
   ): Promise<LeaveRequestItem[]> {
-    this.assertAdminAccess(user);
+    await assertPermission(user, "canLeave");
 
-    const whereClause: Record<string, unknown> = {};
-    if (filters?.status) whereClause.status = filters.status;
-    if (filters?.leaveTypeId) whereClause.leaveTypeId = filters.leaveTypeId;
-    if (filters?.employeeId) whereClause.employeeId = filters.employeeId;
+    const where: Prisma.LeaveRequestWhereInput = {};
+    if (filters?.status) where.status = filters.status;
+    if (filters?.leaveTypeId) where.leaveTypeId = filters.leaveTypeId;
+    if (filters?.employeeId) where.employeeId = filters.employeeId;
 
     const requests = await prisma.leaveRequest.findMany({
-      where: whereClause,
-      include: {
-        employee: {
-          select: {
-            id: true,
-            employeeCode: true,
-            department: true,
-            designation: true,
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-              },
-            },
-          },
-        },
-        leaveType: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-            isPaid: true,
-          },
-        },
-        reviewedBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
+      where,
+      include: leaveRequestInclude,
       orderBy: { createdAt: "desc" },
     });
 
-    return requests.map((r) => {
-      const startMs = new Date(r.startDate).getTime();
-      const endMs = new Date(r.endDate).getTime();
-      const diffDays = Math.max(1, Math.round((endMs - startMs) / (1000 * 60 * 60 * 24)) + 1);
-
-      return {
-        id: r.id,
-        employeeId: r.employeeId,
-        employeeName: r.employee?.user?.name || "Unknown Employee",
-        employeeCode: r.employee?.employeeCode || "N/A",
-        employeeDepartment: r.employee?.department || "General",
-        employeeDesignation: r.employee?.designation || "Staff",
-        employeeEmail: r.employee?.user?.email,
-        leaveTypeId: r.leaveTypeId,
-        leaveTypeCode: r.leaveType?.code || "LEAVE",
-        leaveTypeName: r.leaveType?.name || "General Leave",
-        isPaid: r.leaveType?.isPaid ?? true,
-        startDate: r.startDate.toISOString(),
-        endDate: r.endDate.toISOString(),
-        durationDays: diffDays,
-        reason: r.reason,
-        status: r.status as LeaveRequestStatus,
-        reviewNotes: r.reviewNotes,
-        reviewedById: r.reviewedById,
-        reviewedByName: r.reviewedBy?.name || null,
-        reviewedAt: r.reviewedAt ? r.reviewedAt.toISOString() : null,
-        createdAt: r.createdAt.toISOString(),
-      };
-    });
+    return requests.map((r) => toLeaveRequestItem(r, user.id));
   }
 
   /**
-   * Safe submission of a leave request without automatic balance deduction.
+   * The signed-in user's own leave requests and employee record (self view).
+   */
+  async getMyLeaveOverview(user: AuthenticatedUser): Promise<{
+    employee: EmployeeOption | null;
+    requests: LeaveRequestItem[];
+    stats: LeaveStats;
+  }> {
+    const employee = await prisma.employee.findUnique({
+      where: { userId: user.id },
+      select: {
+        id: true,
+        employeeCode: true,
+        department: true,
+        designation: true,
+        status: true,
+        user: { select: { name: true, email: true } },
+      },
+    });
+
+    if (!employee) {
+      return { employee: null, requests: [], stats: computeStats([]) };
+    }
+
+    const rows = await prisma.leaveRequest.findMany({
+      where: { employeeId: employee.id },
+      include: leaveRequestInclude,
+      orderBy: { createdAt: "desc" },
+    });
+    const requests = rows.map((r) => toLeaveRequestItem(r, user.id));
+
+    return {
+      employee:
+        employee.status === EmployeeStatus.EXITED
+          ? null
+          : {
+              id: employee.id,
+              employeeCode: employee.employeeCode,
+              name: employee.user.name,
+              email: employee.user.email,
+              department: employee.department,
+              designation: employee.designation,
+            },
+      requests,
+      stats: computeStats(requests),
+    };
+  }
+
+  /**
+   * Submits a leave request for oneself, or on behalf of another employee with `canLeave`.
+   * No balance is checked or deducted (OD-007). Dates are UTC calendar days, the range is
+   * bounded, the leave type must be active and the request may not overlap the same
+   * employee's pending or approved requests.
    */
   async submitLeaveRequest(
     user: AuthenticatedUser,
@@ -341,197 +438,249 @@ export class LeaveService {
   ): Promise<LeaveRequestItem> {
     const employee = await prisma.employee.findUnique({
       where: { id: input.employeeId },
-      include: { user: { select: { id: true, name: true, email: true } } },
+      select: { id: true, userId: true, status: true },
     });
 
     if (!employee) {
       throw new NotFoundError("Employee record not found.");
     }
 
-    const isSelf = employee.userId === user.id;
-    const isStaffAdmin = user.roles.some((r) => LEAVE_ADMIN_ROLES.includes(r));
-
-    if (!isSelf && !isStaffAdmin) {
-      throw new ForbiddenError("Not authorized to submit leave on behalf of another employee.");
+    if (employee.userId !== user.id) {
+      await assertPermission(user, "canLeave");
     }
 
-    const leaveType = await prisma.leaveType.findUnique({
-      where: { id: input.leaveTypeId },
-    });
+    if (employee.status === EmployeeStatus.EXITED) {
+      throw new ValidationError("Leave cannot be requested for an exited employee record.");
+    }
 
+    const leaveType = await prisma.leaveType.findUnique({ where: { id: input.leaveTypeId } });
     if (!leaveType) {
       throw new NotFoundError("Leave type not found.");
     }
-
-    const start = new Date(input.startDate);
-    const end = new Date(input.endDate);
-
-    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-      throw new ValidationError("Invalid date values provided.");
+    if (!leaveType.isActive) {
+      throw new ValidationError("This leave category is not active.");
     }
 
+    const rawStart = new Date(input.startDate);
+    const rawEnd = new Date(input.endDate);
+    if (isNaN(rawStart.getTime()) || isNaN(rawEnd.getTime())) {
+      throw new ValidationError("Invalid date values provided.");
+    }
+    const start = toUtcDateOnly(rawStart);
+    const end = toUtcDateOnly(rawEnd);
     if (end < start) {
       throw new ValidationError("End date cannot precede start date.");
     }
+    const durationDays = inclusiveUtcDaySpan(start, end);
+    if (durationDays > MAX_LEAVE_REQUEST_SPAN_DAYS) {
+      throw new ValidationError(
+        `A single leave request cannot span more than ${MAX_LEAVE_REQUEST_SPAN_DAYS} days.`
+      );
+    }
 
-    const request = await prisma.leaveRequest.create({
-      data: {
-        employeeId: employee.id,
-        leaveTypeId: leaveType.id,
-        startDate: start,
-        endDate: end,
-        reason: input.reason.trim(),
-        status: LeaveRequestStatus.PENDING,
-      },
-      include: {
-        leaveType: true,
-      },
-    });
+    const created = await prisma.$transaction(async (tx) => {
+      // Serialise submissions per employee so two concurrent requests cannot both pass
+      // the overlap check.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`leave-request:${employee.id}`}))`;
 
-    const diffDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        actorId: user.id,
-        actorRole: user.roles[0] || "ADMIN",
-        action: "SUBMIT_LEAVE_REQUEST",
-        resourceType: "LeaveRequest",
-        resourceId: request.id,
-        diffPayload: {
+      const overlapping = await tx.leaveRequest.findFirst({
+        where: {
           employeeId: employee.id,
-          leaveType: leaveType.code,
+          status: { in: OPEN_LEAVE_STATUSES },
+          startDate: { lte: end },
+          endDate: { gte: start },
+        },
+        select: { id: true, status: true },
+      });
+      if (overlapping) {
+        throw new ConflictError(
+          "These dates overlap an existing pending or approved leave request for this employee."
+        );
+      }
+
+      const request = await tx.leaveRequest.create({
+        data: {
+          employeeId: employee.id,
+          leaveTypeId: leaveType.id,
           startDate: start,
           endDate: end,
-          durationDays: diffDays,
+          reason: input.reason.trim(),
+          status: LeaveRequestStatus.PENDING,
         },
-      },
-    }).catch(() => null);
+        include: leaveRequestInclude,
+      });
 
-    return {
-      id: request.id,
-      employeeId: employee.id,
-      employeeName: employee.user.name,
-      employeeCode: employee.employeeCode,
-      employeeDepartment: employee.department,
-      employeeDesignation: employee.designation,
-      employeeEmail: employee.user.email,
-      leaveTypeId: leaveType.id,
-      leaveTypeCode: leaveType.code,
-      leaveTypeName: leaveType.name,
-      isPaid: leaveType.isPaid,
-      startDate: request.startDate.toISOString(),
-      endDate: request.endDate.toISOString(),
-      durationDays: diffDays,
-      reason: request.reason,
-      status: request.status as LeaveRequestStatus,
-      reviewNotes: request.reviewNotes,
-      reviewedById: null,
-      reviewedByName: null,
-      reviewedAt: null,
-      createdAt: request.createdAt.toISOString(),
-    };
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: user.roles[0] ?? null,
+          action: "SUBMIT_LEAVE_REQUEST",
+          resourceType: "LeaveRequest",
+          resourceId: request.id,
+          diffPayload: {
+            employeeId: employee.id,
+            leaveType: leaveType.code,
+            startDate: start.toISOString(),
+            endDate: end.toISOString(),
+            durationDays,
+            onBehalf: employee.userId !== user.id,
+          },
+        },
+      });
+
+      return request;
+    });
+
+    return toLeaveRequestItem(created, user.id);
   }
 
   /**
-   * Safe review (Approval or Rejection) of an employee leave request.
+   * Approves or rejects a pending leave request (requires `canLeave`). Reviewers cannot
+   * review their own request. Approval chains are not modelled (OD-007).
+   *
+   * The status change, the attendance sync and the audit entry run in one transaction.
+   * Approval marks UTC days in the range as ON_LEAVE only where no attendance is recorded
+   * (or the day is ABSENT without a check-in); days with a check-in, PRESENT/HALF_DAY or a
+   * pending correction are never overwritten and are returned as `skippedDates`.
    */
   async reviewLeaveRequest(
     user: AuthenticatedUser,
     input: ReviewLeaveRequestInput
-  ): Promise<void> {
-    this.assertAdminAccess(user);
+  ): Promise<LeaveReviewResult> {
+    await assertPermission(user, "canLeave");
 
     const req = await prisma.leaveRequest.findUnique({
       where: { id: input.requestId },
       include: {
-        employee: { select: { id: true, userId: true, user: { select: { name: true } } } },
-        leaveType: true,
+        employee: { select: { id: true, userId: true } },
+        leaveType: { select: { code: true, name: true } },
       },
     });
 
     if (!req) {
       throw new NotFoundError("Leave request not found.");
     }
-
+    if (req.employee.userId === user.id) {
+      throw new ForbiddenError("You cannot review your own leave request.");
+    }
     if (req.status !== LeaveRequestStatus.PENDING) {
-      throw new ValidationError("Leave request has already been finalized.");
+      throw new ConflictError("Leave request has already been finalized.");
     }
 
-    const targetStatus = input.status as LeaveRequestStatus;
+    const targetStatus =
+      input.status === "APPROVED" ? LeaveRequestStatus.APPROVED : LeaveRequestStatus.REJECTED;
 
-    await prisma.leaveRequest.update({
-      where: { id: req.id },
-      data: {
-        status: targetStatus,
-        reviewNotes: input.reviewNotes?.trim() || null,
-        reviewedById: user.id,
-        reviewedAt: new Date(),
-      },
-    });
-
-    // If APPROVED, synchronize with attendance records so the employee is marked ON_LEAVE
+    const start = toUtcDateOnly(req.startDate);
+    const end = toUtcDateOnly(req.endDate);
     if (targetStatus === LeaveRequestStatus.APPROVED) {
-      try {
-        const curDate = new Date(req.startDate);
-        const stopDate = new Date(req.endDate);
-
-        while (curDate <= stopDate) {
-          const dateOnly = new Date(curDate);
-          dateOnly.setHours(0, 0, 0, 0);
-
-          await prisma.attendanceRecord.upsert({
-            where: {
-              employeeId_date: {
-                employeeId: req.employeeId,
-                date: dateOnly,
-              },
-            },
-            update: {
-              status: AttendanceStatus.ON_LEAVE,
-              notes: `Approved Leave: ${req.leaveType.name} (${req.reason.slice(0, 60)})`,
-            },
-            create: {
-              employeeId: req.employeeId,
-              date: dateOnly,
-              status: AttendanceStatus.ON_LEAVE,
-              entryMethod: AttendanceEntryMethod.WEB_PORTAL,
-              notes: `Approved Leave: ${req.leaveType.name} (${req.reason.slice(0, 60)})`,
-            },
-          });
-
-          curDate.setDate(curDate.getDate() + 1);
-        }
-      } catch (attendanceSyncError) {
-        console.warn("[LeaveService] Attendance sync warning:", attendanceSyncError);
+      if (end < start || inclusiveUtcDaySpan(start, end) > MAX_LEAVE_REQUEST_SPAN_DAYS) {
+        throw new ValidationError(
+          `This request's date range is invalid or longer than ${MAX_LEAVE_REQUEST_SPAN_DAYS} days and cannot be approved. Reject it and ask for a corrected request.`
+        );
       }
     }
 
-    // Record audit log
-    await prisma.auditLog.create({
-      data: {
-        actorId: user.id,
-        actorRole: user.roles[0] || "ADMIN",
-        action: targetStatus === LeaveRequestStatus.APPROVED ? "APPROVE_LEAVE" : "REJECT_LEAVE",
-        resourceType: "LeaveRequest",
-        resourceId: req.id,
-        diffPayload: {
-          employeeId: req.employeeId,
-          leaveType: req.leaveType.code,
-          previousStatus: req.status,
-          nextStatus: targetStatus,
-          reviewNotes: input.reviewNotes?.trim() || null,
+    const reviewNotes = input.reviewNotes?.trim() || null;
+
+    return prisma.$transaction(async (tx) => {
+      // Conditional transition: only one reviewer can move the request out of PENDING.
+      const transitioned = await tx.leaveRequest.updateMany({
+        where: { id: req.id, status: LeaveRequestStatus.PENDING },
+        data: {
+          status: targetStatus,
+          reviewNotes,
+          reviewedById: user.id,
+          reviewedAt: new Date(),
         },
-      },
-    }).catch(() => null);
+      });
+      if (transitioned.count !== 1) {
+        throw new ConflictError("Leave request was already reviewed by someone else.");
+      }
+
+      let attendanceDaysMarked = 0;
+      const skippedDates: string[] = [];
+
+      if (targetStatus === LeaveRequestStatus.APPROVED) {
+        const existing = await tx.attendanceRecord.findMany({
+          where: { employeeId: req.employeeId, date: { gte: start, lte: end } },
+          select: { id: true, date: true, status: true, checkInTime: true },
+        });
+        const byDay = new Map(existing.map((r) => [utcDateKey(r.date), r]));
+
+        // Leave reasons are private: attendance notes only name the leave category.
+        const notes = `Approved leave: ${req.leaveType.name}`;
+        const toCreate: Prisma.AttendanceRecordCreateManyInput[] = [];
+        const absentIds: string[] = [];
+
+        for (const day of listUtcDays(start, end)) {
+          const key = utcDateKey(day);
+          const record = byDay.get(key);
+          if (!record) {
+            toCreate.push({
+              employeeId: req.employeeId,
+              date: day,
+              status: AttendanceStatus.ON_LEAVE,
+              entryMethod: AttendanceEntryMethod.SYSTEM_IMPORT,
+              notes,
+            });
+          } else if (record.status === AttendanceStatus.ON_LEAVE) {
+            continue;
+          } else if (record.status === AttendanceStatus.ABSENT && !record.checkInTime) {
+            absentIds.push(record.id);
+          } else {
+            skippedDates.push(key);
+          }
+        }
+
+        if (toCreate.length > 0) {
+          // skipDuplicates: a row created concurrently (e.g. a check-in) is kept as is.
+          const created = await tx.attendanceRecord.createMany({ data: toCreate, skipDuplicates: true });
+          attendanceDaysMarked += created.count;
+        }
+        if (absentIds.length > 0) {
+          const updated = await tx.attendanceRecord.updateMany({
+            where: { id: { in: absentIds }, status: AttendanceStatus.ABSENT, checkInTime: null },
+            data: { status: AttendanceStatus.ON_LEAVE, notes },
+          });
+          attendanceDaysMarked += updated.count;
+        }
+      }
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: user.roles[0] ?? null,
+          action: targetStatus === LeaveRequestStatus.APPROVED ? "APPROVE_LEAVE" : "REJECT_LEAVE",
+          resourceType: "LeaveRequest",
+          resourceId: req.id,
+          diffPayload: {
+            employeeId: req.employeeId,
+            leaveType: req.leaveType.code,
+            previousStatus: req.status,
+            nextStatus: targetStatus,
+            reviewNotes,
+            attendanceDaysMarked,
+            skippedDates,
+          },
+        },
+      });
+
+      return {
+        status: targetStatus === LeaveRequestStatus.APPROVED ? "APPROVED" : "REJECTED",
+        attendanceDaysMarked,
+        skippedDates,
+      };
+    });
   }
 
   /**
-   * Retrieves active employees for the leave assignment dropdown.
+   * Non-exited employees for the on-behalf leave form (requires `canLeave`).
    */
-  async getEmployeeOptions(): Promise<EmployeeOption[]> {
+  async getEmployeeOptions(user: AuthenticatedUser): Promise<EmployeeOption[]> {
+    await assertPermission(user, "canLeave");
+
     const raw = await prisma.employee.findMany({
-      where: { status: "ACTIVE" },
+      where: { status: { not: EmployeeStatus.EXITED } },
       select: {
         id: true,
         employeeCode: true,

@@ -17,6 +17,7 @@ const envSchema = z.object({
     .default(
       "postgresql://postgres:postgres@localhost:5432/gara_hrms?schema=public"
     ),
+  DATABASE_SSL_REJECT_UNAUTHORIZED: z.enum(["true", "false"]).optional(),
   BETTER_AUTH_SECRET: z
     .string()
     .min(32, "BETTER_AUTH_SECRET must be at least 32 characters long")
@@ -32,6 +33,10 @@ const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().default("no-reply@garainnovation.com"),
+  CRON_SECRET: z
+    .string()
+    .min(16, "CRON_SECRET must be at least 16 characters long")
+    .optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -66,6 +71,12 @@ export function checkProductionReadiness(currentEnv: Env = env): {
     );
   }
 
+  if (!currentEnv.CRON_SECRET) {
+    blockers.push(
+      "CRON_SECRET is not configured, so the notification outbox retry cron cannot be authorized."
+    );
+  }
+
   return {
     ready: blockers.length === 0,
     blockers,
@@ -85,6 +96,28 @@ function getInitialAuthUrl(): string {
   return process.env.BETTER_AUTH_URL || "http://localhost:3000";
 }
 
+function isCloudDeployment(): boolean {
+  return Boolean(
+    process.env.VERCEL ||
+      process.env.RAILWAY_ENVIRONMENT ||
+      process.env.RENDER ||
+      process.env.AWS_EXECUTION_ENV ||
+      process.env.FLY_APP_NAME ||
+      process.env.NETLIFY
+  );
+}
+
+/**
+ * True while serving production traffic. `next build` also runs with
+ * NODE_ENV=production but may not have runtime secrets, so it is excluded.
+ */
+function isProductionRuntime(): boolean {
+  return (
+    process.env.NODE_ENV === "production" &&
+    process.env.NEXT_PHASE !== "phase-production-build"
+  );
+}
+
 function validateEnv(): Env {
   // Ensure BETTER_AUTH_URL auto-resolves correctly on Vercel if not manually provided
   if (!process.env.BETTER_AUTH_URL || process.env.BETTER_AUTH_URL.includes("localhost")) {
@@ -94,34 +127,44 @@ function validateEnv(): Env {
   }
 
   const result = envSchema.safeParse(process.env);
-  if (!result.success) {
-    console.error("❌ [Environment Warning] Invalid or missing environment variables:", result.error.format());
-  }
+  let parsed: Env;
 
-  const parsed = result.success ? result.data : envSchema.parse({
-    BETTER_AUTH_URL: getInitialAuthUrl(),
-  });
+  if (result.success) {
+    parsed = result.data;
+  } else {
+    const invalidKeys = Array.from(
+      new Set(result.error.issues.map((issue) => String(issue.path[0])))
+    );
 
-  const isCloudDeployment = Boolean(
-    process.env.VERCEL ||
-    process.env.RAILWAY_ENVIRONMENT ||
-    process.env.RENDER ||
-    process.env.AWS_EXECUTION_ENV ||
-    process.env.FLY_APP_NAME ||
-    process.env.NETLIFY
-  );
-
-  if (parsed.NODE_ENV === "production" && isCloudDeployment) {
-    if (parsed.BETTER_AUTH_SECRET === DEV_DEFAULT_AUTH_SECRET) {
-      console.error(
-        "❌ [CRITICAL CONFIG] BETTER_AUTH_SECRET is using the development fallback key in production cloud deployment. " +
-        "Please configure a secure BETTER_AUTH_SECRET in Vercel project environment variables."
+    if (isProductionRuntime()) {
+      // Fail closed: never boot production with silently substituted defaults.
+      throw new Error(
+        `[Environment] Invalid or missing environment variables: ${invalidKeys.join(", ")}`
       );
     }
-    if (parsed.DATABASE_URL.includes("localhost") || parsed.DATABASE_URL.includes("127.0.0.1")) {
-      console.error(
-        "❌ [CRITICAL CONFIG] DATABASE_URL points to localhost in production cloud deployment. " +
-        "Please configure a valid PostgreSQL DATABASE_URL in Vercel project environment variables."
+
+    console.error(
+      `❌ [Environment Warning] Invalid environment variables (falling back to defaults for these keys only): ${invalidKeys.join(", ")}`
+    );
+    const sanitizedSource: Record<string, string | undefined> = { ...process.env };
+    for (const key of invalidKeys) {
+      delete sanitizedSource[key];
+    }
+    parsed = envSchema.parse(sanitizedSource);
+  }
+
+  if (isProductionRuntime()) {
+    if (parsed.BETTER_AUTH_SECRET === DEV_DEFAULT_AUTH_SECRET) {
+      throw new Error(
+        "[Environment] BETTER_AUTH_SECRET must be configured with a unique high-entropy value in production."
+      );
+    }
+    if (
+      isCloudDeployment() &&
+      (parsed.DATABASE_URL.includes("localhost") || parsed.DATABASE_URL.includes("127.0.0.1"))
+    ) {
+      throw new Error(
+        "[Environment] DATABASE_URL points to localhost in a production cloud deployment."
       );
     }
   }

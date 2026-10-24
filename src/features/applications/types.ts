@@ -32,6 +32,8 @@ export interface CandidateApplicationDetail extends CandidateApplicationSummary 
     schemaDefinition: FormSchemaDefinition;
   };
   submittedResponses: Record<string, unknown>;
+  /** False when the published form did not request a document and none was attached. */
+  hasResume: boolean;
   resumeDownloadUrl: string;
   timeline: CandidateStatusTimelineEntry[];
 }

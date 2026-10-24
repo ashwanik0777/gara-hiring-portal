@@ -9,8 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import {
   Bot,
   Send,
-  Sparkles,
-  ShieldCheck,
   AlertTriangle,
   ExternalLink,
   HelpCircle,

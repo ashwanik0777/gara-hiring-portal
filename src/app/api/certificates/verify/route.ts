@@ -1,14 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import crypto from "crypto";
 import { certificateService } from "@/features/certificates/services/certificate-service";
 import { defaultRateLimiter, RATE_LIMIT_POLICIES } from "@/lib/security/rate-limit";
+import { getClientIpHash } from "@/lib/security/client-ip";
 
-function getClientIpHash(req: NextRequest): string {
-  const forwarded = req.headers.get("x-forwarded-for");
-  const ip = forwarded ? forwarded.split(",")[0].trim() : req.headers.get("x-real-ip") || "anonymous";
-  const salt = process.env.BETTER_AUTH_SECRET || "gara-cert-verify-salt-" + (process.env.DATABASE_URL || "").slice(0, 16);
-  return crypto.createHash("sha256").update(`${ip}:${salt}`).digest("hex");
-}
+const MAX_CODE_LENGTH = 64;
 
 /**
  * POST /api/certificates/verify
@@ -16,10 +11,12 @@ function getClientIpHash(req: NextRequest): string {
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { code?: string };
-    const code = body?.code?.trim();
+    const body: unknown = await req.json().catch(() => null);
+    const rawCode =
+      body && typeof body === "object" && "code" in body ? (body as { code: unknown }).code : undefined;
+    const code = typeof rawCode === "string" ? rawCode.trim() : "";
 
-    if (!code) {
+    if (!code || code.length > MAX_CODE_LENGTH) {
       return NextResponse.json(
         {
           success: false,
@@ -29,7 +26,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const ipHash = getClientIpHash(req);
+    const ipHash = getClientIpHash(req.headers, "certificate-verify");
 
     try {
       await defaultRateLimiter.enforce(ipHash, RATE_LIMIT_POLICIES.CERTIFICATE_VERIFY);
@@ -66,7 +63,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const code = searchParams.get("code")?.trim();
 
-    if (!code) {
+    if (!code || code.length > MAX_CODE_LENGTH) {
       return NextResponse.json(
         {
           success: false,
@@ -76,7 +73,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const ipHash = getClientIpHash(req);
+    const ipHash = getClientIpHash(req.headers, "certificate-verify");
 
     try {
       await defaultRateLimiter.enforce(ipHash, RATE_LIMIT_POLICIES.CERTIFICATE_VERIFY);

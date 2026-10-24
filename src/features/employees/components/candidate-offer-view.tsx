@@ -20,6 +20,13 @@ interface CandidateOfferViewProps {
   offer: JobOfferDetail;
 }
 
+/** Only offers that were formally extended are shown to candidates; drafts and revoked offers stay internal. */
+const CANDIDATE_VISIBLE_STATUSES: OfferStatus[] = [
+  OfferStatus.EXTENDED,
+  OfferStatus.ACCEPTED,
+  OfferStatus.DECLINED,
+];
+
 export function CandidateOfferView({ offer }: CandidateOfferViewProps) {
   const [decision, setDecision] = useState<"ACCEPT" | "DECLINE" | null>(null);
   const [declineReason, setDeclineReason] = useState("");
@@ -51,6 +58,10 @@ export function CandidateOfferView({ offer }: CandidateOfferViewProps) {
       setIsSubmitting(false);
     }
   };
+
+  if (!CANDIDATE_VISIBLE_STATUSES.includes(offer.status)) {
+    return null;
+  }
 
   return (
     <Card className="border-primary/40 bg-card shadow-xs">
@@ -107,7 +118,7 @@ export function CandidateOfferView({ offer }: CandidateOfferViewProps) {
               <MapPin className="h-3 w-3" /> Location
             </div>
             <div className="font-semibold text-foreground text-sm mt-0.5">
-              {offer.location || "Bangalore / Hybrid"}
+              {offer.location || "Not specified"}
             </div>
           </div>
         </div>

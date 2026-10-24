@@ -14,7 +14,7 @@
 ├── CLAUDE.md                          # AI assistant persistent rules
 ├── AGENTS.md                          # Next.js 16.4 auto-generated agent rules
 ├── README.md                          # Project overview and setup
-├── .env.example                       # Environment variable placeholders (never real secrets)
+├── .env                               # Single local environment file (gitignored; variables listed in docs/RUNBOOK.md §2)
 ├── .gitignore                         # Git ignore rules
 ├── package.json                       # Dependencies and scripts
 ├── package-lock.json                  # Lockfile

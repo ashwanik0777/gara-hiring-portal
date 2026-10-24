@@ -1,9 +1,14 @@
 import { prisma } from "@/lib/db";
-import { AuthenticatedUser } from "@/lib/auth/guards";
+import {
+  containsPayoutProfileMarker,
+  stripPayoutProfile,
+} from "@/features/payroll/payout-notes";
+import { assertPermission, hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import {
   Role,
   ApplicationStatus,
   EmployeeStatus,
+  OfferStatus,
   Prisma,
 } from "@prisma/client";
 import {
@@ -22,7 +27,14 @@ import {
   EmergencyContact,
   OnboardingChecklistItem,
 } from "../types";
-import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  PolicyBlockedError,
+  ValidationError,
+} from "@/lib/errors";
+import { assertNotOwnApplication } from "@/features/recruitment/services/application-access";
 
 const EMPLOYEE_ADMIN_ROLES: Role[] = [Role.ADMIN, Role.HR];
 
@@ -33,87 +45,172 @@ const DEFAULT_ONBOARDING_CHECKLIST: OnboardingChecklistItem[] = [
   { id: "EMERGENCY_CONTACT", label: "Emergency contact verification", completed: false },
 ];
 
+/**
+ * Status changes allowed through the generic status update. EXITED is excluded on purpose:
+ * it is reachable only through the exit flow, which creates the exit record, and it is terminal.
+ * Finer probation/leave rules remain pending product approval (OD-015).
+ */
+export const EMPLOYEE_STATUS_TRANSITIONS: Record<EmployeeStatus, EmployeeStatus[]> = {
+  [EmployeeStatus.PROBATION]: [EmployeeStatus.ACTIVE, EmployeeStatus.ON_LEAVE],
+  [EmployeeStatus.ACTIVE]: [EmployeeStatus.PROBATION, EmployeeStatus.ON_LEAVE],
+  [EmployeeStatus.ON_LEAVE]: [EmployeeStatus.PROBATION, EmployeeStatus.ACTIVE],
+  [EmployeeStatus.EXITED]: [],
+};
+
+/**
+ * Separation of duties: staff never change their own employment record (status,
+ * reporting line, exit, onboarding verification or direct creation).
+ */
+function assertNotOwnEmployeeRecord(actor: AuthenticatedUser, recordUserId: string): void {
+  if (actor.id === recordUserId) {
+    throw new ForbiddenError("You cannot change your own employment record.");
+  }
+}
+
+/**
+ * Free-text staff notes must not carry the payroll payout block: that data is written
+ * only by the payroll module, which requires `canPayroll` and writes an audit entry.
+ */
+function sanitizeStaffNotes(notes: string | null | undefined): string | null {
+  const trimmed = notes?.trim();
+  if (!trimmed) return null;
+  if (containsPayoutProfileMarker(trimmed)) {
+    throw new ValidationError(
+      "Internal notes cannot contain payroll payout data. Use the Payroll module to manage payout profiles."
+    );
+  }
+  return trimmed;
+}
+
 export class EmployeeService {
-  private assertAdminAccess(user: AuthenticatedUser): void {
+  /**
+   * Employee records management: HR/Admin role plus the canEmployees module permission.
+   */
+  private async assertAdminAccess(user: AuthenticatedUser): Promise<void> {
     const isAuthorized = user.roles.some((r) => EMPLOYEE_ADMIN_ROLES.includes(r));
     if (!isAuthorized) {
       throw new ForbiddenError(
         "Employee records management is restricted to authorized HR and Administrators."
       );
     }
+    await assertPermission(user, "canEmployees");
+  }
+
+  private async isEmployeeAdmin(user: AuthenticatedUser): Promise<boolean> {
+    if (!user.roles.some((r) => EMPLOYEE_ADMIN_ROLES.includes(r))) {
+      return false;
+    }
+    return hasPermission(user, "canEmployees");
+  }
+
+  /**
+   * Validates that a proposed reporting manager exists and is not exited.
+   */
+  private async assertValidManager(
+    tx: Prisma.TransactionClient,
+    managerId: string
+  ): Promise<{ id: string; employeeCode: string; managerId: string | null }> {
+    const manager = await tx.employee.findUnique({
+      where: { id: managerId },
+      select: { id: true, employeeCode: true, managerId: true, status: true },
+    });
+    if (!manager) {
+      throw new NotFoundError("Assigned manager not found.");
+    }
+    if (manager.status === EmployeeStatus.EXITED) {
+      throw new ValidationError("Cannot assign an exited employee as reporting manager.");
+    }
+    return manager;
   }
 
   /**
    * Creates an employee record from a successfully accepted recruitment application.
    * STRICT GATING:
-   * 1. Requires ADMIN or HR role.
-   * 2. Requires Application status to be OFFER_ACCEPTED.
+   * 1. Requires ADMIN or HR role and the canEmployees permission.
+   * 2. Requires an ACCEPTED job offer and application status OFFER_ACCEPTED.
    * 3. Candidate must not already have an employee profile.
+   * 4. The actor must not be the candidate (separation of duties).
    */
   async createEmployeeFromApplication(
     user: AuthenticatedUser,
     input: CreateEmployeeFromApplicationInput
   ): Promise<ConfidentialEmployeeDetail> {
-    this.assertAdminAccess(user);
+    await this.assertAdminAccess(user);
 
-    const application = await prisma.application.findUnique({
-      where: { id: input.applicationId },
-      include: {
-        candidate: {
-          include: {
-            user: {
-              include: {
-                employeeProfile: true,
+    const createdEmployee = await prisma.$transaction(async (tx) => {
+      const application = await tx.application.findUnique({
+        where: { id: input.applicationId },
+        include: {
+          candidate: {
+            include: {
+              user: {
+                include: {
+                  employeeProfile: true,
+                },
               },
             },
           },
+          jobOffer: { select: { id: true, status: true } },
         },
-        opening: { select: { title: true } },
-        jobOffer: true,
-      },
-    });
-
-    if (!application) {
-      throw new NotFoundError("Application record not found.");
-    }
-
-    // STRICT CHECK 1: Application status must be OFFER_ACCEPTED
-    if (application.status !== ApplicationStatus.OFFER_ACCEPTED) {
-      throw new ValidationError(
-        `Cannot create employee record: Application status is currently '${application.status}'. A candidate can only be hired after their job offer is explicitly accepted ('OFFER_ACCEPTED').`
-      );
-    }
-
-    const candidateUser = application.candidate.user;
-
-    // STRICT CHECK 2: User must not already be an employee
-    if (candidateUser.employeeProfile) {
-      throw new ValidationError(
-        `Candidate ${candidateUser.name} already has an active employee record (${candidateUser.employeeProfile.employeeCode}).`
-      );
-    }
-
-    // STRICT CHECK 3: Employee code uniqueness
-    const existingCode = await prisma.employee.findUnique({
-      where: { employeeCode: input.employeeCode.trim() },
-    });
-    if (existingCode) {
-      throw new ValidationError(
-        `Employee code '${input.employeeCode}' is already assigned to another employee.`
-      );
-    }
-
-    // STRICT CHECK 4: Manager existence if supplied
-    if (input.managerId) {
-      const manager = await prisma.employee.findUnique({
-        where: { id: input.managerId },
       });
-      if (!manager) {
-        throw new NotFoundError("Assigned manager not found.");
-      }
-    }
 
-    const createdEmployee = await prisma.$transaction(async (tx) => {
+      if (!application) {
+        throw new NotFoundError("Application record not found.");
+      }
+
+      // Separation of duties: staff can never hire themselves.
+      assertNotOwnApplication(user, application.candidate.user.id);
+
+      // STRICT CHECK 1: The candidate must have explicitly accepted a job offer.
+      if (!application.jobOffer || application.jobOffer.status !== OfferStatus.ACCEPTED) {
+        throw new ValidationError(
+          "Cannot create employee record: the candidate has not accepted a job offer for this application."
+        );
+      }
+
+      // STRICT CHECK 2: Application status must be OFFER_ACCEPTED
+      if (application.status !== ApplicationStatus.OFFER_ACCEPTED) {
+        throw new ValidationError(
+          `Cannot create employee record: Application status is currently '${application.status}'. A candidate can only be hired after their job offer is explicitly accepted ('OFFER_ACCEPTED').`
+        );
+      }
+
+      const candidateUser = application.candidate.user;
+
+      // STRICT CHECK 3: User must not already be an employee
+      if (candidateUser.employeeProfile) {
+        throw new ValidationError(
+          `Candidate ${candidateUser.name} already has an active employee record (${candidateUser.employeeProfile.employeeCode}).`
+        );
+      }
+
+      // STRICT CHECK 4: Employee code uniqueness (the unique constraint also guards races)
+      const existingCode = await tx.employee.findUnique({
+        where: { employeeCode: input.employeeCode.trim() },
+        select: { id: true },
+      });
+      if (existingCode) {
+        throw new ValidationError(
+          `Employee code '${input.employeeCode}' is already assigned to another employee.`
+        );
+      }
+
+      // STRICT CHECK 5: Manager existence if supplied
+      if (input.managerId) {
+        await this.assertValidManager(tx, input.managerId);
+      }
+
+      // Conditional transition: fails if the application stage changed concurrently.
+      const transitioned = await tx.application.updateMany({
+        where: { id: application.id, status: ApplicationStatus.OFFER_ACCEPTED },
+        data: { status: ApplicationStatus.HIRED },
+      });
+      if (transitioned.count !== 1) {
+        throw new ConflictError(
+          "The application stage was changed by another action. Reload and try again."
+        );
+      }
+
       // 1. Create Employee record
       const employee = await tx.employee.create({
         data: {
@@ -128,7 +225,7 @@ export class EmployeeService {
           emergencyContact: input.emergencyContact
             ? (input.emergencyContact as unknown as Prisma.InputJsonValue)
             : undefined,
-          internalNotes: input.internalNotes?.trim() || null,
+          internalNotes: sanitizeStaffNotes(input.internalNotes),
           applicationId: application.id,
           onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
         },
@@ -146,14 +243,7 @@ export class EmployeeService {
         },
       });
 
-      // 3. Transition Application status to HIRED
-      await tx.application.update({
-        where: { id: application.id },
-        data: {
-          status: ApplicationStatus.HIRED,
-        },
-      });
-
+      // 3. Application stage history (status already moved to HIRED above)
       await tx.applicationStatusHistory.create({
         data: {
           applicationId: application.id,
@@ -207,9 +297,10 @@ export class EmployeeService {
           resourceId: employee.id,
           diffPayload: {
             applicationId: application.id,
+            jobOfferId: application.jobOffer.id,
             employeeCode: employee.employeeCode,
             userId: candidateUser.id,
-            joiningDate: employee.joiningDate,
+            joiningDate: employee.joiningDate.toISOString(),
           },
         },
       });
@@ -221,40 +312,58 @@ export class EmployeeService {
   }
 
   /**
-   * Directly creates an employee record for an existing platform user.
-   * Gated: ADMIN / HR only.
+   * Directly creates an employee record for an existing platform user, bypassing the
+   * application/offer gate. Restricted to ADMIN, requires a written justification and is
+   * audit logged. Whether this path should exist at all is pending a product decision.
    */
   async createDirectEmployee(
     user: AuthenticatedUser,
     input: DirectCreateEmployeeInput
   ): Promise<ConfidentialEmployeeDetail> {
-    this.assertAdminAccess(user);
-
-    const targetUser = await prisma.user.findUnique({
-      where: { id: input.userId },
-      include: { employeeProfile: true },
-    });
-
-    if (!targetUser) {
-      throw new NotFoundError("Target user not found.");
-    }
-
-    if (targetUser.employeeProfile) {
-      throw new ValidationError(
-        `User ${targetUser.name} already has an employee record (${targetUser.employeeProfile.employeeCode}).`
+    if (!user.roles.includes(Role.ADMIN)) {
+      throw new ForbiddenError(
+        "Creating an employee record without an accepted offer is restricted to Administrators."
       );
     }
+    await assertPermission(user, "canEmployees");
 
-    const existingCode = await prisma.employee.findUnique({
-      where: { employeeCode: input.employeeCode.trim() },
-    });
-    if (existingCode) {
-      throw new ValidationError(
-        `Employee code '${input.employeeCode}' is already in use.`
-      );
+    assertNotOwnEmployeeRecord(user, input.userId);
+
+    const justification = input.justification.trim();
+    if (justification.length < 10) {
+      throw new ValidationError("A justification of at least 10 characters is required.");
     }
 
     const created = await prisma.$transaction(async (tx) => {
+      const targetUser = await tx.user.findUnique({
+        where: { id: input.userId },
+        include: { employeeProfile: true },
+      });
+
+      if (!targetUser) {
+        throw new NotFoundError("Target user not found.");
+      }
+
+      if (targetUser.employeeProfile) {
+        throw new ValidationError(
+          `User ${targetUser.name} already has an employee record (${targetUser.employeeProfile.employeeCode}).`
+        );
+      }
+
+      const existingCode = await tx.employee.findUnique({
+        where: { employeeCode: input.employeeCode.trim() },
+        select: { id: true },
+      });
+      if (existingCode) {
+        throw new ValidationError(
+          `Employee code '${input.employeeCode}' is already in use.`
+        );
+      }
+
+      if (input.managerId) {
+        await this.assertValidManager(tx, input.managerId);
+      }
+
       const employee = await tx.employee.create({
         data: {
           userId: targetUser.id,
@@ -268,7 +377,7 @@ export class EmployeeService {
           emergencyContact: input.emergencyContact
             ? (input.emergencyContact as unknown as Prisma.InputJsonValue)
             : undefined,
-          internalNotes: input.internalNotes?.trim() || null,
+          internalNotes: sanitizeStaffNotes(input.internalNotes),
           onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
         },
       });
@@ -279,7 +388,7 @@ export class EmployeeService {
           changeType: "DIRECT_HIRE",
           previousValue: null,
           newValue: employee.status,
-          remarks: `Direct employee creation for ${input.designation}`,
+          remarks: `Direct employee creation for ${input.designation}. Justification: ${justification}`,
           changedById: user.id,
         },
       });
@@ -302,13 +411,15 @@ export class EmployeeService {
       await tx.auditLog.create({
         data: {
           actorId: user.id,
-          actorRole: user.roles[0] ?? "HR",
+          actorRole: Role.ADMIN,
           action: "CREATE_DIRECT_EMPLOYEE",
           resourceType: "EMPLOYEE",
           resourceId: employee.id,
           diffPayload: {
             employeeCode: employee.employeeCode,
             userId: targetUser.id,
+            status: employee.status,
+            justification,
           },
         },
       });
@@ -321,12 +432,15 @@ export class EmployeeService {
 
   /**
    * Retrieves employee directory with strict data isolation.
-   * Public staff view: Never includes confidential phone, emergency contact, or private notes.
+   * Requires canEmployees. Never includes confidential phone, emergency contact, or private notes.
    */
   async getEmployeeDirectory(
     user: AuthenticatedUser,
     filters?: EmployeeDirectoryFilters
   ): Promise<PublicEmployeeDirectoryItem[]> {
+    // ADMIN always passes; staff need the canEmployees module permission.
+    await assertPermission(user, "canEmployees");
+
     const where: Prisma.EmployeeWhereInput = {};
 
     if (filters?.department) {
@@ -398,9 +512,10 @@ export class EmployeeService {
     }));
   }
 
+
   /**
    * Retrieves comprehensive employee detail with strict authorization.
-   * Only ADMIN, HR, or the employee themselves can access confidential data.
+   * Only ADMIN/HR with canEmployees, or the employee themselves, can access confidential data.
    */
   async getEmployeeDetail(
     user: AuthenticatedUser,
@@ -458,8 +573,8 @@ export class EmployeeService {
       throw new NotFoundError("Employee record not found.");
     }
 
-    const isStaffAdmin = user.roles.some((r) => EMPLOYEE_ADMIN_ROLES.includes(r));
     const isSelf = emp.user.id === user.id;
+    const isStaffAdmin = await this.isEmployeeAdmin(user);
 
     if (!isStaffAdmin && !isSelf) {
       throw new ForbiddenError(
@@ -487,8 +602,9 @@ export class EmployeeService {
         : null,
       personalPhone: emp.personalPhone,
       emergencyContact: (emp.emergencyContact as unknown as EmergencyContact) || null,
-      // Internal staff notes are never visible to the employee themselves
-      internalNotes: isStaffAdmin ? emp.internalNotes : null,
+      // Internal staff notes are never visible to the employee themselves, and the payroll
+      // payout block (bank account, PAN, amount) is only ever shown inside the payroll module.
+      internalNotes: isStaffAdmin ? stripPayoutProfile(emp.internalNotes) : null,
       application: emp.application
         ? {
             id: emp.application.id,
@@ -542,38 +658,59 @@ export class EmployeeService {
   }
 
   /**
-   * Updates employee lifecycle status (PROBATION -> ACTIVE -> ON_LEAVE -> EXITED).
-   * Gated: HR / Admin only.
+   * Updates employee lifecycle status using the explicit transition map.
+   * EXITED cannot be set here: it is reachable only through processEmployeeExit.
+   * Gated: HR / Admin with canEmployees.
    */
   async updateEmployeeStatus(
     user: AuthenticatedUser,
     input: UpdateEmployeeStatusInput
   ): Promise<void> {
-    this.assertAdminAccess(user);
+    await this.assertAdminAccess(user);
 
-    const emp = await prisma.employee.findUnique({
-      where: { id: input.employeeId },
-    });
-
-    if (!emp) {
-      throw new NotFoundError("Employee record not found.");
-    }
-
-    if (emp.status === EmployeeStatus.EXITED) {
+    if (input.toStatus === EmployeeStatus.EXITED) {
       throw new ValidationError(
-        "Cannot change status: Employee has already EXITED. Exited status is terminal."
+        "EXITED can only be set through the offboarding (exit) flow, which records the exit details."
       );
     }
 
-    if (emp.status === input.toStatus) {
-      throw new ValidationError(`Employee is already in status ${input.toStatus}.`);
-    }
-
     await prisma.$transaction(async (tx) => {
-      await tx.employee.update({
-        where: { id: emp.id },
+      const emp = await tx.employee.findUnique({
+        where: { id: input.employeeId },
+        select: { id: true, status: true, userId: true },
+      });
+      if (emp) {
+        assertNotOwnEmployeeRecord(user, emp.userId);
+      }
+
+      if (!emp) {
+        throw new NotFoundError("Employee record not found.");
+      }
+
+      if (emp.status === EmployeeStatus.EXITED) {
+        throw new ValidationError(
+          "Cannot change status: Employee has already EXITED. Exited status is terminal."
+        );
+      }
+
+      if (emp.status === input.toStatus) {
+        throw new ValidationError(`Employee is already in status ${input.toStatus}.`);
+      }
+
+      const allowed = EMPLOYEE_STATUS_TRANSITIONS[emp.status] ?? [];
+      if (!allowed.includes(input.toStatus)) {
+        throw new ValidationError(
+          `Invalid status transition from ${emp.status} to ${input.toStatus}. Allowed: ${allowed.join(", ") || "None"}.`
+        );
+      }
+
+      const updated = await tx.employee.updateMany({
+        where: { id: emp.id, status: emp.status },
         data: { status: input.toStatus },
       });
+      if (updated.count !== 1) {
+        throw new ConflictError("The employee status was changed by another action. Reload and try again.");
+      }
 
       await tx.employmentHistory.create({
         data: {
@@ -596,7 +733,7 @@ export class EmployeeService {
           diffPayload: {
             fromStatus: emp.status,
             toStatus: input.toStatus,
-            remarks: input.remarks,
+            remarks: input.remarks ?? null,
           },
         },
       });
@@ -605,198 +742,164 @@ export class EmployeeService {
 
   /**
    * Assigns or changes employee reporting manager.
-   * Enforces self-assignment prevention and hierarchy cycle detection.
-   * Gated: HR / Admin only.
+   * Enforces self-assignment prevention and hierarchy cycle detection inside a
+   * serializable transaction so concurrent assignments cannot create a cycle.
+   * Gated: HR / Admin with canEmployees.
    */
   async assignManager(
     user: AuthenticatedUser,
     input: AssignManagerInput
   ): Promise<void> {
-    this.assertAdminAccess(user);
+    await this.assertAdminAccess(user);
 
-    const emp = await prisma.employee.findUnique({
-      where: { id: input.employeeId },
-      include: { manager: { select: { employeeCode: true } } },
-    });
-
-    if (!emp) {
-      throw new NotFoundError("Employee record not found.");
-    }
-
-    if (input.managerId) {
-      if (input.managerId === emp.id) {
-        throw new ValidationError("An employee cannot be assigned as their own reporting manager.");
-      }
-
-      const targetManager = await prisma.employee.findUnique({
-        where: { id: input.managerId },
-      });
-
-      if (!targetManager) {
-        throw new NotFoundError("Selected manager not found.");
-      }
-
-      if (targetManager.status === EmployeeStatus.EXITED) {
-        throw new ValidationError("Cannot assign an exited employee as reporting manager.");
-      }
-
-      // Hierarchy cycle detection: Ensure employee is not already an ancestor of the manager
-      let currentManagerId: string | null = targetManager.managerId;
-      const visited = new Set<string>([targetManager.id]);
-
-      while (currentManagerId) {
-        if (currentManagerId === emp.id) {
-          throw new ValidationError(
-            `Circular reporting hierarchy detected: Employee ${emp.employeeCode} cannot report to ${targetManager.employeeCode} because ${targetManager.employeeCode} already reports up to ${emp.employeeCode}.`
-          );
-        }
-        if (visited.has(currentManagerId)) {
-          break; // Cycle in existing data, stop traversal
-        }
-        visited.add(currentManagerId);
-
-        const parent = await prisma.employee.findUnique({
-          where: { id: currentManagerId },
-          select: { managerId: true },
-        });
-        currentManagerId = parent?.managerId ?? null;
-      }
-    }
-
-    await prisma.$transaction(async (tx) => {
-      await tx.employee.update({
-        where: { id: emp.id },
-        data: { managerId: input.managerId },
-      });
-
-      await tx.employmentHistory.create({
-        data: {
-          employeeId: emp.id,
-          changeType: "MANAGER_CHANGE",
-          previousValue: emp.manager?.employeeCode || "None",
-          newValue: input.managerId || "None",
-          remarks: input.remarks || null,
-          changedById: user.id,
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          actorId: user.id,
-          actorRole: user.roles[0] ?? "HR",
-          action: "ASSIGN_EMPLOYEE_MANAGER",
-          resourceType: "EMPLOYEE",
-          resourceId: emp.id,
-          diffPayload: {
-            fromManagerId: emp.managerId,
-            toManagerId: input.managerId,
+    await prisma.$transaction(
+      async (tx) => {
+        const emp = await tx.employee.findUnique({
+          where: { id: input.employeeId },
+          select: {
+            id: true,
+            userId: true,
+            employeeCode: true,
+            managerId: true,
+            manager: { select: { employeeCode: true } },
           },
-        },
-      });
-    });
+        });
+
+        if (!emp) {
+          throw new NotFoundError("Employee record not found.");
+        }
+        assertNotOwnEmployeeRecord(user, emp.userId);
+
+        if ((input.managerId ?? null) === emp.managerId) {
+          throw new ValidationError("This reporting manager is already assigned.");
+        }
+
+        let newManagerCode: string | null = null;
+
+        if (input.managerId) {
+          if (input.managerId === emp.id) {
+            throw new ValidationError("An employee cannot be assigned as their own reporting manager.");
+          }
+
+          const targetManager = await this.assertValidManager(tx, input.managerId);
+          newManagerCode = targetManager.employeeCode;
+
+          // Hierarchy cycle detection: Ensure employee is not already an ancestor of the manager
+          let currentManagerId: string | null = targetManager.managerId;
+          const visited = new Set<string>([targetManager.id]);
+
+          while (currentManagerId) {
+            if (currentManagerId === emp.id) {
+              throw new ValidationError(
+                `Circular reporting hierarchy detected: Employee ${emp.employeeCode} cannot report to ${targetManager.employeeCode} because ${targetManager.employeeCode} already reports up to ${emp.employeeCode}.`
+              );
+            }
+            if (visited.has(currentManagerId)) {
+              break; // Cycle in existing data, stop traversal
+            }
+            visited.add(currentManagerId);
+
+            const parent: { managerId: string | null } | null = await tx.employee.findUnique({
+              where: { id: currentManagerId },
+              select: { managerId: true },
+            });
+            currentManagerId = parent?.managerId ?? null;
+          }
+        }
+
+        await tx.employee.update({
+          where: { id: emp.id },
+          data: { managerId: input.managerId },
+        });
+
+        // Both values use employee codes so the history reads consistently.
+        await tx.employmentHistory.create({
+          data: {
+            employeeId: emp.id,
+            changeType: "MANAGER_CHANGE",
+            previousValue: emp.manager?.employeeCode ?? "None",
+            newValue: newManagerCode ?? "None",
+            remarks: input.remarks || null,
+            changedById: user.id,
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            actorId: user.id,
+            actorRole: user.roles[0] ?? "HR",
+            action: "ASSIGN_EMPLOYEE_MANAGER",
+            resourceType: "EMPLOYEE",
+            resourceId: emp.id,
+            diffPayload: {
+              fromManagerId: emp.managerId,
+              toManagerId: input.managerId,
+            },
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    );
   }
 
   /**
-   * Updates employee onboarding checklist item.
-   * Gated: HR, ADMIN, or self.
+   * Updates an employee onboarding checklist item.
+   * Checklist items are HR verification steps, so only HR / Admin with canEmployees may
+   * change them (employees cannot verify their own items). Optimistic concurrency on
+   * `updatedAt` prevents lost updates; every change is audit logged.
    */
   async updateOnboardingChecklist(
     user: AuthenticatedUser,
     input: UpdateOnboardingChecklistInput
   ): Promise<void> {
-    const emp = await prisma.employee.findUnique({
-      where: { id: input.employeeId },
-      select: { id: true, userId: true, onboardingChecklist: true },
-    });
-
-    if (!emp) {
-      throw new NotFoundError("Employee record not found.");
-    }
-
-    const isStaffAdmin = user.roles.some((r) => EMPLOYEE_ADMIN_ROLES.includes(r));
-    const isSelf = emp.userId === user.id;
-
-    if (!isStaffAdmin && !isSelf) {
-      throw new ForbiddenError("Not authorized to modify onboarding checklist.");
-    }
-
-    const currentList: OnboardingChecklistItem[] =
-      (emp.onboardingChecklist as unknown as OnboardingChecklistItem[]) || DEFAULT_ONBOARDING_CHECKLIST;
-
-    const updatedList = currentList.map((item) => {
-      if (item.id === input.itemId) {
-        return {
-          ...item,
-          completed: input.completed,
-          completedAt: input.completed ? new Date().toISOString() : null,
-        };
-      }
-      return item;
-    });
-
-    await prisma.employee.update({
-      where: { id: emp.id },
-      data: {
-        onboardingChecklist: updatedList as unknown as Prisma.InputJsonValue,
-      },
-    });
-  }
-
-  /**
-   * Uploads secure document metadata for an employee record.
-   * Gated: HR, ADMIN, or self.
-   */
-  async addEmployeeDocument(
-    user: AuthenticatedUser,
-    input: UploadEmployeeDocumentInput
-  ): Promise<void> {
-    const emp = await prisma.employee.findUnique({
-      where: { id: input.employeeId },
-      select: { id: true, userId: true },
-    });
-
-    if (!emp) {
-      throw new NotFoundError("Employee record not found.");
-    }
-
-    const isStaffAdmin = user.roles.some((r) => EMPLOYEE_ADMIN_ROLES.includes(r));
-    const isSelf = emp.userId === user.id;
-
-    if (!isStaffAdmin && !isSelf) {
-      throw new ForbiddenError("Not authorized to attach employee documents.");
-    }
-
-    // Validate storage key format: must be a plausible file path without traversal
-    const storageKey = input.storageKey.trim();
-    if (!storageKey || storageKey.includes("..") || storageKey.includes("\0") || storageKey.startsWith("/")) {
-      throw new ValidationError("Invalid storage key format.");
-    }
+    await this.assertAdminAccess(user);
 
     await prisma.$transaction(async (tx) => {
-      const doc = await tx.employeeDocument.create({
+      const emp = await tx.employee.findUnique({
+        where: { id: input.employeeId },
+        select: { id: true, userId: true, onboardingChecklist: true, updatedAt: true },
+      });
+
+      if (!emp) {
+        throw new NotFoundError("Employee record not found.");
+      }
+      assertNotOwnEmployeeRecord(user, emp.userId);
+
+      const currentList: OnboardingChecklistItem[] = Array.isArray(emp.onboardingChecklist)
+        ? (emp.onboardingChecklist as unknown as OnboardingChecklistItem[])
+        : DEFAULT_ONBOARDING_CHECKLIST;
+
+      const target = currentList.find((item) => item.id === input.itemId);
+      if (!target) {
+        throw new ValidationError("Unknown onboarding checklist item.");
+      }
+
+      const completedAt = input.completed ? new Date().toISOString() : null;
+      const updatedList = currentList.map((item) =>
+        item.id === input.itemId ? { ...item, completed: input.completed, completedAt } : item
+      );
+
+      const updated = await tx.employee.updateMany({
+        where: { id: emp.id, updatedAt: emp.updatedAt },
         data: {
-          employeeId: emp.id,
-          documentType: input.documentType.trim(),
-          title: input.title.trim(),
-          storageKey,
-          mimeType: input.mimeType.trim(),
-          fileSizeBytes: input.fileSizeBytes,
-          isConfidential: input.isConfidential,
-          uploadedById: user.id,
+          onboardingChecklist: updatedList as unknown as Prisma.InputJsonValue,
         },
       });
+      if (updated.count !== 1) {
+        throw new ConflictError("The checklist was changed by another action. Reload and try again.");
+      }
 
       await tx.auditLog.create({
         data: {
           actorId: user.id,
-          actorRole: user.roles[0] ?? "STAFF",
-          action: "UPLOAD_EMPLOYEE_DOCUMENT",
-          resourceType: "EMPLOYEE_DOCUMENT",
-          resourceId: doc.id,
+          actorRole: user.roles[0] ?? "HR",
+          action: "UPDATE_ONBOARDING_CHECKLIST_ITEM",
+          resourceType: "EMPLOYEE",
+          resourceId: emp.id,
           diffPayload: {
-            employeeId: emp.id,
-            documentType: doc.documentType,
-            title: doc.title,
+            itemId: input.itemId,
+            fromCompleted: target.completed,
+            toCompleted: input.completed,
           },
         },
       });
@@ -804,30 +907,69 @@ export class EmployeeService {
   }
 
   /**
-   * Processes employee offboarding and exit record.
-   * Sets status to EXITED.
-   * Gated: HR / Admin only.
+   * Registers secure document metadata for an employee record.
+   * Policy-gated (OD-013): no storage provider is approved, so metadata pointing to a
+   * file that was never stored must not be recorded.
+   */
+  async addEmployeeDocument(
+    user: AuthenticatedUser,
+    input: UploadEmployeeDocumentInput
+  ): Promise<void> {
+    await this.assertAdminAccess(user);
+
+    const emp = await prisma.employee.findUnique({
+      where: { id: input.employeeId },
+      select: { id: true },
+    });
+    if (!emp) {
+      throw new NotFoundError("Employee record not found.");
+    }
+
+    throw new PolicyBlockedError(
+      "OD-013",
+      "Employee document upload is unavailable until a production file storage provider is approved and configured."
+    );
+  }
+
+  /**
+   * Records employee offboarding and sets status to EXITED.
+   * Clearance is not set automatically (OD-015): the exit record starts PENDING.
+   * Gated: HR / Admin with canEmployees.
    */
   async processEmployeeExit(
     user: AuthenticatedUser,
     input: ProcessExitInput
   ): Promise<void> {
-    this.assertAdminAccess(user);
-
-    const emp = await prisma.employee.findUnique({
-      where: { id: input.employeeId },
-      include: { exitRecord: true },
-    });
-
-    if (!emp) {
-      throw new NotFoundError("Employee record not found.");
-    }
-
-    if (emp.exitRecord) {
-      throw new ValidationError("An exit record already exists for this employee.");
-    }
+    await this.assertAdminAccess(user);
 
     await prisma.$transaction(async (tx) => {
+      const emp = await tx.employee.findUnique({
+        where: { id: input.employeeId },
+        select: { id: true, userId: true, status: true, exitRecord: { select: { id: true } } },
+      });
+
+      if (!emp) {
+        throw new NotFoundError("Employee record not found.");
+      }
+      assertNotOwnEmployeeRecord(user, emp.userId);
+
+      if (emp.exitRecord) {
+        throw new ValidationError("An exit record already exists for this employee.");
+      }
+
+      if (emp.status === EmployeeStatus.EXITED) {
+        throw new ValidationError("This employee has already exited.");
+      }
+
+      const updated = await tx.employee.updateMany({
+        where: { id: emp.id, status: emp.status },
+        data: { status: EmployeeStatus.EXITED },
+      });
+      if (updated.count !== 1) {
+        throw new ConflictError("The employee status was changed by another action. Reload and try again.");
+      }
+
+      // Unique employeeId on the exit record also guards concurrent exits.
       await tx.employeeExitRecord.create({
         data: {
           employeeId: emp.id,
@@ -835,14 +977,8 @@ export class EmployeeService {
           resignationDate: input.resignationDate ? new Date(input.resignationDate) : null,
           reason: input.reason?.trim() || null,
           exitInterviewNotes: input.exitInterviewNotes?.trim() || null,
-          status: "CLEARED",
           processedById: user.id,
         },
-      });
-
-      await tx.employee.update({
-        where: { id: emp.id },
-        data: { status: EmployeeStatus.EXITED },
       });
 
       await tx.employmentHistory.create({
@@ -851,7 +987,7 @@ export class EmployeeService {
           changeType: "STATUS_CHANGE",
           previousValue: emp.status,
           newValue: EmployeeStatus.EXITED,
-          remarks: `Offboarding completed. Reason: ${input.reason || "Standard exit"}`,
+          remarks: `Exit recorded; clearance pending. Reason: ${input.reason?.trim() || "Not provided"}`,
           changedById: user.id,
         },
       });
@@ -864,8 +1000,9 @@ export class EmployeeService {
           resourceType: "EMPLOYEE",
           resourceId: emp.id,
           diffPayload: {
+            fromStatus: emp.status,
             lastWorkingDate: input.lastWorkingDate,
-            reason: input.reason,
+            reason: input.reason ?? null,
           },
         },
       });

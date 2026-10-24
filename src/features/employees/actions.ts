@@ -1,10 +1,17 @@
 "use server";
 
-import { requireAuth } from "@/lib/auth/guards";
+import { Role } from "@prisma/client";
+import { revalidatePath } from "next/cache";
+import type { ZodError } from "zod";
+import { requireAuth, requirePermission } from "@/lib/auth/guards";
+import { toActionError } from "@/lib/errors";
+import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
 import { offerService } from "./services/offer-service";
 import { employeeService } from "./services/employee-service";
 import {
   CreateJobOfferSchema,
+  OfferReferenceSchema,
+  RevokeJobOfferSchema,
   CandidateOfferDecisionSchema,
   CreateEmployeeFromApplicationSchema,
   DirectCreateEmployeeSchema,
@@ -14,68 +21,102 @@ import {
   UploadEmployeeDocumentSchema,
   ProcessExitSchema,
 } from "./schemas";
-import { ValidationError, ForbiddenError, NotFoundError } from "@/lib/errors";
-import { revalidatePath } from "next/cache";
 
 export type EmployeeActionResult<T = unknown> =
   | { success: true; data: T }
   | { success: false; error: string; fieldErrors?: Record<string, string> };
 
+const EMPLOYEE_ADMIN_ROLES: Role[] = [Role.ADMIN, Role.HR];
+
+/** Reads a text field; File values and missing fields become undefined so zod rejects them. */
+function readText(formData: FormData, key: string): string | undefined {
+  const value = formData.get(key);
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Reads an optional text field; empty strings become null. */
+function readOptionalText(formData: FormData, key: string): string | null | undefined {
+  const value = formData.get(key);
+  if (value === null || value === "") return null;
+  return typeof value === "string" ? value : undefined;
+}
+
+function toFieldErrors(error: ZodError): Record<string, string> {
+  const fieldErrors: Record<string, string> = {};
+  error.issues.forEach((i) => {
+    if (i.path[0]) fieldErrors[i.path[0].toString()] = i.message;
+  });
+  return fieldErrors;
+}
+
+function revalidateApplicationViews(applicationId: string): void {
+  for (const base of ["/admin/applications", "/subadmin/applications", "/recruitment/applications"]) {
+    revalidatePath(base);
+    revalidatePath(`${base}/${applicationId}`);
+  }
+  revalidatePath("/candidate/applications");
+  revalidatePath(`/candidate/applications/${applicationId}`);
+}
+
+function revalidateEmployeeViews(employeeId?: string): void {
+  for (const base of ["/admin/employees", "/subadmin/employees", "/recruitment/employees"]) {
+    revalidatePath(base);
+    if (employeeId) {
+      revalidatePath(`${base}/${employeeId}`);
+    }
+  }
+}
+
 export async function createJobOfferAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
 
-    const raw = {
-      applicationId: formData.get("applicationId") as string,
-      department: formData.get("department") as string,
-      designation: formData.get("designation") as string,
-      expectedJoiningDate: formData.get("expectedJoiningDate") as string,
-      location: (formData.get("location") as string) || null,
-      termsSummary: formData.get("termsSummary") as string,
-      notes: (formData.get("notes") as string) || null,
-    };
-
-    const validated = CreateJobOfferSchema.safeParse(raw);
+    const validated = CreateJobOfferSchema.safeParse({
+      applicationId: readText(formData, "applicationId"),
+      department: readText(formData, "department"),
+      designation: readText(formData, "designation"),
+      expectedJoiningDate: readText(formData, "expectedJoiningDate"),
+      location: readOptionalText(formData, "location"),
+      termsSummary: readText(formData, "termsSummary"),
+      notes: readOptionalText(formData, "notes"),
+    });
     if (!validated.success) {
-      const fieldErrors: Record<string, string> = {};
-      validated.error.issues.forEach((i) => {
-        if (i.path[0]) fieldErrors[i.path[0].toString()] = i.message;
-      });
-      return { success: false, error: "Validation failed", fieldErrors };
+      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
     }
 
     const offer = await offerService.createDraftOffer(user, validated.data);
 
-    revalidatePath(`/recruitment/applications/${validated.data.applicationId}`);
+    revalidateApplicationViews(validated.data.applicationId);
     return { success: true, data: offer };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Offer creation failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Offer creation failed.") };
   }
 }
 
+/**
+ * Extends a draft offer. The application to revalidate is derived from the offer on the
+ * server, never taken from the client.
+ */
 export async function extendJobOfferAction(
-  offerId: string,
-  applicationId: string
+  offerId: string
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
-    await offerService.extendOffer(user, offerId);
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
 
-    revalidatePath(`/recruitment/applications/${applicationId}`);
-    revalidatePath("/recruitment/applications");
+    const validated = OfferReferenceSchema.safeParse({ offerId });
+    if (!validated.success) {
+      return { success: false, error: "Invalid offer reference" };
+    }
+
+    const result = await offerService.extendOffer(user, validated.data.offerId);
+    scheduleOutboxFlush();
+
+    revalidateApplicationViews(result.applicationId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Offer extension failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Offer extension failed.") };
   }
 }
 
@@ -85,47 +126,46 @@ export async function candidateDecideOfferAction(
   try {
     const user = await requireAuth();
 
-    const raw = {
-      offerId: formData.get("offerId") as string,
-      decision: formData.get("decision") as "ACCEPT" | "DECLINE",
-      declineReason: (formData.get("declineReason") as string) || null,
-    };
-
-    const validated = CandidateOfferDecisionSchema.safeParse(raw);
+    const validated = CandidateOfferDecisionSchema.safeParse({
+      offerId: readText(formData, "offerId"),
+      decision: readText(formData, "decision"),
+      declineReason: readOptionalText(formData, "declineReason"),
+    });
     if (!validated.success) {
       return { success: false, error: "Invalid offer decision parameters" };
     }
 
-    await offerService.candidateDecideOffer(user, validated.data);
+    const result = await offerService.candidateDecideOffer(user, validated.data);
 
-    revalidatePath("/candidate/applications");
+    revalidateApplicationViews(result.applicationId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Failed to process offer decision";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Failed to process offer decision.") };
   }
 }
 
+/**
+ * Revokes a draft or extended offer. The reason is validated and bounded; the application
+ * to revalidate is derived from the offer on the server.
+ */
 export async function revokeJobOfferAction(
   offerId: string,
-  applicationId: string,
-  reason?: string
+  reason?: string | null
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
-    await offerService.revokeOffer(user, offerId, reason);
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
 
-    revalidatePath(`/recruitment/applications/${applicationId}`);
+    const validated = RevokeJobOfferSchema.safeParse({ offerId, reason: reason ?? null });
+    if (!validated.success) {
+      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
+    }
+
+    const result = await offerService.revokeOffer(user, validated.data);
+
+    revalidateApplicationViews(result.applicationId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Revoking offer failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Revoking offer failed.") };
   }
 }
 
@@ -133,48 +173,37 @@ export async function hireEmployeeFromApplicationAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
 
-    let emergencyContact = null;
-    const ecName = formData.get("emergencyContactName") as string;
-    const ecRel = formData.get("emergencyContactRelation") as string;
-    const ecPhone = formData.get("emergencyContactPhone") as string;
-    if (ecName && ecPhone) {
-      emergencyContact = { name: ecName, relation: ecRel || "Family", phone: ecPhone };
-    }
+    const ecName = readOptionalText(formData, "emergencyContactName");
+    const ecRel = readOptionalText(formData, "emergencyContactRelation");
+    const ecPhone = readOptionalText(formData, "emergencyContactPhone");
+    const emergencyContact =
+      ecName || ecRel || ecPhone ? { name: ecName, relation: ecRel, phone: ecPhone } : null;
 
-    const raw = {
-      applicationId: formData.get("applicationId") as string,
-      employeeCode: formData.get("employeeCode") as string,
-      department: formData.get("department") as string,
-      designation: formData.get("designation") as string,
-      joiningDate: formData.get("joiningDate") as string,
-      managerId: (formData.get("managerId") as string) || null,
-      personalPhone: (formData.get("personalPhone") as string) || null,
+    const validated = CreateEmployeeFromApplicationSchema.safeParse({
+      applicationId: readText(formData, "applicationId"),
+      employeeCode: readText(formData, "employeeCode"),
+      department: readText(formData, "department"),
+      designation: readText(formData, "designation"),
+      joiningDate: readText(formData, "joiningDate"),
+      managerId: readOptionalText(formData, "managerId"),
+      personalPhone: readOptionalText(formData, "personalPhone"),
       emergencyContact,
-      internalNotes: (formData.get("internalNotes") as string) || null,
-    };
-
-    const validated = CreateEmployeeFromApplicationSchema.safeParse(raw);
+      internalNotes: readOptionalText(formData, "internalNotes"),
+    });
     if (!validated.success) {
-      const fieldErrors: Record<string, string> = {};
-      validated.error.issues.forEach((i) => {
-        if (i.path[0]) fieldErrors[i.path[0].toString()] = i.message;
-      });
-      return { success: false, error: "Validation failed", fieldErrors };
+      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
     }
 
     const employee = await employeeService.createEmployeeFromApplication(user, validated.data);
+    scheduleOutboxFlush();
 
-    revalidatePath(`/recruitment/applications/${validated.data.applicationId}`);
-    revalidatePath("/recruitment/employees");
+    revalidateApplicationViews(validated.data.applicationId);
+    revalidateEmployeeViews(employee.id);
     return { success: true, data: employee };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Employee hiring failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Employee hiring failed.") };
   }
 }
 
@@ -182,38 +211,30 @@ export async function directCreateEmployeeAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
+    // Bypasses the application/offer gate: ADMIN only (pending product decision).
+    const user = await requirePermission("canEmployees", { roles: [Role.ADMIN] });
 
-    const raw = {
-      userId: formData.get("userId") as string,
-      employeeCode: formData.get("employeeCode") as string,
-      department: formData.get("department") as string,
-      designation: formData.get("designation") as string,
-      joiningDate: formData.get("joiningDate") as string,
-      managerId: (formData.get("managerId") as string) || null,
-      personalPhone: (formData.get("personalPhone") as string) || null,
-      internalNotes: (formData.get("internalNotes") as string) || null,
-    };
-
-    const validated = DirectCreateEmployeeSchema.safeParse(raw);
+    const validated = DirectCreateEmployeeSchema.safeParse({
+      userId: readText(formData, "userId"),
+      justification: readText(formData, "justification"),
+      employeeCode: readText(formData, "employeeCode"),
+      department: readText(formData, "department"),
+      designation: readText(formData, "designation"),
+      joiningDate: readText(formData, "joiningDate"),
+      managerId: readOptionalText(formData, "managerId"),
+      personalPhone: readOptionalText(formData, "personalPhone"),
+      internalNotes: readOptionalText(formData, "internalNotes"),
+    });
     if (!validated.success) {
-      const fieldErrors: Record<string, string> = {};
-      validated.error.issues.forEach((i) => {
-        if (i.path[0]) fieldErrors[i.path[0].toString()] = i.message;
-      });
-      return { success: false, error: "Validation failed", fieldErrors };
+      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
     }
 
     const employee = await employeeService.createDirectEmployee(user, validated.data);
 
-    revalidatePath("/recruitment/employees");
+    revalidateEmployeeViews(employee.id);
     return { success: true, data: employee };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Direct employee creation failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Direct employee creation failed.") };
   }
 }
 
@@ -221,30 +242,23 @@ export async function updateEmployeeStatusAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
 
-    const raw = {
-      employeeId: formData.get("employeeId") as string,
-      toStatus: formData.get("toStatus") as string,
-      remarks: (formData.get("remarks") as string) || null,
-    };
-
-    const validated = UpdateEmployeeStatusSchema.safeParse(raw);
+    const validated = UpdateEmployeeStatusSchema.safeParse({
+      employeeId: readText(formData, "employeeId"),
+      toStatus: readText(formData, "toStatus"),
+      remarks: readOptionalText(formData, "remarks"),
+    });
     if (!validated.success) {
-      return { success: false, error: "Validation failed" };
+      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
     }
 
     await employeeService.updateEmployeeStatus(user, validated.data);
 
-    revalidatePath(`/recruitment/employees/${validated.data.employeeId}`);
-    revalidatePath("/recruitment/employees");
+    revalidateEmployeeViews(validated.data.employeeId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Status update failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Status update failed.") };
   }
 }
 
@@ -252,30 +266,23 @@ export async function assignEmployeeManagerAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
 
-    const raw = {
-      employeeId: formData.get("employeeId") as string,
-      managerId: (formData.get("managerId") as string) || null,
-      remarks: (formData.get("remarks") as string) || null,
-    };
-
-    const validated = AssignManagerSchema.safeParse(raw);
+    const validated = AssignManagerSchema.safeParse({
+      employeeId: readText(formData, "employeeId"),
+      managerId: readOptionalText(formData, "managerId"),
+      remarks: readOptionalText(formData, "remarks"),
+    });
     if (!validated.success) {
-      return { success: false, error: "Validation failed" };
+      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
     }
 
     await employeeService.assignManager(user, validated.data);
 
-    revalidatePath(`/recruitment/employees/${validated.data.employeeId}`);
-    revalidatePath("/recruitment/employees");
+    revalidateEmployeeViews(validated.data.employeeId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Manager assignment failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Manager assignment failed.") };
   }
 }
 
@@ -285,7 +292,7 @@ export async function updateEmployeeChecklistAction(
   completed: boolean
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
 
     const validated = UpdateOnboardingChecklistSchema.safeParse({
       employeeId,
@@ -298,14 +305,10 @@ export async function updateEmployeeChecklistAction(
 
     await employeeService.updateOnboardingChecklist(user, validated.data);
 
-    revalidatePath(`/recruitment/employees/${employeeId}`);
+    revalidateEmployeeViews(validated.data.employeeId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Checklist update failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Checklist update failed.") };
   }
 }
 
@@ -313,33 +316,29 @@ export async function addEmployeeDocumentAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
 
-    const raw = {
-      employeeId: formData.get("employeeId") as string,
-      documentType: formData.get("documentType") as string,
-      title: formData.get("title") as string,
-      storageKey: formData.get("storageKey") as string,
-      mimeType: formData.get("mimeType") as string,
-      fileSizeBytes: Number(formData.get("fileSizeBytes") || "1024"),
+    const rawSize = readText(formData, "fileSizeBytes");
+    const validated = UploadEmployeeDocumentSchema.safeParse({
+      employeeId: readText(formData, "employeeId"),
+      documentType: readText(formData, "documentType"),
+      title: readText(formData, "title"),
+      storageKey: readText(formData, "storageKey"),
+      mimeType: readText(formData, "mimeType"),
+      fileSizeBytes: rawSize === undefined ? undefined : Number(rawSize),
       isConfidential: true,
-    };
-
-    const validated = UploadEmployeeDocumentSchema.safeParse(raw);
+    });
     if (!validated.success) {
       return { success: false, error: "Document metadata invalid" };
     }
 
+    // Policy-gated in the service (OD-013): always rejected until storage is approved.
     await employeeService.addEmployeeDocument(user, validated.data);
 
-    revalidatePath(`/recruitment/employees/${validated.data.employeeId}`);
+    revalidateEmployeeViews(validated.data.employeeId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Document upload failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Document upload failed.") };
   }
 }
 
@@ -347,31 +346,24 @@ export async function processEmployeeExitAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
   try {
-    const user = await requireAuth();
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
 
-    const raw = {
-      employeeId: formData.get("employeeId") as string,
-      lastWorkingDate: formData.get("lastWorkingDate") as string,
-      resignationDate: (formData.get("resignationDate") as string) || null,
-      reason: (formData.get("reason") as string) || null,
-      exitInterviewNotes: (formData.get("exitInterviewNotes") as string) || null,
-    };
-
-    const validated = ProcessExitSchema.safeParse(raw);
+    const validated = ProcessExitSchema.safeParse({
+      employeeId: readText(formData, "employeeId"),
+      lastWorkingDate: readText(formData, "lastWorkingDate"),
+      resignationDate: readOptionalText(formData, "resignationDate"),
+      reason: readOptionalText(formData, "reason"),
+      exitInterviewNotes: readOptionalText(formData, "exitInterviewNotes"),
+    });
     if (!validated.success) {
-      return { success: false, error: "Exit validation failed" };
+      return { success: false, error: "Exit validation failed", fieldErrors: toFieldErrors(validated.error) };
     }
 
     await employeeService.processEmployeeExit(user, validated.data);
 
-    revalidatePath(`/recruitment/employees/${validated.data.employeeId}`);
-    revalidatePath("/recruitment/employees");
+    revalidateEmployeeViews(validated.data.employeeId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    if (err instanceof ValidationError || err instanceof ForbiddenError || err instanceof NotFoundError) {
-      return { success: false, error: err.message };
-    }
-    const message = err instanceof Error ? err.message : "Exit processing failed";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(err, "Exit processing failed.") };
   }
 }

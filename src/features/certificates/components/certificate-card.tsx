@@ -2,7 +2,8 @@
 
 import React from "react";
 import Link from "next/link";
-import { CertificateDetail, CertificateStatus } from "../types";
+import type { CertificateDetail } from "../types";
+import { CertificateStatus } from "@/types/enums";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,12 +16,25 @@ import {
   UserCheck,
 } from "lucide-react";
 
+/** Only the fields the card renders, so callers never ship internal certificate fields to the browser. */
+export type CertificateCardData = Pick<
+  CertificateDetail,
+  | "id"
+  | "verificationCode"
+  | "recipientName"
+  | "programmeTitle"
+  | "completionDate"
+  | "signatoryName"
+  | "signatoryTitle"
+  | "status"
+>;
+
 interface CertificateCardProps {
-  certificate: CertificateDetail;
+  certificate: CertificateCardData;
 }
 
 export function CertificateCard({ certificate }: CertificateCardProps) {
-  const isRevoked = certificate.status === CertificateStatus.REVOKED;
+  const isActive = certificate.status === CertificateStatus.ACTIVE;
 
   return (
     <Card className="border-border shadow-sm overflow-hidden">
@@ -38,8 +52,8 @@ export function CertificateCard({ certificate }: CertificateCardProps) {
             </div>
           </div>
 
-          <Badge variant={isRevoked ? "destructive" : "success"}>
-            {isRevoked ? "Revoked" : "Active & Verified"}
+          <Badge variant={isActive ? "success" : "destructive"}>
+            {isActive ? "Active" : certificate.status === CertificateStatus.REVOKED ? "Revoked" : "Superseded"}
           </Badge>
         </div>
       </CardHeader>
@@ -89,15 +103,17 @@ export function CertificateCard({ certificate }: CertificateCardProps) {
             <ExternalLink className="h-3 w-3" />
           </Link>
 
-          <a
-            href={`/api/certificates/${certificate.id}/download`}
-            download
-          >
-            <Button size="sm" variant="primary" className="gap-1.5">
-              <Download className="h-4 w-4" />
-              Download Official PDF
-            </Button>
-          </a>
+          {isActive && (
+            <a
+              href={`/api/certificates/${certificate.id}/download`}
+              download
+            >
+              <Button size="sm" variant="primary" className="gap-1.5">
+                <Download className="h-4 w-4" />
+                Download PDF
+              </Button>
+            </a>
+          )}
         </div>
       </CardContent>
     </Card>

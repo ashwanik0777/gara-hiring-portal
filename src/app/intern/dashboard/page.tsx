@@ -6,13 +6,16 @@ import { prisma } from "@/lib/db";
 import { InternTaskList } from "@/features/intern-tasks/components/intern-task-list";
 import { ProgressReportDialog } from "@/features/intern-tasks/components/progress-report-dialog";
 import { CertificateCard } from "@/features/certificates/components/certificate-card";
+import { InternCheckpointList } from "@/features/internship-evaluation/components/intern-checkpoint-list";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/feedback/empty-state";
+import { EvaluationStatus } from "@prisma/client";
 import {
   Award,
   CheckSquare,
+  ClipboardCheck,
   FileText,
   Calendar,
   Building,
@@ -26,10 +29,14 @@ export default async function InternDashboardPage() {
   if (!user) {
     redirect("/login?callbackUrl=/intern/dashboard");
   }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
 
-  // Find active internship enrollment for the user
+  // Only the signed-in user's own enrollment is ever loaded (record-level scoping by user.id).
   const enrollment = await prisma.internshipEnrollment.findFirst({
     where: { userId: user.id },
+    orderBy: { createdAt: "desc" },
     include: {
       application: {
         include: {
@@ -39,15 +46,28 @@ export default async function InternDashboardPage() {
       supervisor: {
         select: { id: true, name: true, email: true },
       },
+      checkpoints: {
+        select: {
+          id: true,
+          dayNumber: true,
+          title: true,
+          description: true,
+          submissionNotes: true,
+          supervisorFeedback: true,
+          status: true,
+        },
+        orderBy: { dayNumber: "asc" },
+      },
       tasks: {
         include: {
+          // Only the reviewer's display name reaches the intern's browser.
           assignedBy: {
-            select: { id: true, name: true, email: true },
+            select: { name: true },
           },
           submissions: {
             include: {
               reviewedBy: {
-                select: { id: true, name: true },
+                select: { name: true },
               },
             },
             orderBy: { versionNumber: "desc" },
@@ -58,8 +78,19 @@ export default async function InternDashboardPage() {
       progressReports: {
         orderBy: { submittedAt: "desc" },
       },
-      completion: true,
-      certificate: true,
+      certificate: {
+        // Only the fields the certificate card renders (no revocation reason, storage key or issuer).
+        select: {
+          id: true,
+          verificationCode: true,
+          recipientName: true,
+          programmeTitle: true,
+          completionDate: true,
+          signatoryName: true,
+          signatoryTitle: true,
+          status: true,
+        },
+      },
     },
   });
 
@@ -91,7 +122,7 @@ export default async function InternDashboardPage() {
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <Badge variant="default" className="text-xs">
-                Active Intern
+                Intern Workspace
               </Badge>
               <span className="text-xs text-muted-foreground font-mono">
                 {enrollment.application.referenceCode}
@@ -107,7 +138,7 @@ export default async function InternDashboardPage() {
               </span>
               <span className="flex items-center gap-1.5">
                 <UserCheck className="h-3.5 w-3.5 text-primary" />
-                Supervisor: {enrollment.supervisor?.name || "Assigned Leadership"}
+                Supervisor: {enrollment.supervisor?.name || "Not assigned yet"}
               </span>
               {enrollment.startDate && (
                 <span className="flex items-center gap-1.5">
@@ -149,7 +180,11 @@ export default async function InternDashboardPage() {
           <div className="p-3 rounded-lg bg-muted/20 border border-border/60">
             <p className="text-[11px] font-medium text-muted-foreground">Certificate</p>
             <p className="text-sm font-semibold text-foreground mt-1">
-              {enrollment.certificate ? "Issued & Verified" : "Pending Completion"}
+              {!enrollment.certificate
+                ? "Pending Completion"
+                : enrollment.certificate.status === "ACTIVE"
+                  ? "Issued"
+                  : enrollment.certificate.status}
             </p>
           </div>
         </div>
@@ -163,6 +198,31 @@ export default async function InternDashboardPage() {
             Official Credential
           </h2>
           <CertificateCard certificate={enrollment.certificate} />
+        </section>
+      )}
+
+      {/* Daily Evaluation Checkpoints */}
+      {enrollment.checkpoints.length > 0 && (
+        <section className="space-y-4" aria-labelledby="intern-checkpoints-heading">
+          <div>
+            <h2
+              id="intern-checkpoints-heading"
+              className="text-lg font-semibold text-foreground flex items-center gap-2"
+            >
+              <ClipboardCheck className="h-5 w-5 text-primary" />
+              Daily Evaluation Checkpoints
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              {enrollment.status === EvaluationStatus.IN_PROGRESS
+                ? "Submit your notes for each checkpoint. Your supervisor reviews them and leaves feedback."
+                : "Checkpoint notes can be submitted while your evaluation is in progress."}
+            </p>
+          </div>
+
+          <InternCheckpointList
+            checkpoints={enrollment.checkpoints}
+            canSubmit={enrollment.status === EvaluationStatus.IN_PROGRESS}
+          />
         </section>
       )}
 

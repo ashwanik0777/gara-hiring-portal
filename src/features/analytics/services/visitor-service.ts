@@ -1,15 +1,11 @@
 import crypto from "crypto";
 import { prisma } from "@/lib/db";
 
-/**
- * Baseline visitor count offset.
- * Preserves the platform's historical verified baseline while dynamically incrementing
- * on each genuinely new unique visitor recorded in PostgreSQL.
- */
-const BASELINE_OFFSET = parseInt(
-  process.env.INITIAL_VISITOR_OFFSET || "1480",
-  10
-);
+/** Maximum stored user-agent length (characters). */
+export const MAX_USER_AGENT_LENGTH = 255;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HEX_HASH_PATTERN = /^[0-9a-f]{64}$/;
 
 /**
  * Filter common web crawlers, indexers, and automated monitors.
@@ -22,123 +18,140 @@ export function isBot(userAgent: string | null): boolean {
 }
 
 /**
- * Cryptographically hash an IP address with a secret salt.
- * Ensures zero storage of plain PII (GDPR / OD-011 compliance) while enabling deduplication.
+ * Normalises an untrusted user-agent header: strips control characters, trims,
+ * and caps the length. Empty values become null.
  */
-export function hashIp(ip: string): string {
-  const salt = process.env.BETTER_AUTH_SECRET || "gara-innovation-analytics-salt";
-  return crypto.createHash("sha256").update(`${ip}:${salt}`).digest("hex");
+export function normalizeUserAgent(userAgent: string | null | undefined): string | null {
+  if (!userAgent) return null;
+  // Keep printable characters only (drops ASCII control characters).
+  const cleaned = Array.from(userAgent)
+    .filter((ch) => {
+      const code = ch.charCodeAt(0);
+      return code >= 0x20 && code !== 0x7f;
+    })
+    .join("")
+    .trim();
+  return cleaned ? cleaned.slice(0, MAX_USER_AGENT_LENGTH) : null;
 }
 
 export interface TrackVisitParams {
+  /** Visitor cookie value (only accepted when it is a UUID). */
   visitorId: string | null;
-  ip: string | null;
+  /**
+   * Keyed HMAC of the client IP (`getClientIpHash(headers, "visitor")`).
+   * Raw IP addresses are never passed to or stored by this service.
+   */
+  ipHash: string;
   userAgent: string | null;
 }
 
 export interface VisitTrackingResult {
-  totalUniqueVisitors: number;
+  /** `null` when the count could not be read. */
+  totalUniqueVisitors: number | null;
   visitorId: string;
   isNewVisitor: boolean;
 }
 
 /**
- * Fetches the current total count of unique visitors from PostgreSQL + baseline.
+ * Returns the number of recorded visitor rows (no baseline or offset),
+ * or `null` when the database cannot be read.
  */
-export async function getUniqueVisitorCount(): Promise<number> {
+export async function getUniqueVisitorCount(): Promise<number | null> {
   try {
-    const dbCount = await prisma.siteVisitor.count();
-    return BASELINE_OFFSET + dbCount;
+    return await prisma.siteVisitor.count();
   } catch (error) {
     console.error(
       "[VisitorService] Failed to read visitor count from database:",
       error instanceof Error ? error.message : error
     );
-    return BASELINE_OFFSET;
+    return null;
   }
 }
 
 /**
- * Records a visitor and returns the live unique count.
+ * Records a visitor and returns the recorded count.
  * Deduplicates by:
  * 1. Persistent cookie visitorId.
- * 2. Anonymized IP hash recorded within the current 24-hour window.
+ * 2. Keyed IP hash seen within the last 24 hours.
  */
 export async function trackUniqueVisit({
   visitorId,
-  ip,
+  ipHash,
   userAgent,
 }: TrackVisitParams): Promise<VisitTrackingResult> {
+  const normalizedUserAgent = normalizeUserAgent(userAgent);
+  const validVisitorId =
+    visitorId && UUID_PATTERN.test(visitorId.trim()) ? visitorId.trim() : null;
+  const effectiveVisitorId = validVisitorId ?? crypto.randomUUID();
+
   // Ignore bots and headless crawlers
-  if (isBot(userAgent)) {
-    const currentCount = await getUniqueVisitorCount();
+  if (isBot(normalizedUserAgent)) {
     return {
-      totalUniqueVisitors: currentCount,
-      visitorId: visitorId || "bot-ignored",
+      totalUniqueVisitors: await getUniqueVisitorCount(),
+      visitorId: effectiveVisitorId,
       isNewVisitor: false,
     };
   }
 
-  const effectiveIp = ip && ip !== "::1" && ip !== "127.0.0.1" ? ip : "local-loopback";
-  const ipHashed = hashIp(effectiveIp);
-  const effectiveVisitorId = visitorId?.trim() || crypto.randomUUID();
+  // Only keyed hashes are stored; anything else is discarded.
+  const storedIpHash = HEX_HASH_PATTERN.test(ipHash) ? ipHash : null;
 
   try {
     // 1. Check if visitorId already exists in database
-    const existingVisitor = await prisma.siteVisitor.findUnique({
-      where: { visitorId: effectiveVisitorId },
-    });
-
-    if (existingVisitor) {
-      // Update last seen timestamp without incrementing unique count
-      await prisma.siteVisitor.update({
-        where: { id: existingVisitor.id },
-        data: {
-          lastSeenAt: new Date(),
-          userAgent: userAgent ? userAgent.slice(0, 255) : null,
-        },
+    if (validVisitorId) {
+      const existingVisitor = await prisma.siteVisitor.findUnique({
+        where: { visitorId: validVisitorId },
       });
 
-      const totalCount = await getUniqueVisitorCount();
-      return {
-        totalUniqueVisitors: totalCount,
-        visitorId: existingVisitor.visitorId,
-        isNewVisitor: false,
-      };
+      if (existingVisitor) {
+        // Update last seen timestamp without incrementing unique count
+        await prisma.siteVisitor.update({
+          where: { id: existingVisitor.id },
+          data: {
+            lastSeenAt: new Date(),
+            userAgent: normalizedUserAgent,
+          },
+        });
+
+        return {
+          totalUniqueVisitors: await getUniqueVisitorCount(),
+          visitorId: existingVisitor.visitorId,
+          isNewVisitor: false,
+        };
+      }
     }
 
-    // 2. Fallback deduplication: Check if IP hash was seen today (prevents counting if user clears cookies)
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const existingIpVisitor = await prisma.siteVisitor.findFirst({
-      where: {
-        ipHash: ipHashed,
-        lastSeenAt: { gte: twentyFourHoursAgo },
-      },
-      orderBy: { lastSeenAt: "desc" },
-    });
+    // 2. Fallback deduplication: keyed IP hash seen in the last 24 hours
+    if (storedIpHash) {
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const existingIpVisitor = await prisma.siteVisitor.findFirst({
+        where: {
+          ipHash: storedIpHash,
+          lastSeenAt: { gte: twentyFourHoursAgo },
+        },
+        orderBy: { lastSeenAt: "desc" },
+      });
 
-    if (existingIpVisitor) {
-      // Recognized from recent IP visit — do not increment unique count
-      const totalCount = await getUniqueVisitorCount();
-      return {
-        totalUniqueVisitors: totalCount,
-        visitorId: existingIpVisitor.visitorId,
-        isNewVisitor: false,
-      };
+      if (existingIpVisitor) {
+        return {
+          totalUniqueVisitors: await getUniqueVisitorCount(),
+          visitorId: existingIpVisitor.visitorId,
+          isNewVisitor: false,
+        };
+      }
     }
 
-    // 3. Genuinely new unique visitor -> Create new record in PostgreSQL
+    // 3. New visitor -> create a record
     await prisma.siteVisitor.create({
       data: {
         visitorId: effectiveVisitorId,
-        ipHash: ipHashed,
-        userAgent: userAgent ? userAgent.slice(0, 255) : null,
+        ipHash: storedIpHash,
+        userAgent: normalizedUserAgent,
       },
     });
 
-    const totalCount = await getUniqueVisitorCount();
     return {
-      totalUniqueVisitors: totalCount,
+      totalUniqueVisitors: await getUniqueVisitorCount(),
       visitorId: effectiveVisitorId,
       isNewVisitor: true,
     };
@@ -148,7 +161,7 @@ export async function trackUniqueVisit({
       error instanceof Error ? error.message : error
     );
     return {
-      totalUniqueVisitors: BASELINE_OFFSET,
+      totalUniqueVisitors: null,
       visitorId: effectiveVisitorId,
       isNewVisitor: false,
     };

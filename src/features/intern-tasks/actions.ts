@@ -1,186 +1,133 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { requireAuth } from "@/lib/auth/guards";
+import { toActionError } from "@/lib/errors";
 import { taskService } from "./services/task-service";
-import { TaskPriority, SubmissionReviewStatus, ProgressCadence } from "@prisma/client";
+import {
+  CreateTaskSchema,
+  ReviewProgressReportSchema,
+  ReviewSubmissionSchema,
+  SubmitProgressReportSchema,
+  SubmitTaskSchema,
+} from "./schemas";
+import { parseInput, readFormFields } from "@/features/internship-evaluation/form-input";
+import { revalidateEvaluationViews } from "@/features/internship-evaluation/revalidate";
 
-export async function createTaskAction(formData: FormData) {
+export type TaskActionResult<T = null> =
+  | { success: true; data: T }
+  | { success: false; error: string };
+
+export async function createTaskAction(
+  formData: FormData
+): Promise<TaskActionResult<{ taskId: string }>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Authentication required" };
-    }
-
-    const enrollmentId = formData.get("enrollmentId") as string;
-    const title = formData.get("title") as string;
-    const description = formData.get("description") as string;
-    const priority = (formData.get("priority") as TaskPriority) || TaskPriority.MEDIUM;
-    const dueDate = (formData.get("dueDate") as string) || null;
-
-    if (!enrollmentId || !title || !description) {
-      return { success: false, error: "Enrollment ID, title, and description are required" };
-    }
-
-    const task = await taskService.createTask(user.id, user.roles, {
-      enrollmentId,
-      title,
-      description,
-      priority,
-      dueDate,
-    });
-
-    revalidatePath(`/recruitment/evaluations/${enrollmentId}`);
-    revalidatePath("/intern/dashboard");
-    return { success: true, task };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to create task";
-    return { success: false, error: message };
-  }
-}
-
-export async function submitTaskAction(formData: FormData) {
-  try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Authentication required" };
-    }
-
-    const taskId = formData.get("taskId") as string;
-    const submissionNotes = formData.get("submissionNotes") as string;
-    const deliverableUrlsRaw = formData.get("deliverableUrls") as string;
-    const rawDeliverableUrls = deliverableUrlsRaw
-      ? deliverableUrlsRaw.split(",").map((u) => u.trim()).filter(Boolean)
-      : [];
-
-    // Validate URLs to prevent XSS via javascript: or data: schemes
-    const deliverableUrls: string[] = [];
-    for (const url of rawDeliverableUrls) {
-      try {
-        const parsed = new URL(url);
-        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-          return { success: false, error: `Invalid URL protocol in deliverable: ${url}. Only http and https are allowed.` };
-        }
-        deliverableUrls.push(url);
-      } catch {
-        return { success: false, error: `Invalid URL format: ${url}` };
-      }
-    }
-
-    if (!taskId || !submissionNotes) {
-      return { success: false, error: "Task ID and submission notes are required" };
-    }
-
-    const result = await taskService.submitTask(user.id, {
-      taskId,
-      submissionNotes,
-      deliverableUrls,
-    });
-
-    revalidatePath("/intern/dashboard");
-    return { success: true, result };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to submit task";
-    return { success: false, error: message };
-  }
-}
-
-export async function reviewSubmissionAction(formData: FormData) {
-  try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Authentication required" };
-    }
-
-    const taskId = formData.get("taskId") as string;
-    const submissionId = formData.get("submissionId") as string;
-    const status = formData.get("status") as SubmissionReviewStatus;
-    const supervisorFeedback = formData.get("supervisorFeedback") as string;
-    const changeRequestNotes = formData.get("changeRequestNotes") as string;
-
-    if (!taskId || !submissionId || !status) {
-      return { success: false, error: "Task ID, submission ID, and status are required" };
-    }
-
-    const result = await taskService.reviewSubmission(user.id, user.roles, {
-      taskId,
-      submissionId,
-      status,
-      supervisorFeedback,
-      changeRequestNotes,
-    });
-
-    revalidatePath("/recruitment/evaluations");
-    revalidatePath("/intern/dashboard");
-    return { success: true, result };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to review submission";
-    return { success: false, error: message };
-  }
-}
-
-export async function submitProgressReportAction(formData: FormData) {
-  try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Authentication required" };
-    }
-
-    const enrollmentId = formData.get("enrollmentId") as string;
-    const cadence = (formData.get("cadence") as ProgressCadence) || ProgressCadence.WEEKLY;
-    const periodIdentifier = formData.get("periodIdentifier") as string;
-    const summary = formData.get("summary") as string;
-    const learnings = formData.get("learnings") as string;
-    const blockers = formData.get("blockers") as string;
-
-    if (!enrollmentId || !periodIdentifier || !summary) {
-      return { success: false, error: "Enrollment ID, period identifier, and summary are required" };
-    }
-
-    const report = await taskService.submitProgressReport(user.id, {
-      enrollmentId,
-      cadence,
-      periodIdentifier,
-      summary,
-      learnings,
-      blockers,
-    });
-
-    revalidatePath(`/recruitment/evaluations/${enrollmentId}`);
-    revalidatePath("/intern/dashboard");
-    return { success: true, report };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to submit progress report";
-    return { success: false, error: message };
-  }
-}
-
-export async function reviewProgressReportAction(formData: FormData) {
-  try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "Authentication required" };
-    }
-
-    const reportId = formData.get("reportId") as string;
-    const supervisorFeedback = formData.get("supervisorFeedback") as string;
-
-    if (!reportId || !supervisorFeedback) {
-      return { success: false, error: "Report ID and feedback are required" };
-    }
-
-    const report = await taskService.reviewProgressReport(
-      user.id,
-      user.roles,
-      reportId,
-      supervisorFeedback
+    const user = await requireAuth();
+    const input = parseInput(
+      CreateTaskSchema,
+      readFormFields(formData, ["enrollmentId", "title", "description", "priority", "dueDate"])
     );
 
-    revalidatePath("/recruitment/evaluations");
-    revalidatePath("/intern/dashboard");
-    return { success: true, report };
+    const task = await taskService.createTask(user, {
+      enrollmentId: input.enrollmentId,
+      title: input.title,
+      description: input.description,
+      priority: input.priority,
+      dueDate: input.dueDate ?? null,
+    });
+
+    revalidateEvaluationViews(task.enrollmentId);
+    return { success: true, data: { taskId: task.id } };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to review progress report";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(error, "Failed to create task") };
+  }
+}
+
+export async function submitTaskAction(
+  formData: FormData
+): Promise<TaskActionResult<{ submissionId: string; versionNumber: number }>> {
+  try {
+    const user = await requireAuth();
+    const input = parseInput(
+      SubmitTaskSchema,
+      readFormFields(formData, ["taskId", "submissionNotes", "deliverableUrls"])
+    );
+
+    const result = await taskService.submitTask(user, {
+      taskId: input.taskId,
+      submissionNotes: input.submissionNotes,
+      deliverableUrls: input.deliverableUrls,
+    });
+
+    revalidateEvaluationViews(result.enrollmentId);
+    return {
+      success: true,
+      data: { submissionId: result.submission.id, versionNumber: result.submission.versionNumber },
+    };
+  } catch (error: unknown) {
+    return { success: false, error: toActionError(error, "Failed to submit task") };
+  }
+}
+
+export async function reviewSubmissionAction(formData: FormData): Promise<TaskActionResult> {
+  try {
+    const user = await requireAuth();
+    const input = parseInput(
+      ReviewSubmissionSchema,
+      readFormFields(formData, [
+        "taskId",
+        "submissionId",
+        "status",
+        "supervisorFeedback",
+        "changeRequestNotes",
+      ])
+    );
+
+    const result = await taskService.reviewSubmission(user, input);
+
+    revalidateEvaluationViews(result.enrollmentId);
+    return { success: true, data: null };
+  } catch (error: unknown) {
+    return { success: false, error: toActionError(error, "Failed to review submission") };
+  }
+}
+
+export async function submitProgressReportAction(formData: FormData): Promise<TaskActionResult> {
+  try {
+    const user = await requireAuth();
+    const input = parseInput(
+      SubmitProgressReportSchema,
+      readFormFields(formData, [
+        "enrollmentId",
+        "cadence",
+        "periodIdentifier",
+        "summary",
+        "learnings",
+        "blockers",
+      ])
+    );
+
+    const report = await taskService.submitProgressReport(user, input);
+
+    revalidateEvaluationViews(report.enrollmentId);
+    return { success: true, data: null };
+  } catch (error: unknown) {
+    return { success: false, error: toActionError(error, "Failed to submit progress report") };
+  }
+}
+
+export async function reviewProgressReportAction(formData: FormData): Promise<TaskActionResult> {
+  try {
+    const user = await requireAuth();
+    const input = parseInput(
+      ReviewProgressReportSchema,
+      readFormFields(formData, ["reportId", "supervisorFeedback"])
+    );
+
+    const report = await taskService.reviewProgressReport(user, input.reportId, input.supervisorFeedback);
+
+    revalidateEvaluationViews(report.enrollmentId);
+    return { success: true, data: null };
+  } catch (error: unknown) {
+    return { success: false, error: toActionError(error, "Failed to review progress report") };
   }
 }

@@ -7,10 +7,6 @@ import {
   Briefcase,
   Calendar,
   CreditCard,
-  CheckCircle2,
-  Clock,
-  ArrowRight,
-  Sparkles,
 } from "lucide-react";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -368,17 +364,16 @@ export function WorkforceDonutChart({
   const strokeWidth = 18;
   const circumference = 2 * Math.PI * radius;
 
-  let accumulatedPercent = 0;
-  const slices = activeData.map((item) => {
-    const strokeDasharray = `${(item.percentage / 100) * circumference} ${circumference}`;
-    const strokeDashoffset = -((accumulatedPercent / 100) * circumference);
-    accumulatedPercent += item.percentage;
-    return {
-      ...item,
-      strokeDasharray,
-      strokeDashoffset,
-    };
-  });
+  // Cumulative start offsets computed with a pure reduce (no mutation during render).
+  const startPercents = activeData.reduce<number[]>((offsets, item, idx) => {
+    offsets.push(idx === 0 ? 0 : offsets[idx - 1] + activeData[idx - 1].percentage);
+    return offsets;
+  }, []);
+  const slices = activeData.map((item, idx) => ({
+    ...item,
+    strokeDasharray: `${(item.percentage / 100) * circumference} ${circumference}`,
+    strokeDashoffset: -((startPercents[idx] / 100) * circumference),
+  }));
 
   return (
     <Card className="rounded-2xl border border-border/80 p-5 shadow-2xs">
@@ -642,7 +637,8 @@ export function PayrollTrendChart({
   data,
   formatCurrency,
 }: PayrollTrendChartProps) {
-  const maxDisbursed = Math.max(...data.map((d) => d.disbursedAmount), 50000);
+  // Scale bars relative to the largest recorded cycle total (avoid division by zero).
+  const maxDisbursed = Math.max(...data.map((d) => d.disbursedAmount), 1);
 
   return (
     <Card className="rounded-2xl border border-border/80 p-5 shadow-2xs">
@@ -659,6 +655,11 @@ export function PayrollTrendChart({
       </div>
 
       <div className="space-y-4">
+        {data.length === 0 && (
+          <div className="py-6 text-center text-xs text-muted-foreground">
+            No payroll cycles recorded yet.
+          </div>
+        )}
         {data.map((cycle) => {
           const pct = Math.round((cycle.disbursedAmount / maxDisbursed) * 100);
           return (
@@ -672,7 +673,11 @@ export function PayrollTrendChart({
                     {formatCurrency(cycle.disbursedAmount)}
                   </span>
                   <span className="text-muted-foreground text-[11px]">
-                    ({cycle.paidCount} Paid)
+                    ({cycle.paidCount} Paid
+                    {cycle.paidWithoutRecordedAmount > 0
+                      ? `, ${cycle.paidWithoutRecordedAmount} without a recorded amount`
+                      : ""}
+                    )
                   </span>
                 </div>
               </div>

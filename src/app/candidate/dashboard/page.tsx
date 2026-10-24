@@ -1,5 +1,6 @@
 import React from "react";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { applicationService } from "@/features/applications/services/application-service";
 import { ApplicationStatus } from "@/features/applications/types";
@@ -49,7 +50,12 @@ export const instant = false;
 
 export default async function CandidateDashboardPage() {
   const user = await getCurrentUser();
-  if (!user) return null;
+  if (!user) {
+    redirect("/login?callbackUrl=/candidate/dashboard");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
 
   const applications = await applicationService.getCandidateApplications(user.id);
 

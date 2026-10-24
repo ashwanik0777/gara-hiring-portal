@@ -308,3 +308,59 @@
 **Safe work that can proceed:** Offer status tracking data structure.
 
 **Blocked until approval:** Offer creation form fields, authorization rules, deadline enforcement, compensation-related fields.
+
+---
+
+## Remediation Follow-ups (2026-10-24)
+
+> Recorded during the security and correctness remediation (see `docs/SECURITY_REMEDIATION_CHECKLIST.md`).
+> Product-owner decision of 2026-10-24: business rules that had been implemented without approval are **policy-gated** (removed or blocked) until approved. Each entry below states the behaviour that is now in the code.
+
+### Policy-gated rules (previously implemented without approval)
+
+| Ref | Rule that was in code | Current behaviour | Decision needed |
+|---|---|---|---|
+| OD-005 | Second application to the same opening rejected | Allowed; submissions rate-limited (5/hour per user) | Duplicate-application policy |
+| OD-007 | Leave quotas CL 12 / SL 10 / PL 15 / parental 30 / bereavement 5 and computed balances | Removed; UI states the balance policy is pending | Leave entitlements and accrual |
+| OD-008 | Default stipend ₹25k (intern) / ₹45k (full-time), ₹35k report default, placeholder bank/IFSC/PAN, auto-created payroll periods, generated "UTR" references | Removed; unset values show "Not configured", periods created only by staff, references entered by staff | Payroll scope, amounts, payout data model |
+| OD-020 | Offer form defaults ("3 months" probation, working hours, location) | Empty fields | Offer fields and wording |
+| OD-020 | Declined offer withdraws the application | Decline recorded on the offer only | What happens to the application after a decline |
+| OD-015 | Exit clearance auto-set to `CLEARED` | Stays `PENDING` | Clearance sign-off matrix |
+| OD-003 / OD-020 | Evaluation finalize auto-sets OFFERED / REJECTED and grants the INTERN role | Outcome recorded only; no status or role change | When the INTERN role is granted and how evaluation outcomes drive the application |
+| OD-003 | Evaluation outcome `EXTENDED` | Blocked (`PolicyBlockedError`) | Extension policy |
+| OD-004 | Interview scheduling / feedback auto-advance the application stage | Staff transition stages explicitly | Fixed round workflow and auto-advancement |
+| OD-006 | Rejected attendance regularization forces `ABSENT` | Removed | Regularization outcome rules |
+| OD-014 | ID card number series `GARA-INT-2026-…` | Provisional neutral format `IDC-<random>`; re-issue requires a reason | Official ID numbering series |
+| OD-013 | Employee document "upload" stored metadata only (no file) | Blocked until a storage provider is approved | Storage provider (also blocks resume upload in production) |
+
+### Safety gates added pending approval
+
+| Ref | Gate | Why |
+|---|---|---|
+| OD-009 | Certificate issuance requires evaluation `PASSED`, an approved completion checklist validated on the server, and an explicitly typed signatory | The previous gate allowed certificates for failed or never-started interns |
+| OD-019 | Staff need the matching granular permission flag in addition to their role; MENTOR / MANAGER / INTERVIEWER act on evaluations only for interns they supervise | The previous flags only hid navigation |
+| OD-007 | A reviewer cannot approve their own leave request | Separation of duties; approval chains remain undecided |
+| OD-015 | Direct employee creation (without an accepted offer) limited to ADMIN with a written justification | Contradicts the documented OFFER_ACCEPTED hiring gate |
+
+### Open questions raised by the remediation
+
+1. **Re-offers (OD-020):** `JobOffer.applicationId` is unique, so a declined or revoked offer cannot be followed by a new one; drafting now returns a conflict instead of deleting history. Should re-offers be supported (schema change)?
+2. **Revoked offers (OD-020):** the application currently returns to the stage it had before the offer. Confirm.
+3. **Feedback lock (OD-004):** interviewer feedback becomes read-only once the application reaches a decision stage. Confirm which stages lock it.
+4. **Employee status transitions (OD-015):** PROBATION / ACTIVE / ON_LEAVE transitions are permissive; `EXITED` only via the exit flow. Confirm the matrix.
+5. **Interviewer visibility (OD-019, checklist SEC-31):** staff holding `canApplications` see every application and all interview feedback. Should interviewers be limited to assigned applications?
+6. **MENTOR application access (OD-019):** the recruitment service does not support MENTOR even when `canApplications` is granted; the page shows an "unavailable" notice.
+7. **Default catalogues (POL-13):** the onboarding checklist, the completion checklist and the seeded leave-type catalogue were defined by engineering and need approval.
+8. **Certificate presentation (OD-009):** the `GARA-CERT-YYYY-` code prefix and the "GARA Innovation Authority" label on the PDF need approval.
+9. **Missing flow:** no UI calls `enrollCandidateAction` (recruitment → internship enrolment). (Intern checkpoint submission was added on the intern dashboard.) Should finalizing an evaluation require every checkpoint to be reviewed (OD-003)?
+10. **Optional resume (OD-005 / OD-013):** when a form does not require a document, `resumeStorageKey` is stored as an empty string because the column is required; a nullable column needs a migration.
+11. **Overlapping payroll periods (OD-008):** period creation only enforces a unique code; two periods with overlapping dates could each enrol and pay the same employee. Should overlaps be rejected?
+12. **Per-record payroll voiding (OD-008):** a FINALIZED period cannot complete if an employee is switched to Unpaid before disbursement. Should staff be able to void a single record?
+13. **Attendance regularization (OD-006):** request/review service methods exist but no action or screen exposes them; correction and approval rules are undecided.
+14. **Payout data model (OD-008):** payout details still live in a reserved block inside `Employee.internalNotes`. A dedicated, encrypted payout table is recommended once the payroll scope is approved.
+15. **MANAGER scope (OD-019):** managers with `canApplications` still read every application; interviewer scoping was applied because `docs/SECURITY.md` defines it, but no equivalent rule exists for managers.
+
+### Resolved by the product owner (2026-10-24)
+
+- **Single environment file:** keep one gitignored `.env` with every variable; no `.env.example`. This overrides the `.env.example` instruction in `docs/PROJECT_BASELINE.md` (rules 12 and the Prompt 0 checklist). The variable reference is `docs/RUNBOOK.md` section 2.
+

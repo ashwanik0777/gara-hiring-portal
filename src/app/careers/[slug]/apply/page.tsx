@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Lock, Briefcase, MapPin, Building2 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { OpeningStatus } from "@prisma/client";
+import { NotFoundError } from "@/lib/errors";
 
 // Next.js 16 Cache Components: Allow streaming/blocking data access
 export const instant = false;
@@ -23,11 +24,14 @@ export default async function ApplyPage({ params }: ApplyPageProps) {
   const { slug } = await params;
   const user = await getCurrentUser();
 
-  let opening;
+  let opening: Awaited<ReturnType<typeof getPublicOpeningBySlug>>;
   try {
     opening = await getPublicOpeningBySlug(slug);
-  } catch {
-    notFound();
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      notFound();
+    }
+    throw error;
   }
 
   if (!opening || opening.status !== OpeningStatus.PUBLISHED) {

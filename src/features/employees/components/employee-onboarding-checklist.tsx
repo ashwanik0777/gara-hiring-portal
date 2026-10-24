@@ -19,15 +19,19 @@ export function EmployeeOnboardingChecklist({
 }: EmployeeOnboardingChecklistProps) {
   const [items, setItems] = useState<OnboardingChecklistItem[]>(checklist);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleToggle = async (item: OnboardingChecklistItem) => {
     if (!canEdit) return;
     const nextState = !item.completed;
     setLoadingId(item.id);
+    setError(null);
 
     try {
       const res = await updateEmployeeChecklistAction(employeeId, item.id, nextState);
-      if (res.success) {
+      if (!res.success) {
+        setError(res.error);
+      } else {
         setItems((prev) =>
           prev.map((i) =>
             i.id === item.id
@@ -59,6 +63,16 @@ export function EmployeeOnboardingChecklist({
         </div>
       </CardHeader>
       <CardContent className="pt-4 space-y-2 text-xs">
+        {error && (
+          <div role="alert" className="p-2.5 rounded-md bg-destructive/10 text-destructive border border-destructive/20">
+            {error}
+          </div>
+        )}
+        {!canEdit && (
+          <p className="text-[11px] text-muted-foreground">
+            Checklist items are verified by HR.
+          </p>
+        )}
         {items.map((item) => (
           <div
             key={item.id}

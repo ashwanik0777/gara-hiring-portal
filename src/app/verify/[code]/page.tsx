@@ -1,6 +1,12 @@
 import React from "react";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { certificateService } from "@/features/certificates/services/certificate-service";
+import { VERIFICATION_CODE_MAX_LENGTH } from "@/features/certificates/constants";
+import type { PublicCertificateVerificationResult } from "@/features/certificates/types";
+import { defaultRateLimiter, RATE_LIMIT_POLICIES } from "@/lib/security/rate-limit";
+import { getClientIpHash } from "@/lib/security/client-ip";
+import { RateLimitError } from "@/lib/errors";
 import {
   ShieldCheck,
   AlertTriangle,
@@ -20,9 +26,50 @@ interface VerifyPageProps {
   params: Promise<{ code: string }>;
 }
 
+function RateLimitedState() {
+  return (
+    <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div role="status" className="rounded-2xl bg-card border-2 border-warning/30 shadow-sm p-6 sm:p-8 text-center space-y-3">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-warning/10 text-warning border border-warning/20">
+          <AlertTriangle className="h-7 w-7" />
+        </div>
+        <h1 className="text-xl font-bold text-foreground">Too many verification requests</h1>
+        <p className="text-sm text-muted-foreground">
+          Please wait a minute and try again. This limit protects the certificate registry from automated lookups.
+        </p>
+        <Link
+          href="/verify"
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors shadow-2xs"
+        >
+          <Search className="h-3.5 w-3.5" />
+          <span>Back to Verification</span>
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 export default async function VerifyCodePage({ params }: VerifyPageProps) {
-  const { code } = await params;
-  const result = await certificateService.verifyCertificatePublic(code);
+  const { code: rawCode } = await params;
+  const code = rawCode.trim().slice(0, VERIFICATION_CODE_MAX_LENGTH);
+
+  // BUG-23: public lookups are rate limited per client and logged with a keyed IP hash.
+  const requestHeaders = await headers();
+  const ipHash = getClientIpHash(requestHeaders, "certificate-verify");
+  try {
+    await defaultRateLimiter.enforce(ipHash, RATE_LIMIT_POLICIES.CERTIFICATE_VERIFY);
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      return <RateLimitedState />;
+    }
+    throw error;
+  }
+
+  const userAgent = requestHeaders.get("user-agent") ?? undefined;
+  const result: PublicCertificateVerificationResult =
+    rawCode.trim().length > VERIFICATION_CODE_MAX_LENGTH
+      ? { valid: false }
+      : await certificateService.verifyCertificatePublic(code, ipHash, userAgent);
 
   return (
     <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -122,9 +169,11 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
                 <ShieldCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                 <div>
                   <span className="font-bold text-foreground block">
-                    Tamper-Proof Ledger Guarantee
+                    GARA Innovation Certificate Registry
                   </span>
-                  This document was authenticated directly against GARA Innovation&apos;s production database. All supervised 7-working-day evaluation checkpoints and completion requirements have been formally fulfilled.
+                  {result.evaluationRequirementsFulfilled
+                    ? "This certificate matches an active record in GARA Innovation's certificate registry. The record shows a passed supervised evaluation with every checkpoint reviewed and an approved completion decision."
+                    : "This certificate matches an active record in GARA Innovation's certificate registry."}
                 </div>
               </div>
             </div>
@@ -138,7 +187,13 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
               <AlertTriangle className="h-7 w-7" />
             </div>
             <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-destructive/10 text-destructive text-xs font-bold mb-2">
-              <span>VERIFICATION FAILED</span>
+              <span>
+                {result.status === "REVOKED"
+                  ? "CREDENTIAL REVOKED"
+                  : result.status === "SUPERSEDED"
+                    ? "CODE SUPERSEDED"
+                    : "VERIFICATION FAILED"}
+              </span>
             </div>
             <h2 className="text-xl font-bold text-foreground">
               Invalid or Unverified Credential

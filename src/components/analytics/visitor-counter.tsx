@@ -7,6 +7,36 @@ interface VisitorCounterProps {
   className?: string;
 }
 
+const SESSION_TRACKED_KEY = "gara_visit_tracked";
+
+function readSessionFlag(): boolean {
+  try {
+    return window.sessionStorage.getItem(SESSION_TRACKED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeSessionFlag(): void {
+  try {
+    window.sessionStorage.setItem(SESSION_TRACKED_KEY, "1");
+  } catch {
+    // Ignore storage errors (private mode)
+  }
+}
+
+async function fetchCount(method: "GET" | "POST"): Promise<number | null> {
+  const res = await fetch("/api/analytics/visitors", { method });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { count?: unknown };
+  return typeof data.count === "number" ? data.count : null;
+}
+
+/**
+ * Shows the number of distinct visitors recorded by the site. The figure is an
+ * approximation (cookie / hashed-IP deduplication, bots excluded) and is hidden
+ * entirely when it cannot be loaded — no fallback number is ever displayed.
+ */
 export function VisitorCounter({ className = "" }: VisitorCounterProps) {
   const [count, setCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -16,30 +46,20 @@ export function VisitorCounter({ className = "" }: VisitorCounterProps) {
 
     async function recordAndFetchVisitors() {
       try {
-        const res = await fetch("/api/analytics/visitors", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-        });
-
-        if (!res.ok) {
-          throw new Error(`HTTP error ${res.status}`);
+        // Record the visit at most once per browser session; otherwise just read.
+        let value: number | null = null;
+        if (!readSessionFlag()) {
+          value = await fetchCount("POST");
+          if (value !== null) writeSessionFlag();
         }
-
-        const data = (await res.json()) as { count?: number };
-        if (isMounted && typeof data.count === "number") {
-          setCount(data.count);
+        if (value === null) {
+          value = await fetchCount("GET");
         }
-      } catch (err) {
-        console.warn("[VisitorCounter] Failed to load live visitor count, using baseline fallback:", err);
-        if (isMounted) {
-          setCount(1480);
-        }
+        if (isMounted) setCount(value);
+      } catch {
+        if (isMounted) setCount(null);
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        if (isMounted) setLoading(false);
       }
     }
 
@@ -50,20 +70,24 @@ export function VisitorCounter({ className = "" }: VisitorCounterProps) {
     };
   }, []);
 
+  if (!loading && count === null) {
+    return null;
+  }
+
   return (
     <div
       className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-card border border-border/80 shadow-2xs w-fit ${className}`}
-      title="Verified unique visitors count tracked in real-time"
+      title="Approximate number of distinct visitors recorded by this site (automated traffic excluded)"
     >
       <Users className="h-3.5 w-3.5 text-primary shrink-0" />
       <span className="text-[11px] text-muted-foreground font-medium select-none">
-        Unique Visitors:
+        Recorded visitors:
       </span>
       <span className="text-xs font-bold font-mono text-foreground tracking-tight">
-        {loading && count === null ? (
+        {loading || count === null ? (
           <span className="inline-block w-8 h-3 bg-muted/60 rounded animate-pulse" />
         ) : (
-          (count ?? 1480).toLocaleString()
+          count.toLocaleString()
         )}
       </span>
     </div>

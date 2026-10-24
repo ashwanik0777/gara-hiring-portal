@@ -30,9 +30,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files: a single local .env holds every variable and is never committed
+# (variable reference: docs/RUNBOOK.md section 2)
 .env*
-!.env.example
 
 # vercel
 .vercel
@@ -47,6 +47,5 @@ next-env.d.ts
 /.storage/
 /storage/
 
-# local tests and scripts (excluded from production repository)
+# local operational scripts (excluded from the repository; tests are tracked so CI can run them)
 /scripts/
-/tests/

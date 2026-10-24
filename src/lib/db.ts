@@ -21,11 +21,13 @@ const poolConnectionString = env.DATABASE_URL.replace(
   "sslmode=verify-full"
 );
 
-// In production or cloud deployments with remote databases (Supabase, Neon, Railway, RDS),
-// enable SSL with rejectUnauthorized: false so cloud connection poolers connect seamlessly.
+// Remote databases (Neon, Supabase, Railway, RDS) always use TLS with certificate
+// verification. DATABASE_SSL_REJECT_UNAUTHORIZED=false is an explicit, documented
+// opt-out for providers whose CA is not in the Node.js trust store.
+const rejectUnauthorized = env.DATABASE_SSL_REJECT_UNAUTHORIZED !== "false";
 const pool = new Pool({
   connectionString: poolConnectionString,
-  ssl: !isLocalhost ? { rejectUnauthorized: false } : undefined,
+  ssl: !isLocalhost ? { rejectUnauthorized } : undefined,
   max: process.env.NODE_ENV === "production" ? 10 : 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,

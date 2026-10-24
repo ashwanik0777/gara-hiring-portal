@@ -23,14 +23,32 @@ export const createOpeningSchema = z.object({
     .min(2, "Department must be at least 2 characters long")
     .max(100, "Department cannot exceed 100 characters"),
   type: z.nativeEnum(OpeningType),
-  location: z.string().min(2, "Location must be at least 2 characters long"),
+  location: z
+    .string()
+    .min(2, "Location must be at least 2 characters long")
+    .max(150, "Location cannot exceed 150 characters"),
   workplaceType: z.nativeEnum(WorkplaceType),
-  description: z.string().min(20, "Description must be at least 20 characters long"),
-  requirements: z.string().min(10, "Requirements must be at least 10 characters long"),
-  responsibilities: z.string().optional().nullable(),
+  description: z
+    .string()
+    .min(20, "Description must be at least 20 characters long")
+    .max(20_000, "Description cannot exceed 20,000 characters"),
+  requirements: z
+    .string()
+    .min(10, "Requirements must be at least 10 characters long")
+    .max(20_000, "Requirements cannot exceed 20,000 characters"),
+  responsibilities: z
+    .string()
+    .max(20_000, "Responsibilities cannot exceed 20,000 characters")
+    .optional()
+    .nullable(),
 });
 
 export const updateOpeningSchema = createOpeningSchema.partial();
+
+/** Opening identifiers are database-generated UUIDs. */
+export const openingIdSchema = z.uuid("Invalid opening identifier");
+
+export const openingStatusSchema = z.nativeEnum(OpeningStatus);
 
 export const openingStatusTransitionSchema = z.object({
   status: z.nativeEnum(OpeningStatus),

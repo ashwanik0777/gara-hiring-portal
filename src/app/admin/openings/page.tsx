@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { Role } from "@prisma/client";
 import { getAdminOpenings } from "@/features/openings/services/opening-service";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -21,10 +22,16 @@ export const metadata = {
 
 export default async function AdminOpeningsPage() {
   const user = await getCurrentUser();
+  if (!user) {
+    redirect("/login?callbackUrl=/admin/openings");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
 
-  // Guard: Admin or HR only
-  if (!user || (!user.roles.includes(Role.ADMIN) && !user.roles.includes(Role.HR))) {
-    redirect("/admin");
+  // Page-level guard: the /admin portal is restricted to Super Administrators.
+  if (!user.roles.includes(Role.ADMIN)) {
+    return <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />;
   }
 
   const openings = await getAdminOpenings(user);

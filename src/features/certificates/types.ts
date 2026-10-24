@@ -36,13 +36,19 @@ export interface PublicCertificateVerificationResult {
   completionDate?: string;
   signatoryTitle?: string;
   signatoryName?: string;
+  /**
+   * True only when the record shows a PASSED evaluation, every evaluation checkpoint reviewed
+   * and an approved completion decision. Used to decide whether that claim may be displayed.
+   */
+  evaluationRequirementsFulfilled?: boolean;
   error?: string;
 }
 
 export interface IssueCertificateInput {
   enrollmentId: string;
-  signatoryName?: string;
-  signatoryTitle?: string;
+  /** Entered explicitly by the issuer; no default signatory is assumed (OD-009). */
+  signatoryName: string;
+  signatoryTitle: string;
 }
 
 export interface ReissueCertificateInput {
@@ -54,11 +60,10 @@ export interface ReissueCertificateInput {
 
 export interface CompletionChecklistInput {
   enrollmentId: string;
+  /** Only ids and completion flags are accepted; labels come from the server-side template. */
   checklistResponses: {
     id: string;
-    label: string;
     completed: boolean;
-    verifiedAt?: string;
   }[];
   isEligibleForCertificate: boolean;
   completionNotes?: string;

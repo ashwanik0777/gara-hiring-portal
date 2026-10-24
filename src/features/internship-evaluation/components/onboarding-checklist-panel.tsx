@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
-import { OnboardingChecklistItem, OnboardingStatus, IdCardStatus, EvaluationStatus } from "../types";
+import type { OnboardingChecklistItem } from "../types";
+import { OnboardingStatus, IdCardStatus, EvaluationStatus } from "@/types/enums";
 import { updateOnboardingItemAction, issueIdCardAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,8 @@ interface OnboardingChecklistPanelProps {
     approvedAt?: Date | null;
     issuedAt?: Date | null;
   } | null;
+  /** ADMIN / HR decision authority; supervisors can verify items but not issue cards. */
+  canIssueIdCard: boolean;
 }
 
 export function OnboardingChecklistPanel({
@@ -38,15 +41,20 @@ export function OnboardingChecklistPanel({
   evaluationStatus,
   onboarding,
   idCard,
+  canIssueIdCard: hasIssueAuthority,
 }: OnboardingChecklistPanelProps) {
   const [isUpdating, setIsUpdating] = useState(false);
   const [isIssuing, setIsIssuing] = useState(false);
+  const [showReissue, setShowReissue] = useState(false);
+  const [reissueReason, setReissueReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   const isEvaluationPassed = evaluationStatus === EvaluationStatus.PASSED;
   const isOnboardingComplete = onboarding?.status === OnboardingStatus.COMPLETED;
-  const canIssueIdCard = isEvaluationPassed && isOnboardingComplete && idCard?.status !== IdCardStatus.ISSUED;
+  const canIssueIdCard =
+    hasIssueAuthority && isEvaluationPassed && isOnboardingComplete && !idCard?.cardNumber;
+  const canReissueIdCard = hasIssueAuthority && isEvaluationPassed && isOnboardingComplete && Boolean(idCard?.cardNumber);
 
   const handleToggleItem = async (itemId: string, currentStatus: boolean) => {
     setError(null);
@@ -69,19 +77,31 @@ export function OnboardingChecklistPanel({
     }
   };
 
-  const handleIssueIdCard = async () => {
+  const handleIssueIdCard = async (reason?: string) => {
     setError(null);
+    setSuccess(null);
     setIsIssuing(true);
 
     const formData = new FormData();
     formData.append("enrollmentId", enrollmentId);
+    if (reason) {
+      formData.append("reissueReason", reason);
+    }
 
     try {
       const res = await issueIdCardAction(formData);
       if (!res.success) {
         setError(res.error);
+      } else if (res.data.alreadyIssued) {
+        setSuccess(`This intern already has an issued ID card: ${res.data.cardNumber}`);
       } else {
-        setSuccess(`Intern ID Card successfully issued: ${res.data.cardNumber}`);
+        setSuccess(
+          res.data.reissued
+            ? `Intern ID card reissued: ${res.data.cardNumber}`
+            : `Intern ID card issued: ${res.data.cardNumber}`
+        );
+        setShowReissue(false);
+        setReissueReason("");
       }
     } catch {
       setError("Failed to issue Intern ID Card.");
@@ -171,7 +191,7 @@ export function OnboardingChecklistPanel({
         <CardHeader className="pb-3 border-b border-border/50">
           <CardTitle className="text-base flex items-center justify-between">
             <span className="flex items-center gap-2">
-              <CreditCard className="h-4 w-4 text-primary" /> Intern ID Card Provisioning (OD-014)
+              <CreditCard className="h-4 w-4 text-primary" /> Intern ID Card (OD-014)
             </span>
             {idCard?.cardNumber ? (
               <Badge variant="success">ISSUED</Badge>
@@ -182,19 +202,55 @@ export function OnboardingChecklistPanel({
         </CardHeader>
         <CardContent className="pt-4 space-y-4">
           {idCard?.cardNumber ? (
-            <div className="p-4 bg-muted/40 border border-primary/30 rounded-xl flex items-center justify-between">
-              <div>
-                <span className="text-[10px] uppercase font-mono text-muted-foreground tracking-wider block">
-                  Official Intern ID Card
-                </span>
-                <span className="text-lg font-mono font-bold text-primary block mt-0.5">
-                  {idCard.cardNumber}
-                </span>
-                <span className="text-[11px] text-muted-foreground block mt-1">
-                  Issued on {idCard.issuedAt ? new Date(idCard.issuedAt).toLocaleDateString() : "Active"}
-                </span>
+            <div className="space-y-3">
+              <div className="p-4 bg-muted/40 border border-primary/30 rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] uppercase font-mono text-muted-foreground tracking-wider block">
+                    Intern ID Card — provisional number format (OD-014)
+                  </span>
+                  <span className="text-lg font-mono font-bold text-primary block mt-0.5">
+                    {idCard.cardNumber}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground block mt-1">
+                    Issued on {idCard.issuedAt ? new Date(idCard.issuedAt).toLocaleDateString() : "Active"}
+                  </span>
+                </div>
+                <Sparkles className="h-8 w-8 text-primary/40" />
               </div>
-              <Sparkles className="h-8 w-8 text-primary/40" />
+
+              {canReissueIdCard && !showReissue && (
+                <Button size="sm" variant="outline" onClick={() => setShowReissue(true)}>
+                  Reissue ID Card
+                </Button>
+              )}
+
+              {canReissueIdCard && showReissue && (
+                <div className="space-y-2">
+                  <label htmlFor="id-card-reissue-reason" className="block text-xs font-medium text-foreground">
+                    Reason for reissue (recorded in the audit log) <span className="text-destructive">*</span>
+                  </label>
+                  <textarea
+                    id="id-card-reissue-reason"
+                    rows={2}
+                    value={reissueReason}
+                    onChange={(e) => setReissueReason(e.target.value)}
+                    className="w-full rounded-lg border border-input bg-card px-3 py-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="ghost" disabled={isIssuing} onClick={() => setShowReissue(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      isLoading={isIssuing}
+                      disabled={isIssuing || reissueReason.trim().length < 10}
+                      onClick={() => handleIssueIdCard(reissueReason.trim())}
+                    >
+                      Confirm Reissue
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-3">
@@ -212,14 +268,20 @@ export function OnboardingChecklistPanel({
                 </ul>
               </div>
 
-              <Button
-                size="sm"
-                disabled={!canIssueIdCard || isIssuing}
-                isLoading={isIssuing}
-                onClick={handleIssueIdCard}
-              >
-                <CreditCard className="h-4 w-4 mr-1.5" /> Approve & Issue Intern ID Card
-              </Button>
+              {hasIssueAuthority ? (
+                <Button
+                  size="sm"
+                  disabled={!canIssueIdCard || isIssuing}
+                  isLoading={isIssuing}
+                  onClick={() => handleIssueIdCard()}
+                >
+                  <CreditCard className="h-4 w-4 mr-1.5" /> Approve & Issue Intern ID Card
+                </Button>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  ID cards are issued by HR or an administrator.
+                </p>
+              )}
             </div>
           )}
         </CardContent>

@@ -5,8 +5,8 @@ import { EmployeeStatus } from "../types";
 import {
   updateEmployeeStatusAction,
   assignEmployeeManagerAction,
-  addEmployeeDocumentAction,
   processEmployeeExitAction,
+  type EmployeeActionResult,
 } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -15,6 +15,7 @@ import {
   AlertCircle,
   CheckCircle2,
   LogOut,
+  ShieldAlert,
 } from "lucide-react";
 
 interface EmployeeLifecycleCardProps {
@@ -22,6 +23,11 @@ interface EmployeeLifecycleCardProps {
   currentStatus: EmployeeStatus;
   currentManagerId?: string | null;
   allStaff: Array<{ id: string; employeeCode: string; name: string }>;
+}
+
+function formatError(res: Extract<EmployeeActionResult, { success: false }>): string {
+  const details = Object.values(res.fieldErrors ?? {});
+  return details.length > 0 ? `${res.error}: ${details.join(" ")}` : res.error;
 }
 
 export function EmployeeLifecycleCard({
@@ -37,11 +43,6 @@ export function EmployeeLifecycleCard({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-
-  // Document upload state
-  const [docType, setDocType] = useState("GOVERNMENT_ID");
-  const [docTitle, setDocTitle] = useState("");
-  const [storageKey, setStorageKey] = useState("");
 
   // Exit process state
   const [lastWorkingDate, setLastWorkingDate] = useState("");
@@ -61,7 +62,7 @@ export function EmployeeLifecycleCard({
     try {
       const res = await updateEmployeeStatusAction(formData);
       if (!res.success) {
-        setError(res.error);
+        setError(formatError(res));
       } else {
         setSuccess("Employee status updated successfully.");
       }
@@ -86,7 +87,7 @@ export function EmployeeLifecycleCard({
     try {
       const res = await assignEmployeeManagerAction(formData);
       if (!res.success) {
-        setError(res.error);
+        setError(formatError(res));
       } else {
         setSuccess("Reporting manager updated successfully.");
       }
@@ -95,37 +96,9 @@ export function EmployeeLifecycleCard({
     }
   };
 
-  const handleAddDocument = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-    setIsSubmitting(true);
-
-    const formData = new FormData();
-    formData.append("employeeId", employeeId);
-    formData.append("documentType", docType);
-    formData.append("title", docTitle);
-    formData.append("storageKey", storageKey || `documents/${employeeId}/${Date.now()}-${docType.toLowerCase()}`);
-    formData.append("mimeType", "application/pdf");
-    formData.append("fileSizeBytes", "1048576"); // 1MB mock
-
-    try {
-      const res = await addEmployeeDocumentAction(formData);
-      if (!res.success) {
-        setError(res.error);
-      } else {
-        setSuccess("Document metadata attached successfully.");
-        setDocTitle("");
-        setStorageKey("");
-      }
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   const handleProcessExit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!confirm("Are you sure you want to finalize offboarding and mark employee as EXITED?")) return;
+    if (!confirm("Record this exit and mark the employee as EXITED? This status is terminal.")) return;
 
     setError(null);
     setSuccess(null);
@@ -139,9 +112,9 @@ export function EmployeeLifecycleCard({
     try {
       const res = await processEmployeeExitAction(formData);
       if (!res.success) {
-        setError(res.error);
+        setError(formatError(res));
       } else {
-        setSuccess("Employee exit processed. Status transitioned to EXITED.");
+        setSuccess("Exit recorded and status set to EXITED. Clearance remains pending.");
       }
     } finally {
       setIsSubmitting(false);
@@ -206,7 +179,13 @@ export function EmployeeLifecycleCard({
           </div>
         )}
 
-        {activeTab === "STATUS" && (
+        {activeTab === "STATUS" && currentStatus === EmployeeStatus.EXITED && (
+          <p className="text-muted-foreground">
+            This employee has exited. Exited status is terminal and cannot be changed.
+          </p>
+        )}
+
+        {activeTab === "STATUS" && currentStatus !== EmployeeStatus.EXITED && (
           <form onSubmit={handleUpdateStatus} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -221,8 +200,10 @@ export function EmployeeLifecycleCard({
                   <option value={EmployeeStatus.PROBATION}>Probation</option>
                   <option value={EmployeeStatus.ACTIVE}>Active</option>
                   <option value={EmployeeStatus.ON_LEAVE}>On Leave</option>
-                  <option value={EmployeeStatus.EXITED}>Exited</option>
                 </select>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  To mark an employee as exited, use the Offboarding tab so the exit is recorded.
+                </p>
               </div>
 
               <div>
@@ -294,57 +275,16 @@ export function EmployeeLifecycleCard({
         )}
 
         {activeTab === "DOC" && (
-          <form onSubmit={handleAddDocument} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block font-medium text-foreground mb-1">
-                  Document Type
-                </label>
-                <select
-                  value={docType}
-                  onChange={(e) => setDocType(e.target.value)}
-                  className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                >
-                  <option value="GOVERNMENT_ID">Government ID</option>
-                  <option value="DEGREE_CERTIFICATE">Degree Certificate</option>
-                  <option value="OFFER_LETTER">Signed Offer Letter</option>
-                  <option value="RELIEVING_LETTER">Relieving Letter</option>
-                  <option value="BACKGROUND_CHECK">Background Verification</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1">
-                  Title
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={docTitle}
-                  onChange={(e) => setDocTitle(e.target.value)}
-                  placeholder="e.g. Passport copy, B.Tech Degree"
-                  className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                />
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1">
-                  Private Storage Key
-                </label>
-                <input
-                  type="text"
-                  value={storageKey}
-                  onChange={(e) => setStorageKey(e.target.value)}
-                  placeholder="Auto-generated if blank"
-                  className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                />
-              </div>
-            </div>
-
-            <Button variant="primary" size="sm" type="submit" disabled={isSubmitting}>
-              Attach Document Record
-            </Button>
-          </form>
+          <div
+            role="status"
+            className="p-3 rounded-md bg-muted/40 border border-border/60 text-muted-foreground flex items-start gap-2"
+          >
+            <ShieldAlert className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+            <span>
+              Document upload is not available yet. No file storage provider has been approved
+              (OD-013), so document records cannot be attached until secure storage is configured.
+            </span>
+          </div>
         )}
 
         {activeTab === "EXIT" && (
@@ -378,7 +318,7 @@ export function EmployeeLifecycleCard({
             </div>
 
             <Button variant="destructive" size="sm" type="submit" disabled={isSubmitting}>
-              <LogOut className="h-3.5 w-3.5 mr-1" /> Finalize Offboarding & Transition to EXITED
+              <LogOut className="h-3.5 w-3.5 mr-1" /> Record Exit & Transition to EXITED
             </Button>
           </form>
         )}

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { Role } from "@prisma/client";
@@ -24,14 +25,20 @@ export const instant = false;
 
 export default async function AdminOpeningsPage() {
   const user = await getCurrentUser();
+  if (!user) {
+    redirect("/login?callbackUrl=/admin/openings");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
 
-  // Guard: Admin or HR only
-  if (!user || (!user.roles.includes(Role.ADMIN) && !user.roles.includes(Role.HR))) {
+  // Guard: mirrors /admin (Super Administrators only); this legacy route redirects there.
+  if (!user.roles.includes(Role.ADMIN)) {
     return (
       <div className="min-h-screen flex flex-col bg-background">
         <Navbar />
         <div className="flex-1 flex items-center justify-center p-8">
-          <UnauthorizedState message="You require Administrator or HR credentials to access vacancy management." />
+          <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />
         </div>
       </div>
     );

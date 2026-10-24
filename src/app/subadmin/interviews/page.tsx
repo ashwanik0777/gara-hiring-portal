@@ -2,13 +2,15 @@ import React from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
+import { ForbiddenError } from "@/lib/errors";
 import { getUserPermissions, STAFF_ROLES } from "@/lib/auth/permissions";
-import { prisma } from "@/lib/db";
+import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
 import { InterviewRecommendation } from "@prisma/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/feedback/empty-state";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import {
   Calendar,
   Video,
@@ -38,6 +40,7 @@ function getRecommendationBadge(rec: InterviewRecommendation) {
 export default async function SubAdminInterviewsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login?callbackUrl=/subadmin/interviews");
+  if (user.mustChangePassword) redirect("/set-password");
 
   const hasStaffOrAdminRole = user.roles.some((r) => STAFF_ROLES.includes(r));
   if (!hasStaffOrAdminRole) redirect("/candidate/dashboard");
@@ -45,34 +48,16 @@ export default async function SubAdminInterviewsPage() {
   const permissions = await getUserPermissions(user.id, user.roles);
   if (!permissions.canInterviews) redirect("/subadmin");
 
-  const schedules = await prisma.interviewSchedule.findMany({
-    include: {
-      application: {
-        include: {
-          candidate: {
-            include: {
-              user: {
-                select: { name: true, email: true },
-              },
-            },
-          },
-          opening: {
-            select: { title: true, department: true },
-          },
-        },
-      },
-      interviewer: {
-        select: { name: true, email: true },
-      },
-      feedback: {
-        select: {
-          recommendation: true,
-          summaryNotes: true,
-        },
-      },
-    },
-    orderBy: { scheduledAt: "desc" },
-  });
+  let schedules: Awaited<ReturnType<typeof recruitmentService.getInterviewSchedules>>;
+  try {
+    // The service enforces staff role + canInterviews.
+    schedules = await recruitmentService.getInterviewSchedules(user, { order: "desc" });
+  } catch (err: unknown) {
+    if (err instanceof ForbiddenError) {
+      return <UnauthorizedState message="Viewing interview sessions requires the interviews permission." />;
+    }
+    throw err;
+  }
 
   // KPI Metrics Calculation
   const totalSessions = schedules.length;

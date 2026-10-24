@@ -18,11 +18,8 @@ export function FinalizeEvaluationDialog({
   candidateName,
   currentStatus,
 }: FinalizeEvaluationDialogProps) {
-  const [status, setStatus] = useState<EvaluationStatus>(
-    currentStatus === EvaluationStatus.IN_PROGRESS || currentStatus === EvaluationStatus.UNDER_REVIEW
-      ? EvaluationStatus.PASSED
-      : currentStatus
-  );
+  // No outcome is preselected: the reviewer must choose PASSED or FAILED explicitly.
+  const [status, setStatus] = useState<EvaluationStatus | "">("");
   const [notes, setNotes] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +29,11 @@ export function FinalizeEvaluationDialog({
     e.preventDefault();
     setError(null);
     setSuccess(null);
+
+    if (status !== EvaluationStatus.PASSED && status !== EvaluationStatus.FAILED) {
+      setError("Please choose the final outcome.");
+      return;
+    }
 
     if (notes.trim().length < 5) {
       setError("Please provide comprehensive final evaluation notes.");
@@ -50,7 +52,11 @@ export function FinalizeEvaluationDialog({
       if (!res.success) {
         setError(res.error);
       } else {
-        setSuccess(`Evaluation successfully marked as ${status}. Onboarding workflow initialized.`);
+        setSuccess(
+          status === EvaluationStatus.PASSED
+            ? "Evaluation outcome recorded as PASSED. The onboarding checklist is now available."
+            : "Evaluation outcome recorded as FAILED."
+        );
       }
     } catch {
       setError("Failed to finalize evaluation outcome.");
@@ -93,16 +99,22 @@ export function FinalizeEvaluationDialog({
             </label>
             <select
               value={status}
-              onChange={(e) => setStatus(e.target.value as EvaluationStatus)}
+              onChange={(e) => setStatus(e.target.value as EvaluationStatus | "")}
               className="w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               required
+              disabled={Boolean(success)}
             >
-              <option value={EvaluationStatus.PASSED}>PASSED — Meets Criteria & Qualifies for Internship</option>
-              <option value={EvaluationStatus.FAILED}>FAILED — Did Not Meet Benchmark</option>
-              <option value={EvaluationStatus.EXTENDED}>EXTENDED — Requires Additional Supervised Days</option>
+              <option value="" disabled>
+                Select the final outcome…
+              </option>
+              <option value={EvaluationStatus.PASSED}>PASSED</option>
+              <option value={EvaluationStatus.FAILED}>FAILED</option>
+              <option value={EvaluationStatus.EXTENDED} disabled>
+                EXTENDED — not configured (OD-003)
+              </option>
             </select>
             <p className="text-[11px] text-muted-foreground">
-              Approving &quot;PASSED&quot; automatically provisions an intern record and onboarding checklist.
+              The outcome can be recorded once. Recording &quot;PASSED&quot; opens the onboarding checklist; it does not change the application status, create an offer or assign roles.
             </p>
           </div>
 
@@ -124,7 +136,7 @@ export function FinalizeEvaluationDialog({
           </div>
         </CardContent>
         <CardFooter className="py-3 border-t border-border/50 flex justify-end">
-          <Button type="submit" size="sm" isLoading={isSubmitting}>
+          <Button type="submit" size="sm" isLoading={isSubmitting} disabled={Boolean(success)}>
             Record Final Decision
           </Button>
         </CardFooter>

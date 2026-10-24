@@ -8,13 +8,9 @@ export async function POST(request: NextRequest) {
   try {
     return await handlers.POST(request);
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : "Internal Server Error";
     console.error("[BetterAuth API Error - POST]:", error);
     return NextResponse.json(
-      {
-        error: "Authentication service error",
-        message: errorMsg,
-      },
+      { error: "Authentication service error" },
       { status: 500 }
     );
   }
@@ -24,13 +20,9 @@ export async function GET(request: NextRequest) {
   try {
     return await handlers.GET(request);
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : "Internal Server Error";
     console.error("[BetterAuth API Error - GET]:", error);
     return NextResponse.json(
-      {
-        error: "Authentication service error",
-        message: errorMsg,
-      },
+      { error: "Authentication service error" },
       { status: 500 }
     );
   }

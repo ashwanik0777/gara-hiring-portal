@@ -1,9 +1,12 @@
 import React from "react";
+import { isInterviewerScoped } from "@/features/recruitment/services/application-access";
+import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { getUserPermissions, STAFF_ROLES } from "@/lib/auth/permissions";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logging/logger";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,10 +28,34 @@ import {
 
 export const instant = false;
 
+/** A module count: a number, "unavailable" when the query failed, or null when not shown. */
+type ModuleCount = number | "unavailable" | null;
+
+async function loadModuleCount(
+  allowed: boolean,
+  label: string,
+  query: () => Promise<number>
+): Promise<ModuleCount> {
+  if (!allowed) {
+    return null;
+  }
+  try {
+    return await query();
+  } catch (error) {
+    // Never present a failed query as a real zero count.
+    logger.error(`Sub-admin dashboard count failed: ${label}`, error);
+    return "unavailable";
+  }
+}
+
 export default async function SubAdminDashboardPage() {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login?callbackUrl=/subadmin");
+  }
+
+  if (user.mustChangePassword) {
+    redirect("/set-password");
   }
 
   const hasStaffOrAdminRole = user.roles.some((r) => STAFF_ROLES.includes(r));
@@ -39,27 +66,44 @@ export default async function SubAdminDashboardPage() {
 
   const permissions = await getUserPermissions(user.id, user.roles);
 
-  // Parallel data fetching for permitted modules
+  // Parallel data fetching, only for modules this user is permitted to see
   const [
     applicationsCount,
     openingsCount,
     interviewsCount,
     employeesCount,
   ] = await Promise.all([
-    permissions.canApplications ? prisma.application.count().catch(() => 0) : Promise.resolve(0),
-    permissions.canOpenings
-      ? prisma.opening.count({ where: { status: "PUBLISHED" } }).catch(() => 0)
-      : Promise.resolve(0),
-    permissions.canInterviews
-      ? prisma.interviewSchedule.count({ where: { status: "SCHEDULED" } }).catch(() => 0)
-      : Promise.resolve(0),
-    permissions.canEmployees ? prisma.employee.count().catch(() => 0) : Promise.resolve(0),
+    // Scoped like the queue itself: interviewers count only applications assigned to them.
+    loadModuleCount(permissions.canApplications, "applications", async () =>
+      (await recruitmentService.getRecruitmentStatusCounts(user)).total
+    ),
+    loadModuleCount(permissions.canOpenings, "openings", () =>
+      prisma.opening.count({ where: { status: "PUBLISHED" } })
+    ),
+    loadModuleCount(permissions.canInterviews, "interviews", () =>
+      prisma.interviewSchedule.count({
+        where: {
+          status: "SCHEDULED",
+          ...(isInterviewerScoped(user) ? { interviewerId: user.id } : {}),
+        },
+      })
+    ),
+    loadModuleCount(permissions.canEmployees, "employees", () => prisma.employee.count()),
   ]);
 
   const primaryRole =
     user.roles.find((r) => STAFF_ROLES.includes(r)) ?? "STAFF";
 
-  const moduleCards = [
+  const moduleCards: {
+    key: string;
+    allowed: boolean;
+    title: string;
+    description: string;
+    count: ModuleCount;
+    href: string;
+    icon: typeof FileText;
+    badge: string;
+  }[] = [
     {
       key: "applications",
       allowed: permissions.canApplications,
@@ -251,7 +295,11 @@ export default async function SubAdminDashboardPage() {
                   </CardHeader>
                   <CardContent className="pt-0">
                     <div className="flex items-center justify-between mt-2 pt-3 border-t border-border">
-                      {module.count !== null ? (
+                      {module.count === "unavailable" ? (
+                        <div className="text-xs text-amber-700 dark:text-amber-300">
+                          Count unavailable
+                        </div>
+                      ) : module.count !== null ? (
                         <div>
                           <div className="text-xl font-bold text-foreground">
                             {module.count}

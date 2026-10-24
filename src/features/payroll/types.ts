@@ -2,6 +2,8 @@ import { PayrollStatus } from "@/types/enums";
 
 export { PayrollStatus };
 
+export type EmploymentCategory = "INTERN" | "FULL_TIME";
+
 export interface PayrollPeriodItem {
   id: string;
   code: string;
@@ -29,7 +31,23 @@ export interface PayrollRecordItem {
   finalizedAt?: Date | null;
 }
 
-export interface EmployeePayoutProfile {
+/**
+ * Payout details as they may be sent to a browser. Account numbers and PANs are
+ * masked on the server (last four characters only); `null` means "Not configured".
+ */
+export interface MaskedPayoutDetails {
+  /** `null` when no payout profile has been configured for the employee. */
+  isPaid: boolean | null;
+  employmentType: EmploymentCategory | null;
+  stipendAmount: number | null;
+  bankName: string | null;
+  accountNumberMasked: string | null;
+  ifscCode: string | null;
+  accountHolderName: string | null;
+  panMasked: string | null;
+}
+
+export interface EmployeePayoutProfile extends MaskedPayoutDetails {
   employeeId: string;
   employeeCode: string;
   employeeName: string;
@@ -37,17 +55,9 @@ export interface EmployeePayoutProfile {
   department: string;
   designation: string;
   joiningDate: string;
-  isPaid: boolean;
-  employmentType: "INTERN" | "FULL_TIME";
-  stipendAmount?: number | null;
-  bankName?: string | null;
-  accountNumber?: string | null;
-  ifscCode?: string | null;
-  accountHolderName?: string | null;
-  panNumber?: string | null;
 }
 
-export interface PayrollRecordWithEmployee {
+export interface PayrollRecordWithEmployee extends MaskedPayoutDetails {
   id: string;
   payrollPeriodId: string;
   payrollPeriodCode: string;
@@ -57,8 +67,6 @@ export interface PayrollRecordWithEmployee {
   employeeEmail: string;
   department: string;
   designation: string;
-  isPaid: boolean;
-  employmentType: "INTERN" | "FULL_TIME";
   status: PayrollStatus;
   disbursementReference?: string | null;
   disbursedAt?: string | null;
@@ -66,13 +74,6 @@ export interface PayrollRecordWithEmployee {
   finalizedByName?: string | null;
   finalizedAt?: string | null;
   createdAt: string;
-  // Payout details from profile
-  stipendAmount?: number | null;
-  bankName?: string | null;
-  accountNumber?: string | null;
-  ifscCode?: string | null;
-  accountHolderName?: string | null;
-  panNumber?: string | null;
 }
 
 export interface PayrollPeriodDetail {
@@ -92,10 +93,15 @@ export interface PayrollStats {
   draftCount: number;
   finalizedCount: number;
   paidCount: number;
+  voidCount: number;
   completionRate: number;
-  totalDisbursedAmount?: number;
+  /** Sum of configured amounts for PAID records; records without an amount are excluded. */
+  totalDisbursedAmount: number;
+  /** PAID records whose employee has no configured amount (excluded from the total). */
+  paidRecordsWithoutAmount: number;
   totalPaidWorkforce: number;
   totalUnpaidWorkforce: number;
+  totalUnconfiguredWorkforce: number;
 }
 
 export interface PayrollDashboardData {
@@ -104,4 +110,26 @@ export interface PayrollDashboardData {
   records: PayrollRecordWithEmployee[];
   employees: EmployeePayoutProfile[];
   stats: PayrollStats;
+}
+
+export interface MyPayrollRecord {
+  id: string;
+  payrollPeriodCode: string;
+  periodStartDate: string;
+  periodEndDate: string;
+  status: PayrollStatus;
+  disbursementReference: string | null;
+  disbursedAt: string | null;
+}
+
+/** Self-service view: only the signed-in employee's own records, masked. */
+export interface MyPayrollOverview {
+  employee: {
+    employeeCode: string;
+    employeeName: string;
+    department: string;
+    designation: string;
+  } | null;
+  payout: MaskedPayoutDetails | null;
+  records: MyPayrollRecord[];
 }

@@ -99,7 +99,7 @@
 ## G. External Providers and Reliability
 
 1. **Adapter pattern** for all external services (email, storage, AI, PDF, jobs). Business code imports the interface, not the provider SDK.
-2. Credentials from **validated server environment variables**. `.env.example` has placeholders only.
+2. Credentials from **validated server environment variables**, kept in a single gitignored `.env` (no `.env.example`, product-owner decision 2026-10-24). The variable reference is `docs/RUNBOOK.md` section 2.
 3. **Never commit** `.env` files, credentials, private keys, or production data.
 4. Use a **durable queue/outbox** for important async notifications. No process-local `setTimeout`/`setInterval` for production-critical jobs.
 5. Record notification attempts and failures. Retries must not duplicate critical communications.

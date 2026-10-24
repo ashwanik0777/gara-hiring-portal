@@ -3,7 +3,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
-import { ApplicationStatus } from "@prisma/client";
+import { ApplicationStatus, Role } from "@prisma/client";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import { ForbiddenError } from "@/lib/errors";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -61,7 +63,15 @@ export default async function RecruitmentQueuePage({
 }: RecruitmentQueuePageProps) {
   const user = await getCurrentUser();
   if (!user) {
-    redirect("/login");
+    redirect("/login?callbackUrl=/admin/applications");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
+  // Legacy /recruitment route (redirected to /admin by next.config.ts): same guard as /admin.
+  if (!user.roles.includes(Role.ADMIN)) {
+    return <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />;
   }
 
   const { status, search } = await searchParams;
@@ -71,10 +81,18 @@ export default async function RecruitmentQueuePage({
       ? (status as ApplicationStatus)
       : undefined;
 
-  const applications = await recruitmentService.getRecruitmentQueue(user, {
-    status: validStatus,
-    search: search || undefined,
-  });
+  let applications: Awaited<ReturnType<typeof recruitmentService.getRecruitmentQueue>>;
+  try {
+    applications = await recruitmentService.getRecruitmentQueue(user, {
+      status: validStatus,
+      search: search || undefined,
+    });
+  } catch (error) {
+    if (error instanceof ForbiddenError) {
+      return <UnauthorizedState message="You do not have permission to view applications." />;
+    }
+    throw error;
+  }
 
   const totalCount = applications.length;
   const screeningCount = applications.filter((a) => a.status === ApplicationStatus.SCREENING).length;

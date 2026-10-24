@@ -3,18 +3,33 @@
 import crypto from "crypto";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { requireAuth, type AuthenticatedUser } from "@/lib/auth/guards";
+import { SUB_ADMIN_ROLES } from "@/lib/auth/permissions";
+import { toActionError } from "@/lib/errors";
 import { Role } from "@prisma/client";
 import { hashPassword } from "better-auth/crypto";
 import { NodemailerEmailAdapter } from "@/infrastructure/email/outbox-processor";
 import { buildSubAdminWelcomeEmail } from "@/infrastructure/email/email-templates";
 import { z } from "zod";
 
+/**
+ * Resolves the signed-in Super Admin, or null. Temporary-password sessions are rejected.
+ */
+async function getSuperAdmin(): Promise<AuthenticatedUser | null> {
+  try {
+    const user = await requireAuth();
+    return user.roles.includes(Role.ADMIN) ? user : null;
+  } catch {
+    return null;
+  }
+}
+
 const createSubAdminSchema = z.object({
-  name: z.string().min(2, "Name must be at least 2 characters"),
-  email: z.string().email("Valid email is required"),
+  name: z.string().trim().min(2, "Name must be at least 2 characters").max(120, "Name is too long"),
+  email: z.string().trim().email("Valid email is required").max(254),
   password: z.string()
     .min(10, "Password must be at least 10 characters")
+    .max(128, "Password must be at most 128 characters")
     .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
     .regex(/[a-z]/, "Password must contain at least one lowercase letter")
     .regex(/[0-9]/, "Password must contain at least one number")
@@ -34,8 +49,8 @@ const createSubAdminSchema = z.object({
 });
 
 export async function createSubAdminAction(formData: z.infer<typeof createSubAdminSchema>) {
-  const adminUser = await getCurrentUser();
-  if (!adminUser || !adminUser.roles.includes(Role.ADMIN)) {
+  const adminUser = await getSuperAdmin();
+  if (!adminUser) {
     return { success: false, error: "Unauthorized. Super Admin access required." };
   }
 
@@ -149,8 +164,7 @@ export async function createSubAdminAction(formData: z.infer<typeof createSubAdm
     revalidatePath("/admin");
     return { success: true, message: `Sub-Admin ${name} successfully created with role ${role}` };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to create Sub-Admin account";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(error, "Failed to create Sub-Admin account") };
   }
 }
 
@@ -173,8 +187,8 @@ const updatePermissionsSchema = z.object({
 export async function updateSubAdminPermissionsAction(
   data: z.infer<typeof updatePermissionsSchema>
 ) {
-  const adminUser = await getCurrentUser();
-  if (!adminUser || !adminUser.roles.includes(Role.ADMIN)) {
+  const adminUser = await getSuperAdmin();
+  if (!adminUser) {
     return { success: false, error: "Unauthorized. Super Admin access required." };
   }
 
@@ -185,20 +199,27 @@ export async function updateSubAdminPermissionsAction(
 
   const { subAdminId, role, permissions } = parsed.data;
 
+  if (subAdminId === adminUser.id) {
+    return { success: false, error: "You cannot change your own roles or permissions." };
+  }
+
   // Prevent modifying accounts that hold the ADMIN role
-  const existingRoles = await prisma.userRole.findMany({
-    where: { userId: subAdminId },
-    select: { role: true },
+  const target = await prisma.user.findUnique({
+    where: { id: subAdminId },
+    select: { id: true, roles: { select: { role: true } }, subAdminPermission: true },
   });
-  if (existingRoles.some((r) => r.role === Role.ADMIN)) {
+  if (!target) {
+    return { success: false, error: "Sub-Admin account not found." };
+  }
+  if (target.roles.some((r) => r.role === Role.ADMIN)) {
     return { success: false, error: "Cannot modify a Super Admin's roles or permissions." };
   }
 
   try {
     await prisma.$transaction(async (tx) => {
-      // 1. Update Role
+      // 1. Replace only the staff role; non-staff roles (EMPLOYEE, INTERN, CANDIDATE) are preserved.
       await tx.userRole.deleteMany({
-        where: { userId: subAdminId },
+        where: { userId: subAdminId, role: { in: SUB_ADMIN_ROLES } },
       });
 
       await tx.userRole.create({
@@ -231,6 +252,11 @@ export async function updateSubAdminPermissionsAction(
           action: "SUBADMIN_PERMISSIONS_UPDATED",
           resourceType: "SUB_ADMIN",
           resourceId: subAdminId,
+          diffPayload: {
+            previousRoles: target.roles.map((r) => r.role),
+            newRole: role,
+            permissions,
+          },
         },
       });
     });
@@ -239,14 +265,18 @@ export async function updateSubAdminPermissionsAction(
     revalidatePath("/subadmin");
     return { success: true, message: "Sub-Admin permissions successfully updated." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to update permissions";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(error, "Failed to update permissions") };
   }
 }
 
+/**
+ * Revokes a Sub-Admin's staff access. The user record is preserved so audit,
+ * employment, attendance, leave and payroll history are never destroyed;
+ * staff roles, module permissions and active sessions are removed.
+ */
 export async function deleteSubAdminAction(subAdminId: string) {
-  const adminUser = await getCurrentUser();
-  if (!adminUser || !adminUser.roles.includes(Role.ADMIN)) {
+  const adminUser = await getSuperAdmin();
+  if (!adminUser) {
     return { success: false, error: "Unauthorized. Super Admin access required." };
   }
 
@@ -265,37 +295,43 @@ export async function deleteSubAdminAction(subAdminId: string) {
     where: { userId: subAdminId },
     select: { role: true },
   });
-  const targetHasAdminRole = targetRoles.some((r) => r.role === Role.ADMIN);
-  if (targetHasAdminRole) {
-    return { success: false, error: "Cannot delete a Super Admin account." };
+  if (targetRoles.some((r) => r.role === Role.ADMIN)) {
+    return { success: false, error: "Cannot remove a Super Admin account." };
   }
+  const hasStaffRole = targetRoles.some((r) => SUB_ADMIN_ROLES.includes(r.role));
   const targetPermission = await prisma.subAdminPermission.findUnique({
     where: { userId: subAdminId },
   });
-  if (!targetPermission && targetRoles.length === 0) {
+  if (!hasStaffRole && !targetPermission) {
     return { success: false, error: "Target user is not a sub-admin." };
   }
 
   try {
-    // Audit log before deletion
-    await prisma.auditLog.create({
-      data: {
-        actorId: adminUser.id,
-        actorRole: "ADMIN",
-        action: "SUBADMIN_DELETED",
-        resourceType: "SUB_ADMIN",
-        resourceId: subAdminId,
-      },
-    });
-
-    await prisma.user.delete({
-      where: { id: subAdminId },
+    await prisma.$transaction(async (tx) => {
+      await tx.userRole.deleteMany({
+        where: { userId: subAdminId, role: { in: SUB_ADMIN_ROLES } },
+      });
+      await tx.subAdminPermission.deleteMany({
+        where: { userId: subAdminId },
+      });
+      await tx.session.deleteMany({
+        where: { userId: subAdminId },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: adminUser.id,
+          actorRole: "ADMIN",
+          action: "SUBADMIN_ACCESS_REVOKED",
+          resourceType: "SUB_ADMIN",
+          resourceId: subAdminId,
+          diffPayload: { revokedRoles: targetRoles.map((r) => r.role) },
+        },
+      });
     });
 
     revalidatePath("/admin/subadmins");
-    return { success: true, message: "Sub-Admin removed successfully." };
+    return { success: true, message: "Sub-Admin access revoked. Their history is preserved." };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to remove Sub-Admin";
-    return { success: false, error: message };
+    return { success: false, error: toActionError(error, "Failed to remove Sub-Admin") };
   }
 }

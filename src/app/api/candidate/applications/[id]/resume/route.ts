@@ -1,36 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { requireAuth } from "@/lib/auth/guards";
 import { applicationService } from "@/features/applications/services/application-service";
 import { AppError } from "@/lib/errors";
-import { Role } from "@prisma/client";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json(
-        { error: "Authentication required" },
-        { status: 401 }
-      );
-    }
+    const user = await requireAuth();
 
     const { id } = await params;
-    const staffRoles: Role[] = [
-      Role.ADMIN,
-      Role.HR,
-      Role.INTERVIEWER,
-      Role.MANAGER,
-    ];
-    const isStaff = user.roles.some((r) => staffRoles.includes(r));
-
-    const file = await applicationService.getApplicationResume(
-      id,
-      user.id,
-      isStaff
-    );
+    // Record-level authorization lives in the service: the owning candidate, recruitment
+    // staff with `canApplications`, and interviewer-scoped staff only for assigned applications.
+    const file = await applicationService.getApplicationResume(id, user);
 
     const safeFilename = file.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
 

@@ -1,8 +1,9 @@
 import React from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/guards";
-import { getUserPermissions, STAFF_ROLES } from "@/lib/auth/permissions";
+import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
 import { offerService } from "@/features/employees/services/offer-service";
 import { JobOfferCard } from "@/features/employees/components/job-offer-card";
@@ -86,38 +87,54 @@ export default async function SubAdminApplicationDetailPage({
     redirect("/login?callbackUrl=/subadmin/applications");
   }
 
-  const hasStaffOrAdminRole = user.roles.some((r) => STAFF_ROLES.includes(r));
-  if (!hasStaffOrAdminRole) {
-    redirect("/candidate/dashboard");
+  if (user.mustChangePassword) {
+    redirect("/set-password");
   }
 
-  const permissions = await getUserPermissions(user.id, user.roles);
-  if (!permissions.canApplications) {
-    redirect("/subadmin");
+  // Page-level guard: the granular `canApplications` permission is the gate.
+  if (!(await hasPermission(user, "canApplications"))) {
+    return <UnauthorizedState message="You do not have permission to view applications." />;
   }
 
   const { id } = await params;
 
-  let application;
+  let application: Awaited<ReturnType<typeof recruitmentService.getRecruiterApplicationDetail>>;
   try {
     application = await recruitmentService.getRecruiterApplicationDetail(id, user);
-  } catch {
-    notFound();
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      notFound();
+    }
+    if (error instanceof ForbiddenError) {
+      // ForbiddenError messages are operational and safe to show (own application,
+      // unassigned interviewer, missing role).
+      return <UnauthorizedState title="Application Unavailable" message={error.message} />;
+    }
+    throw error;
   }
 
   const nextRoundNumber = application.interviewSchedules.length + 1;
+  // Stage decisions and scheduling are restricted to HR/Admin by the recruitment service.
+  const canDecide = user.roles.includes("ADMIN") || user.roles.includes("HR");
+  // Feedback may be recorded by the assigned interviewer, or by HR/Admin.
   const pendingInterview = application.interviewSchedules.find(
-    (s) => s.status === InterviewStatus.SCHEDULED || s.status === InterviewStatus.RESCHEDULED
+    (s) =>
+      (s.status === InterviewStatus.SCHEDULED || s.status === InterviewStatus.RESCHEDULED) &&
+      (canDecide || s.interviewer?.id === user.id)
   );
 
+  // The offer service returns null for staff who may not see offers.
   const offer = await offerService.getOfferByApplicationId(user, application.id);
-  const isStaffAdmin = user.roles.includes("ADMIN") || user.roles.includes("HR");
+  // Offer management mirrors the offer service: ADMIN/HR role plus `canEmployees`.
+  const isStaffAdmin =
+    (user.roles.includes("ADMIN") || user.roles.includes("HR")) &&
+    (await hasPermission(user, "canEmployees"));
+  // Mirrors the offer service: offers are prepared only from these stages.
   const canPrepareOffer =
     isStaffAdmin &&
     !offer &&
     (application.status === ApplicationStatus.INTERVIEWED ||
-      application.status === ApplicationStatus.OFFERED ||
-      application.status === ApplicationStatus.SHORTLISTED);
+      application.status === ApplicationStatus.EVALUATION_SELECTED);
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
@@ -171,20 +188,35 @@ export default async function SubAdminApplicationDetailPage({
         </div>
       </div>
 
-      {/* Grid: Cockpit Stage Decision & Interview Scheduling */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <StageTransitionDialog
-          applicationId={application.id}
-          currentStatus={application.status}
-          candidateName={application.candidate.fullName}
-        />
+      {application.restrictedView && (
+        <div
+          role="note"
+          className="flex items-start gap-2 rounded-xl border border-border bg-muted/40 p-3 text-xs text-muted-foreground"
+        >
+          <ShieldAlert className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+          <span>
+            Interviewer view: only your own interview rounds and feedback are shown. Internal
+            staff notes and other interviewers&apos; assessments are not available to your role.
+          </span>
+        </div>
+      )}
 
-        <InterviewSchedulerForm
-          applicationId={application.id}
-          candidateName={application.candidate.fullName}
-          defaultRoundNumber={nextRoundNumber}
-        />
-      </div>
+      {/* Grid: Cockpit Stage Decision & Interview Scheduling */}
+      {canDecide && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <StageTransitionDialog
+            applicationId={application.id}
+            currentStatus={application.status}
+            candidateName={application.candidate.fullName}
+          />
+
+          <InterviewSchedulerForm
+            applicationId={application.id}
+            candidateName={application.candidate.fullName}
+            defaultRoundNumber={nextRoundNumber}
+          />
+        </div>
+      )}
 
       {/* Pending Interview Evaluation Form (if scheduled) */}
       {pendingInterview && (
@@ -366,7 +398,8 @@ export default async function SubAdminApplicationDetailPage({
                   </span>
                   {h.actor && (
                     <Badge variant="outline" className="text-[10px] py-0">
-                      By: {h.actor.name} ({h.actor.email})
+                      By: {h.actor.name}
+                      {h.actor.email ? ` (${h.actor.email})` : ""}
                     </Badge>
                   )}
                 </div>

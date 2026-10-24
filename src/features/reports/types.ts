@@ -83,11 +83,15 @@ export interface ExecutiveKpiSummary {
   activeEmployees: number;
   fullTimeCount: number;
   internCount: number;
-  paidWorkforceCount: number;
-  unpaidWorkforceCount: number;
-  payrollDisbursedAmount: number;
-  activePayrollCycle: string;
-  payrollCompletionRate: number;
+  /**
+   * Payroll KPIs are `null` when the viewer lacks the `canPayroll` permission.
+   * `activePayrollCycle` is also `null` when no payroll period has been created.
+   */
+  paidWorkforceCount: number | null;
+  unpaidWorkforceCount: number | null;
+  payrollDisbursedAmount: number | null;
+  activePayrollCycle: string | null;
+  payrollCompletionRate: number | null;
   todayAttendancePresent: number;
   todayOnLeave: number;
   pendingLeavesCount: number;
@@ -116,14 +120,21 @@ export interface LeaveAnalytics {
 }
 
 export interface PayrollAnalytics {
-  activeCycleCode: string;
-  cycleStatus: string;
+  /** `null` when no payroll period exists ("Not configured"). */
+  activeCycleCode: string | null;
+  cycleStatus: string | null;
   totalEnrolled: number;
   paidCount: number;
   pendingCount: number;
+  /** Sum of recorded payout amounts for PAID records only; unset amounts are excluded. */
   disbursedAmount: number;
+  /** PAID records whose employee has no recorded payout amount (excluded from the total). */
+  paidWithoutRecordedAmount: number;
+  /** Employees explicitly configured as paid / unpaid in their payout profile. */
   paidWorkforce: number;
   unpaidWorkforce: number;
+  /** Employees without a configured payout profile. */
+  payoutNotConfigured: number;
 }
 
 export interface PlatformTelemetry {
@@ -158,9 +169,11 @@ export interface AttendanceDailyTrend {
 
 export interface PayrollCycleTrend {
   cycle: string;
+  /** Sum of recorded payout amounts for PAID records only. */
   disbursedAmount: number;
   paidCount: number;
   unpaidCount: number;
+  paidWithoutRecordedAmount: number;
 }
 
 export interface AnalyticsChartsData {
@@ -186,6 +199,7 @@ export interface ComprehensiveAnalyticsDashboardData {
   employees: EmployeeHeadcountReport;
   attendance: AttendanceAnalytics;
   leaves: LeaveAnalytics;
-  payroll: PayrollAnalytics;
+  /** `null` when the viewer lacks the `canPayroll` permission. */
+  payroll: PayrollAnalytics | null;
   telemetry: PlatformTelemetry;
 }

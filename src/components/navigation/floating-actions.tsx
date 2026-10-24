@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { ArrowUp, Heart, MessageSquare, X, Star, Send, CheckCircle2 } from "lucide-react";
 import { PortalChatbotWidget } from "@/features/chatbot/components/portal-chatbot-widget";
+import { APP_EMAIL } from "@/lib/constants";
 
 export function FloatingActions() {
   const pathname = usePathname();
@@ -35,9 +36,14 @@ export function FloatingActions() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  // Feedback is not stored by the portal: it is handed to the user's email app.
   function handleFeedbackSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!feedbackText.trim()) return;
+    const text = feedbackText.trim().slice(0, 2000);
+    if (!text) return;
+    const subject = encodeURIComponent("Portal feedback");
+    const body = encodeURIComponent(`Rating: ${rating}/5\n\n${text}`);
+    window.location.href = `mailto:${APP_EMAIL}?subject=${subject}&body=${body}`;
     setSubmitted(true);
     setTimeout(() => {
       setSubmitted(false);
@@ -125,8 +131,8 @@ export function FloatingActions() {
                 <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-500">
                   <CheckCircle2 className="h-6 w-6" />
                 </div>
-                <p className="font-semibold text-foreground">Thank you for your feedback!</p>
-                <p className="text-xs text-muted-foreground">Your input helps GARA Innovation improve constantly.</p>
+                <p className="font-semibold text-foreground">Your email app has been opened</p>
+                <p className="text-xs text-muted-foreground">Send the prepared message to share your feedback with GARA Innovation.</p>
               </div>
             ) : (
               <form onSubmit={handleFeedbackSubmit} className="space-y-4 pt-1">
@@ -183,7 +189,7 @@ export function FloatingActions() {
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-rose-500 text-white hover:bg-rose-600 shadow-sm transition-colors cursor-pointer"
                   >
                     <Send className="h-3 w-3" />
-                    Submit Feedback
+                    Send via Email
                   </button>
                 </div>
               </form>

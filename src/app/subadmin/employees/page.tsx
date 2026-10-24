@@ -12,6 +12,9 @@ export default async function SubAdminEmployeesDirectoryPage() {
   if (!user) {
     redirect("/login?callbackUrl=/subadmin/employees");
   }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
 
   const hasStaffOrAdminRole = user.roles.some((r) => STAFF_ROLES.includes(r));
   if (!hasStaffOrAdminRole) {
@@ -25,11 +28,18 @@ export default async function SubAdminEmployeesDirectoryPage() {
 
   const employees = await employeeService.getEmployeeDirectory(user);
   const departments = Array.from(new Set(employees.map((e) => e.department))).sort();
+  // Employee records open only for HR/Admin with `canEmployees` (checked above; mirrors
+  // employeeService.getEmployeeDetail), so other roles get no dead link.
+  const canOpenRecords = user.roles.includes("ADMIN") || user.roles.includes("HR");
 
   return (
     <div className="w-full space-y-6">
       {/* Directory Table */}
-      <EmployeeDirectoryTable employees={employees} departments={departments} />
+      <EmployeeDirectoryTable
+        employees={employees}
+        departments={departments}
+        detailHrefBase={canOpenRecords ? "/subadmin/employees" : null}
+      />
     </div>
   );
 }

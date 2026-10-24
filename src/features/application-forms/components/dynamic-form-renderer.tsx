@@ -2,12 +2,25 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { FormSchemaDefinition } from "../types";
+import { FormSchemaDefinition, FormFieldDefinition } from "../types";
 import { submitApplicationAction } from "@/features/applications/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { UploadCloud, CheckCircle2, AlertCircle, FileText } from "lucide-react";
+
+const MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Mirrors `getPrimaryFileField` on the server: the single document upload maps to the
+ * field named `resume`, otherwise to the first file field of the form.
+ */
+function findPrimaryFileField(schema: FormSchemaDefinition): FormFieldDefinition | null {
+  const fileFields = schema.sections.flatMap((section) =>
+    section.fields.filter((field) => field.type === "file")
+  );
+  return fileFields.find((field) => field.name === "resume") ?? fileFields[0] ?? null;
+}
 
 interface DynamicFormRendererProps {
   formSchema: FormSchemaDefinition;
@@ -17,6 +30,13 @@ interface DynamicFormRendererProps {
   candidateEmail?: string;
 }
 
+const INPUT_TYPES: Partial<Record<FormFieldDefinition["type"], string>> = {
+  number: "number",
+  email: "email",
+  phone: "tel",
+  date: "date",
+};
+
 export function DynamicFormRenderer({
   formSchema,
   openingTitle,
@@ -25,6 +45,8 @@ export function DynamicFormRenderer({
   candidateEmail = "",
 }: DynamicFormRendererProps) {
   const router = useRouter();
+  const primaryFileField = findPrimaryFileField(formSchema);
+  const fileErrorKey = primaryFileField?.name ?? "resume";
 
   // Prepopulate standard fields if present in schema
   const [formData, setFormData] = useState<Record<string, unknown>>({
@@ -58,21 +80,21 @@ export function DynamicFormRenderer({
       if (file.type !== "application/pdf") {
         setFieldErrors((prev) => ({
           ...prev,
-          resume: "Only PDF format documents are supported.",
+          [fileErrorKey]: "Only PDF format documents are supported.",
         }));
         return;
       }
-      if (file.size > 5 * 1024 * 1024) {
+      if (file.size > MAX_UPLOAD_SIZE_BYTES) {
         setFieldErrors((prev) => ({
           ...prev,
-          resume: "Resume size must not exceed 5MB.",
+          [fileErrorKey]: "Document size must not exceed 5MB.",
         }));
         return;
       }
       setResumeFile(file);
       setFieldErrors((prev) => {
         const copy = { ...prev };
-        delete copy["resume"];
+        delete copy[fileErrorKey];
         return copy;
       });
     }
@@ -83,8 +105,11 @@ export function DynamicFormRenderer({
     setServerError(null);
     setFieldErrors({});
 
-    if (!resumeFile) {
-      setFieldErrors({ resume: "Please upload your resume in PDF format." });
+    // The document upload is only mandatory when the published form marks it required.
+    if (primaryFileField?.required && !resumeFile) {
+      setFieldErrors({
+        [fileErrorKey]: `${primaryFileField.label} is required. Please upload a PDF document.`,
+      });
       return;
     }
 
@@ -94,7 +119,9 @@ export function DynamicFormRenderer({
       const payload = new FormData();
       payload.append("openingSlug", openingSlug);
       payload.append("responses", JSON.stringify(formData));
-      payload.append("resume", resumeFile);
+      if (primaryFileField && resumeFile) {
+        payload.append("resume", resumeFile);
+      }
 
       const res = await submitApplicationAction(payload);
 
@@ -182,6 +209,18 @@ export function DynamicFormRenderer({
             {section.fields.map((field) => {
               const error = fieldErrors[field.name];
 
+              if (field.type === "file" && field.id !== primaryFileField?.id) {
+                // Only one document upload per application is supported.
+                return (
+                  <div key={field.id} className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">{field.label}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Additional document uploads are not available for this form yet.
+                    </p>
+                  </div>
+                );
+              }
+
               if (field.type === "file") {
                 return (
                   <div key={field.id} className="space-y-2">
@@ -214,7 +253,7 @@ export function DynamicFormRenderer({
                           <>
                             <UploadCloud className="h-8 w-8 text-muted-foreground" />
                             <div className="text-sm font-medium text-foreground">
-                              Click to select resume document
+                              Click to select a PDF document
                             </div>
                             <p className="text-xs text-muted-foreground">
                               PDF only, maximum size 5MB
@@ -282,6 +321,59 @@ export function DynamicFormRenderer({
                 );
               }
 
+              if (field.type === "multiselect" || field.type === "radio") {
+                const isMulti = field.type === "multiselect";
+                const currentValue = formData[field.name];
+                const selectedValues = Array.isArray(currentValue)
+                  ? currentValue.filter((v): v is string => typeof v === "string")
+                  : [];
+                return (
+                  <fieldset key={field.id} className="space-y-2">
+                    <legend className="block text-sm font-medium text-foreground">
+                      {field.label}{" "}
+                      {field.required && <span className="text-destructive">*</span>}
+                    </legend>
+                    {field.helpText && (
+                      <p className="text-xs text-muted-foreground">{field.helpText}</p>
+                    )}
+                    <div className="space-y-1.5">
+                      {field.options?.map((opt) => {
+                        const optionId = `${field.name}-${opt.value}`;
+                        const checked = isMulti
+                          ? selectedValues.includes(opt.value)
+                          : currentValue === opt.value;
+                        return (
+                          <div key={opt.value} className="flex items-center gap-2">
+                            <input
+                              type={isMulti ? "checkbox" : "radio"}
+                              id={optionId}
+                              name={field.name}
+                              value={opt.value}
+                              checked={checked}
+                              onChange={(e) => {
+                                if (!isMulti) {
+                                  handleFieldChange(field.name, opt.value);
+                                  return;
+                                }
+                                const next = e.target.checked
+                                  ? [...selectedValues, opt.value]
+                                  : selectedValues.filter((v) => v !== opt.value);
+                                handleFieldChange(field.name, next);
+                              }}
+                              className="h-4 w-4 border-input text-primary focus:ring-ring"
+                            />
+                            <label htmlFor={optionId} className="text-sm text-foreground">
+                              {opt.label}
+                            </label>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {error && <p className="text-xs text-destructive mt-1">{error}</p>}
+                  </fieldset>
+                );
+              }
+
               if (field.type === "checkbox") {
                 return (
                   <div key={field.id} className="flex items-start gap-2 pt-2">
@@ -310,8 +402,9 @@ export function DynamicFormRenderer({
               return (
                 <div key={field.id} className="space-y-1.5">
                   <Input
+                    id={field.name}
                     label={field.label + (field.required ? " *" : "")}
-                    type={field.type === "number" ? "number" : field.type === "email" ? "email" : "text"}
+                    type={INPUT_TYPES[field.type] ?? "text"}
                     placeholder={field.placeholder}
                     required={field.required}
                     error={error}

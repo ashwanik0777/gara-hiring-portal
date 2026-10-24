@@ -2,11 +2,13 @@ import React from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
+import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
 import { offerService } from "@/features/employees/services/offer-service";
 import { JobOfferCard } from "@/features/employees/components/job-offer-card";
 import { JobOfferButton } from "@/features/employees/components/job-offer-button";
-import { ApplicationStatus, InterviewStatus, InterviewRecommendation } from "@prisma/client";
+import { ApplicationStatus, InterviewStatus, InterviewRecommendation, Role } from "@prisma/client";
 import { StageTransitionDialog } from "@/features/recruitment/components/stage-transition-dialog";
 import { InterviewSchedulerForm } from "@/features/recruitment/components/interview-scheduler-form";
 import { InterviewFeedbackForm } from "@/features/recruitment/components/interview-feedback-form";
@@ -83,16 +85,31 @@ export default async function RecruiterApplicationDetailPage({
 }: RecruiterApplicationDetailPageProps) {
   const user = await getCurrentUser();
   if (!user) {
-    redirect("/login");
+    redirect("/login?callbackUrl=/admin/applications");
+  }
+  if (user.mustChangePassword) {
+    redirect("/set-password");
+  }
+
+  // Page-level guard: the /admin portal is restricted to Super Administrators.
+  if (!user.roles.includes(Role.ADMIN)) {
+    return <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />;
   }
 
   const { id } = await params;
 
-  let application;
+  let application: Awaited<ReturnType<typeof recruitmentService.getRecruiterApplicationDetail>>;
   try {
     application = await recruitmentService.getRecruiterApplicationDetail(id, user);
-  } catch {
-    notFound();
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      notFound();
+    }
+    if (error instanceof ForbiddenError) {
+      // ForbiddenError messages are operational and safe to show (e.g. own application).
+      return <UnauthorizedState message={error.message} />;
+    }
+    throw error;
   }
 
   const nextRoundNumber = application.interviewSchedules.length + 1;
@@ -102,12 +119,12 @@ export default async function RecruiterApplicationDetailPage({
 
   const offer = await offerService.getOfferByApplicationId(user, application.id);
   const isStaffAdmin = user.roles.includes("ADMIN") || user.roles.includes("HR");
+  // Mirrors the offer service: offers are prepared only from these stages.
   const canPrepareOffer =
     isStaffAdmin &&
     !offer &&
     (application.status === ApplicationStatus.INTERVIEWED ||
-      application.status === ApplicationStatus.OFFERED ||
-      application.status === ApplicationStatus.SHORTLISTED);
+      application.status === ApplicationStatus.EVALUATION_SELECTED);
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
@@ -356,7 +373,8 @@ export default async function RecruiterApplicationDetailPage({
                   </span>
                   {h.actor && (
                     <Badge variant="outline" className="text-[10px] py-0">
-                      By: {h.actor.name} ({h.actor.email})
+                      By: {h.actor.name}
+                      {h.actor.email ? ` (${h.actor.email})` : ""}
                     </Badge>
                   )}
                 </div>
