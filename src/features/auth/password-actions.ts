@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { auth } from "@/lib/auth/auth";
 import { getCurrentUser, requireAuth } from "@/lib/auth/guards";
+import { getHomePathForUser } from "@/lib/auth/home";
 import { toActionError } from "@/lib/errors";
 import { hashPassword } from "better-auth/crypto";
 import { z } from "zod";
@@ -113,13 +114,21 @@ export async function setNewPasswordAction(rawInput: { newPassword: string }) {
 }
 
 /**
- * Returns where the signed-in user should land right after authentication.
+ * Returns where the signed-in user should land right after authentication
+ * (`/set-password` for temporary passwords, otherwise the user's portal home), so the
+ * client navigates once instead of bouncing through the `/dashboard` hub.
  * Uses the current session only, so it cannot be used to probe other accounts.
  */
-export async function getPostLoginRedirectAction(): Promise<{ redirectTo: string | null }> {
+export async function getPostLoginRedirectAction(): Promise<{
+  redirectTo: string | null;
+  mustChangePassword: boolean;
+}> {
   const user = await getCurrentUser();
-  if (user?.mustChangePassword) {
-    return { redirectTo: "/set-password" };
+  if (!user) {
+    return { redirectTo: null, mustChangePassword: false };
   }
-  return { redirectTo: null };
+  return {
+    redirectTo: getHomePathForUser(user),
+    mustChangePassword: Boolean(user.mustChangePassword),
+  };
 }

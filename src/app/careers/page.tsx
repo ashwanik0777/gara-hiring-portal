@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { getPublicOpenings } from "@/features/openings/services/opening-service";
 import { Briefcase, Building, ArrowRight } from "lucide-react";
+import { CardGridSkeleton } from "@/components/feedback/page-skeletons";
 
 export const metadata = {
   title: "Careers & Openings",
@@ -16,29 +17,6 @@ export const metadata = {
 
 // Next.js 16 Cache Components: Allow streaming/blocking data access
 export const instant = false;
-
-function OpeningsSkeleton() {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
-      {[1, 2, 3, 4, 5, 6].map((i) => (
-        <div key={i} className="rounded-3xl border border-border/80 bg-card/80 p-6 space-y-4">
-          <div className="flex justify-between items-center">
-            <div className="h-5 w-24 rounded-full bg-muted/80" />
-            <div className="h-4 w-16 rounded bg-muted/80" />
-          </div>
-          <div className="h-6 w-3/4 rounded bg-muted/80" />
-          <div className="space-y-2">
-            <div className="h-3.5 w-full rounded bg-muted/60" />
-            <div className="h-3.5 w-5/6 rounded bg-muted/60" />
-          </div>
-          <div className="pt-4 border-t border-border/40">
-            <div className="h-9 w-full rounded-xl bg-muted/80" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 async function OpeningsList() {
   const openings = await getPublicOpenings();
@@ -111,7 +89,7 @@ export default function CareersPage() {
           </div>
 
           {/* Openings Grid streamed inside Suspense */}
-          <Suspense fallback={<OpeningsSkeleton />}>
+          <Suspense fallback={<CardGridSkeleton />}>
             <OpeningsList />
           </Suspense>
         </div>

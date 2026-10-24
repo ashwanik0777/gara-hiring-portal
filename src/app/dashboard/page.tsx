@@ -1,8 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
-import { Role } from "@prisma/client";
-
-import { SUB_ADMIN_ROLES } from "@/lib/auth/permissions";
+import { getHomePathForUser } from "@/lib/auth/home";
 
 export const instant = false;
 
@@ -12,19 +10,5 @@ export default async function DashboardRedirectPage() {
     redirect("/login?callbackUrl=/dashboard");
   }
 
-  if (user.mustChangePassword) {
-    redirect("/set-password");
-  }
-
-  if (user.roles.includes(Role.ADMIN)) {
-    redirect("/admin");
-  }
-
-  const isSubAdmin = user.roles.some((r) => SUB_ADMIN_ROLES.includes(r));
-
-  if (isSubAdmin) {
-    redirect("/subadmin");
-  }
-
-  redirect("/candidate/dashboard");
+  redirect(getHomePathForUser(user));
 }

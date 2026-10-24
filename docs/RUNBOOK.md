@@ -166,3 +166,20 @@ DATABASE_URL="$RECOVERY_DATABASE_URL" npx prisma migrate status
 - `/forgot-password` calls Better Auth `requestPasswordReset`; the response is identical for known and unknown emails and the email is sent after the response.
 - The emailed link is single-use and valid for 1 hour. It lands on `/reset-password`; completing it revokes every session of that user and clears `mustChangePassword`.
 - Administrators issue temporary passwords only when creating sub-admins; those accounts are forced through `/set-password`, and every server boundary rejects such sessions until then.
+
+---
+
+## 6. Performance Notes
+
+### 6.1 Keep compute next to the database
+- Neon runs in `ap-southeast-1` (Singapore). `vercel.json` pins Vercel Functions to `sin1` (Singapore) so each query is a same-region round trip. Before this, functions ran in `iad1` (Washington) and every query crossed the globe (~0.77 s for a single `SELECT 1`), which made sign-in and dashboards take several seconds.
+- If the database ever moves, update `"regions"` in `vercel.json` to the matching Vercel region. Verify with the `x-vercel-id` response header (`<edge>::<function-region>::<id>`).
+- Neon's free plan suspends idle compute; the first request after a pause pays a cold start of roughly a second. Disable scale-to-zero in the Neon console if that matters.
+
+### 6.2 Request-level deduplication
+- `getCurrentUser()` and `getUserPermissions()` are memoized per request with React `cache()`, so a layout, its page and the services they call share one session lookup and one permission read.
+
+### 6.3 Loading experience
+- Portal layouts render the auth-dependent shell inside `<Suspense>` with `DashboardShellSkeleton`, so the prerendered static shell paints immediately and the session streams in.
+- Every dashboard route has a `loading.tsx` that mirrors its layout (`src/components/feedback/page-skeletons.tsx`); public and auth routes have matching skeletons. Skeleton blocks pulse only when the user allows motion (`motion-safe`) and each region announces its loading state to screen readers.
+- After sign-in the client navigates once, straight to the user's portal (`getHomePathForUser`), instead of bouncing through `/dashboard`.

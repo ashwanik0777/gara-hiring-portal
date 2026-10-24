@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { prisma } from "@/lib/db";
 import { Role } from "@prisma/client";
 import { SUB_ADMIN_ROLES } from "./roles";
@@ -107,11 +108,22 @@ export const STAFF_ROLES: Role[] = [
 
 /**
  * Resolves user permissions based on user role and granular database records.
+ * Memoized per request (keyed by user and role set) so repeated authorization checks
+ * during one render or action reuse a single database read.
  */
 export async function getUserPermissions(
   userId: string,
   roles: Role[]
 ): Promise<SubAdminPermissions> {
+  return resolvePermissions(userId, [...roles].sort().join(","));
+}
+
+const resolvePermissions = cache(async (
+  userId: string,
+  roleKey: string
+): Promise<SubAdminPermissions> => {
+  const roles = roleKey ? (roleKey.split(",") as Role[]) : [];
+
   // 1. Super Admin has unrestricted authority
   if (roles.includes(Role.ADMIN)) {
     return ALL_ADMIN_PERMISSIONS;
@@ -161,4 +173,4 @@ export async function getUserPermissions(
   }
 
   return NO_PERMISSIONS;
-}
+});

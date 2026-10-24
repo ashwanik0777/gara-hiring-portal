@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -30,16 +30,31 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const searchParams = useSearchParams();
   // Prevent open redirect: only same-origin relative paths are accepted
   const callbackUrl = sanitizeCallbackPath(searchParams.get("callbackUrl"));
+  const hasExplicitCallback = searchParams.get("callbackUrl") !== null && callbackUrl !== "/dashboard";
+  // Set while this screen performs its own post-auth navigation, so the session
+  // listener below does not start a second, competing navigation.
+  const isNavigatingRef = useRef(false);
 
   const [mode, setMode] = useState<"login" | "register" | "forgot">(initialMode);
 
   // If already authenticated on the client, replace route immediately to prevent viewing auth screens
   const { data: session, isPending: sessionPending } = authClient.useSession();
   useEffect(() => {
-    if (!sessionPending && session?.user) {
+    if (!sessionPending && session?.user && !isNavigatingRef.current) {
       router.replace(callbackUrl);
     }
   }, [session, sessionPending, callbackUrl, router]);
+
+  // Navigates once, straight to the right portal (or the requested page).
+  const navigateAfterAuth = useCallback(async () => {
+    const { redirectTo, mustChangePassword } = await getPostLoginRedirectAction();
+    const target = mustChangePassword
+      ? "/set-password"
+      : hasExplicitCallback
+        ? callbackUrl
+        : redirectTo ?? callbackUrl;
+    router.replace(target);
+  }, [callbackUrl, hasExplicitCallback, router]);
 
   // Sync mode with browser back/forward buttons
   useEffect(() => {
@@ -114,6 +129,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
     e.preventDefault();
     setLoginError(null);
     setLoginLoading(true);
+    isNavigatingRef.current = true;
 
     try {
       const { error } = await authClient.signIn.email({
@@ -122,22 +138,15 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
       });
 
       if (error) {
+        isNavigatingRef.current = false;
         setLoginError(error.message || "Invalid email or password. Please try again.");
         setLoginLoading(false);
         return;
       }
 
-      // Check if the signed-in session still uses a temporary password
-      const { redirectTo } = await getPostLoginRedirectAction();
-      if (redirectTo) {
-        router.replace(redirectTo);
-        router.refresh();
-        return;
-      }
-
-      router.replace(callbackUrl);
-      router.refresh();
+      await navigateAfterAuth();
     } catch {
+      isNavigatingRef.current = false;
       setLoginError("An unexpected authentication error occurred. Please try again.");
       setLoginLoading(false);
     }
@@ -173,6 +182,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
     }
 
     setRegLoading(true);
+    isNavigatingRef.current = true;
 
     try {
       const { error } = await authClient.signUp.email({
@@ -182,14 +192,15 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
       });
 
       if (error) {
+        isNavigatingRef.current = false;
         setRegError(error.message || "Failed to create account. Email may already be registered.");
         setRegLoading(false);
         return;
       }
 
-      router.replace(callbackUrl);
-      router.refresh();
+      await navigateAfterAuth();
     } catch {
+      isNavigatingRef.current = false;
       setRegError("An unexpected registration error occurred. Please try again.");
       setRegLoading(false);
     }

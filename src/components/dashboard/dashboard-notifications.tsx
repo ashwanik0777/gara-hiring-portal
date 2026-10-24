@@ -18,7 +18,6 @@ import {
   Activity,
   CheckCheck,
   X,
-  Loader2,
 } from "lucide-react";
 import {
   getDashboardNotificationsAction,
@@ -27,6 +26,7 @@ import {
   dismissNotificationAction,
 } from "@/features/notifications/actions";
 import type { SystemNotification } from "@/features/notifications/types";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const subscribeNoop = () => () => {};
 
@@ -346,9 +346,18 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
           {/* Notifications Scrollable List */}
           <div className="max-h-[380px] overflow-y-auto divide-y divide-border/40">
             {loading && notifications.length === 0 ? (
-              <div className="p-8 text-center flex flex-col items-center justify-center">
-                <Loader2 className="h-6 w-6 animate-spin text-blue-600 dark:text-blue-400 mb-2" />
-                <p className="text-xs font-semibold text-foreground">Syncing platform alerts...</p>
+              <div role="status" aria-live="polite" className="divide-y divide-border/40">
+                <span className="sr-only">Loading notifications</span>
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-start gap-3 p-4">
+                    <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
+                    <div className="flex-1 space-y-2">
+                      <Skeleton className="h-3.5 w-3/4" />
+                      <Skeleton className="h-3 w-full" />
+                      <Skeleton className="h-2.5 w-16" />
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : displayedNotifications.length === 0 ? (
               <div className="p-8 text-center">

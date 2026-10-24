@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { headers } from "next/headers";
 import { auth } from "./auth";
 import { prisma } from "@/lib/db";
@@ -27,8 +28,10 @@ export interface RequireAuthOptions {
 
 /**
  * Retrieves the current session from request headers.
+ * Memoized per request with React `cache()`: layouts, pages and services that each
+ * ask for the user share one session lookup instead of repeating the database reads.
  */
-export async function getCurrentUser(): Promise<AuthenticatedUser | null> {
+export const getCurrentUser = cache(async (): Promise<AuthenticatedUser | null> => {
   try {
     const session = await auth.api.getSession({
       headers: await headers(),
@@ -69,7 +72,7 @@ export async function getCurrentUser(): Promise<AuthenticatedUser | null> {
   } catch {
     return null;
   }
-}
+});
 
 /**
  * Server-side guard requiring an authenticated user.

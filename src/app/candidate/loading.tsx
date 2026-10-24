@@ -1,10 +1,5 @@
-import React from "react";
-import { LoadingState } from "@/components/feedback/loading-state";
+import { OverviewPageSkeleton } from "@/components/feedback/page-skeletons";
 
-export default function CandidateLoading() {
-  return (
-    <div className="flex flex-1 items-center justify-center p-12 min-h-[400px]">
-      <LoadingState message="Loading candidate portal..." />
-    </div>
-  );
+export default function Loading() {
+  return <OverviewPageSkeleton label="Loading candidate portal" />;
 }

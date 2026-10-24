@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { AuthSplitScreen } from "@/components/auth/auth-split-screen";
+import { AuthScreenSkeleton } from "@/components/feedback/page-skeletons";
 
 export const instant = false;
 
@@ -21,11 +22,7 @@ export default async function LoginPage() {
 
   return (
     <Suspense
-      fallback={
-        <div className="min-h-screen flex items-center justify-center text-xs text-muted-foreground animate-pulse">
-          Loading sign in...
-        </div>
-      }
+      fallback={<AuthScreenSkeleton label="Loading sign in" />}
     >
       <AuthSplitScreen initialMode="login" />
     </Suspense>
