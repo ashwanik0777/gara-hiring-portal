@@ -163,6 +163,12 @@ model SubAdminPermission {
 // Candidate Profile & Employee Core Foundations
 // -----------------------------------------------------------------------------
 
+enum CareerInterest {
+  JOB
+  INTERNSHIP
+  BOTH
+}
+
 model CandidateProfile {
   id                  String   @id @default(uuid())
   userId              String   @unique
@@ -174,12 +180,19 @@ model CandidateProfile {
   linkedinUrl         String?
   githubUrl           String?
   portfolioUrl        String?
+  // What the candidate signed up for; drives recommended openings (null = not chosen yet)
+  careerInterest      CareerInterest?
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
 
   applications        Application[]
 
   @@map("candidate_profiles")
+}
+
+enum EmploymentType {
+  FULL_TIME
+  INTERN
 }
 
 enum EmployeeStatus {
@@ -199,6 +212,8 @@ model Employee {
   designation    String
   joiningDate    DateTime
   status         EmployeeStatus @default(PROBATION)
+  // Set when the person joins (null for records created before this field existed)
+  employmentType EmploymentType?
 
   // Reporting Line
   managerId      String?

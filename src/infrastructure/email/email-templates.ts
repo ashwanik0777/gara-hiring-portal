@@ -667,8 +667,178 @@ export function buildJobOfferEmail(params: {
   return { subject, text, html };
 }
 
+/** Formats a stored joining date (a calendar day at UTC midnight) without shifting the day. */
+function formatJoiningDate(value: string | undefined): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleDateString("en-GB", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+interface JoinedEmailParams {
+  recipientName: string;
+  employeeCode?: string;
+  department?: string;
+  designation?: string;
+  joiningDate?: string;
+  portalUrl?: string;
+}
+
+/** Shared escaped detail card and feature list for the joining welcome emails. */
+function renderJoinedEmailContent(params: JoinedEmailParams, features: readonly string[]): string {
+  const joiningDate = formatJoiningDate(params.joiningDate);
+  const rows: Array<[string, string]> = [];
+  if (params.designation) rows.push(["Designation", params.designation]);
+  if (params.department) rows.push(["Department", params.department]);
+  if (params.employeeCode) rows.push(["Employee Code", params.employeeCode]);
+  if (joiningDate) rows.push(["Joining Date", joiningDate]);
+
+  const rowsHtml = rows
+    .map(
+      ([label, value]) => `
+        <tr>
+          <td width="35%" style="color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;">${escapeHtml(label)}</td>
+          <td style="color: #0f172a; font-weight: 600;">${escapeHtml(value)}</td>
+        </tr>`
+    )
+    .join("");
+
+  const featuresHtml = features
+    .map(
+      (feature) =>
+        `<li style="margin: 0 0 6px 0; font-size: 13px; color: #334155;">${escapeHtml(feature)}</li>`
+    )
+    .join("");
+
+  return `
+    ${
+      rowsHtml
+        ? `<div style="margin: 20px 0; padding: 20px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+      <table width="100%" cellpadding="6" cellspacing="0" border="0" style="font-size: 13px;">${rowsHtml}
+      </table>
+    </div>`
+        : ""
+    }
+    <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #0f172a;">Now available in your portal</p>
+    <ul style="margin: 0 0 4px 0; padding-left: 20px;">${featuresHtml}</ul>
+  `;
+}
+
+function joinedEmailText(
+  greeting: string,
+  intro: string,
+  params: JoinedEmailParams,
+  features: readonly string[],
+  portalUrl: string
+): string {
+  const joiningDate = formatJoiningDate(params.joiningDate);
+  const details = [
+    params.designation ? `Designation: ${params.designation}` : null,
+    params.department ? `Department: ${params.department}` : null,
+    params.employeeCode ? `Employee Code: ${params.employeeCode}` : null,
+    joiningDate ? `Joining Date: ${joiningDate}` : null,
+  ].filter((line): line is string => line !== null);
+  return `${greeting}\n\n${intro}\n\n${details.length > 0 ? `${details.join("\n")}\n\n` : ""}Now available in your portal:\n${features.map((f) => `- ${f}`).join("\n")}\n\nOpen your portal: ${portalUrl}\n\n— GARA Innovation`;
+}
+
+/** Features unlocked by joining as an intern (mirrors the INTERN portal stage). */
+export const INTERN_JOINED_FEATURES = [
+  "Intern workspace",
+  "Attendance",
+  "Leave requests",
+  "Payslips",
+  "ID card & certificate",
+] as const;
+
+/** Features unlocked by joining as an employee (mirrors the EMPLOYEE portal stage). */
+export const EMPLOYEE_JOINED_FEATURES = ["Employee home", "Attendance", "Leave requests", "Payslips"] as const;
+
 /**
- * 8. Fallback / Generic Outbox Notification Builder
+ * 8. Intern Joined Welcome Email (evaluation passed + HR "Mark as joined")
+ */
+export function buildInternJoinedEmail(
+  params: JoinedEmailParams & { openingTitle?: string }
+): { subject: string; text: string; html: string } {
+  const portalUrl = params.portalUrl || `${getAppBaseUrl()}/intern/dashboard`;
+  const programme = params.openingTitle ? ` for ${params.openingTitle}` : "";
+
+  const subject = "[GARA Innovation] Welcome aboard: you have joined as an intern";
+  const text = joinedEmailText(
+    `Welcome ${params.recipientName}!`,
+    `You have officially joined GARA Innovation as an intern${programme}.`,
+    params,
+    INTERN_JOINED_FEATURES,
+    portalUrl
+  );
+
+  const html = renderEmailShell({
+    categoryBadge: {
+      text: "Joined as Intern",
+      bgColor: "#f0fdf4",
+      textColor: "#166534",
+      borderColor: "#bbf7d0",
+    },
+    title: "Welcome to GARA Innovation",
+    salutation: `Welcome ${params.recipientName}!`,
+    leadParagraph: `You have officially joined GARA Innovation as an intern${
+      params.openingTitle ? ` for <strong>${escapeHtml(params.openingTitle)}</strong>` : ""
+    }. Your intern workspace is ready.`,
+    contentHtml: renderJoinedEmailContent(params, INTERN_JOINED_FEATURES),
+    ctaButton: {
+      text: "Open Intern Workspace",
+      url: portalUrl,
+    },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 9. Employee Joined Welcome Email (accepted offer + HR "Mark as joined")
+ */
+export function buildEmployeeJoinedEmail(
+  params: JoinedEmailParams
+): { subject: string; text: string; html: string } {
+  const portalUrl = params.portalUrl || `${getAppBaseUrl()}/hrms`;
+
+  const subject = "[GARA Innovation] Welcome aboard: you have joined the team";
+  const text = joinedEmailText(
+    `Welcome ${params.recipientName}!`,
+    "You have officially joined GARA Innovation as an employee.",
+    params,
+    EMPLOYEE_JOINED_FEATURES,
+    portalUrl
+  );
+
+  const html = renderEmailShell({
+    categoryBadge: {
+      text: "Joined as Employee",
+      bgColor: "#eff6ff",
+      textColor: "#1d4ed8",
+      borderColor: "#bfdbfe",
+    },
+    title: "Welcome to GARA Innovation",
+    salutation: `Welcome ${params.recipientName}!`,
+    leadParagraph: `You have officially joined GARA Innovation${
+      params.designation ? ` as <strong>${escapeHtml(params.designation)}</strong>` : ""
+    }. Your employee home is ready.`,
+    contentHtml: renderJoinedEmailContent(params, EMPLOYEE_JOINED_FEATURES),
+    ctaButton: {
+      text: "Open Employee Home",
+      url: portalUrl,
+    },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 10. Fallback / Generic Outbox Notification Builder
  */
 export function buildGenericNotificationEmail(params: {
   templateName: string;

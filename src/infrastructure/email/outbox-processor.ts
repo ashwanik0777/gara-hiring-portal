@@ -44,8 +44,15 @@ import {
   buildInterviewInvitationEmail,
   buildEvaluationSelectionEmail,
   buildJobOfferEmail,
+  buildInternJoinedEmail,
+  buildEmployeeJoinedEmail,
   buildGenericNotificationEmail,
 } from "./email-templates";
+
+/** Reads an optional non-empty string from an outbox payload. */
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
 
 export interface OutboxProcessingSummary {
   processed: number;
@@ -130,6 +137,26 @@ export class OutboxProcessorService {
           department: String(data.department || "Engineering"),
           expectedJoiningDate: String(data.expectedJoiningDate || new Date().toISOString()),
           applicationReference: typeof data.applicationReference === "string" ? data.applicationReference : undefined,
+        });
+
+      case "INTERN_JOINED":
+        return buildInternJoinedEmail({
+          recipientName: optionalText(data.recipientName) ?? "Intern",
+          employeeCode: optionalText(data.employeeCode),
+          department: optionalText(data.department),
+          designation: optionalText(data.designation),
+          openingTitle: optionalText(data.openingTitle),
+          joiningDate: optionalText(data.joiningDate),
+        });
+
+      case "EMPLOYEE_JOINED":
+      case "EMPLOYEE_ONBOARDING_WELCOME":
+        return buildEmployeeJoinedEmail({
+          recipientName: optionalText(data.employeeName) ?? "Team Member",
+          employeeCode: optionalText(data.employeeCode),
+          department: optionalText(data.department),
+          designation: optionalText(data.designation),
+          joiningDate: optionalText(data.joiningDate),
         });
 
       default:

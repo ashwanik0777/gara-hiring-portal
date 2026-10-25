@@ -12,6 +12,7 @@ import { ArrowLeft, Lock, Briefcase, MapPin, Building2 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { OpeningStatus } from "@prisma/client";
 import { NotFoundError } from "@/lib/errors";
+import { getApplyBlockedReason, resolveHomePath } from "@/features/lifecycle/services/lifecycle-service";
 
 // Next.js 16 Cache Components: Allow streaming/blocking data access
 export const instant = false;
@@ -101,6 +102,29 @@ export default async function ApplyPage({ params }: ApplyPageProps) {
                 <Button variant="outline" className="w-full">Create Account</Button>
               </Link>
             </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const applyBlockedReason = await getApplyBlockedReason(user);
+  if (applyBlockedReason) {
+    const homePath = await resolveHomePath(user);
+    return (
+      <div className="container mx-auto px-4 py-12 max-w-2xl">
+        <Card className="border-border">
+          <CardHeader className="text-center pb-4">
+            <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary mb-2">
+              <Lock className="h-6 w-6" aria-hidden="true" />
+            </div>
+            <CardTitle className="text-xl">Applications Not Available</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 pt-2 text-center">
+            <p className="text-sm text-muted-foreground">{applyBlockedReason}</p>
+            <Link href={homePath} className="inline-block">
+              <Button>Go to my workspace</Button>
+            </Link>
           </CardContent>
         </Card>
       </div>

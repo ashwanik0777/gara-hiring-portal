@@ -1,11 +1,12 @@
 import {
   EmployeeStatus,
+  EmploymentType,
   OfferStatus,
   ApplicationStatus,
   Role,
 } from "@prisma/client";
 
-export { EmployeeStatus, OfferStatus, ApplicationStatus, Role };
+export { EmployeeStatus, EmploymentType, OfferStatus, ApplicationStatus, Role };
 
 export interface EmergencyContact {
   name: string;
@@ -29,6 +30,8 @@ export interface PublicEmployeeDirectoryItem {
   designation: string;
   joiningDate: Date;
   status: EmployeeStatus;
+  /** How the person joined; null for records created before the field existed. */
+  employmentType: EmploymentType | null;
   avatar?: string | null;
   manager?: {
     id: string;
@@ -126,6 +129,14 @@ export interface JobOfferDetail {
   declineReason?: string | null;
   notes?: string | null; // Confidential internal notes
   createdAt: Date;
+}
+
+/** Active employee who may be chosen as reporting manager when someone joins. */
+export interface ReportingManagerOption {
+  id: string;
+  employeeCode: string;
+  name: string;
+  designation: string;
 }
 
 export interface EmployeeDirectoryFilters {

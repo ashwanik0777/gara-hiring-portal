@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
-import { getHomePathForUser } from "@/lib/auth/home";
+import { resolveHomePath } from "@/features/lifecycle/services/lifecycle-service";
 
 export const instant = false;
 
@@ -10,5 +10,5 @@ export default async function DashboardRedirectPage() {
     redirect("/login?callbackUrl=/dashboard");
   }
 
-  redirect(getHomePathForUser(user));
+  redirect(await resolveHomePath(user));
 }

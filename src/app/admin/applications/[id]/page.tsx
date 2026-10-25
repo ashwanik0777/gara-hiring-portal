@@ -10,6 +10,11 @@ import { JobOfferCard } from "@/features/employees/components/job-offer-card";
 import { JobOfferButton } from "@/features/employees/components/job-offer-button";
 import { ApplicationStatus, InterviewStatus, InterviewRecommendation, Role } from "@prisma/client";
 import { StageTransitionDialog } from "@/features/recruitment/components/stage-transition-dialog";
+import { canSelectForEvaluation } from "@/features/recruitment/schemas";
+import { evaluationService } from "@/features/internship-evaluation/services/evaluation-service";
+import { SelectForEvaluationCard } from "@/features/internship-evaluation/components/select-for-evaluation-card";
+import { ApplicationEvaluationStatus } from "@/features/internship-evaluation/components/application-evaluation-status";
+import { JoinedEmployeeNotice } from "@/features/employees/components/joined-employee-notice";
 import { InterviewSchedulerForm } from "@/features/recruitment/components/interview-scheduler-form";
 import { InterviewFeedbackForm } from "@/features/recruitment/components/interview-feedback-form";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -64,11 +69,13 @@ function getStatusBadge(status: ApplicationStatus) {
     case ApplicationStatus.INTERVIEWED:
       return <Badge variant="secondary">Interviewed</Badge>;
     case ApplicationStatus.EVALUATION_SELECTED:
-      return <Badge variant="success">Evaluation Selected</Badge>;
+      return <Badge variant="success">Selected for evaluation</Badge>;
     case ApplicationStatus.OFFERED:
       return <Badge variant="success">Offer Extended</Badge>;
     case ApplicationStatus.OFFER_ACCEPTED:
       return <Badge variant="success">Offer Accepted</Badge>;
+    case ApplicationStatus.HIRED:
+      return <Badge variant="success">Joined</Badge>;
     case ApplicationStatus.REJECTED:
       return <Badge variant="destructive">Rejected</Badge>;
     case ApplicationStatus.WITHDRAWN:
@@ -119,6 +126,14 @@ export default async function RecruiterApplicationDetailPage({
 
   const offer = await offerService.getOfferByApplicationId(user, application.id);
   const isStaffAdmin = user.roles.includes("ADMIN") || user.roles.includes("HR");
+  // Internship step 1: selection for the 7-working-day evaluation (dedicated flow).
+  const canSelectEvaluation =
+    application.opening.type === "INTERNSHIP" &&
+    !application.evaluation &&
+    canSelectForEvaluation(application.status);
+  const supervisorOptions = canSelectEvaluation
+    ? await evaluationService.listSupervisorOptions(user, application.candidate.userId)
+    : [];
   // Mirrors the offer service: offers are prepared only from these stages.
   const canPrepareOffer =
     isStaffAdmin &&
@@ -192,6 +207,31 @@ export default async function RecruiterApplicationDetailPage({
           defaultRoundNumber={nextRoundNumber}
         />
       </div>
+
+      {/* Internship evaluation selection and joining state */}
+      {application.evaluation ? (
+        <ApplicationEvaluationStatus
+          evaluation={application.evaluation}
+          joinedEmployee={application.joinedEmployee}
+          evaluationHref={`/admin/evaluations/${application.evaluation.enrollmentId}`}
+          employeeHref={
+            application.joinedEmployee ? `/admin/employees/${application.joinedEmployee.id}` : null
+          }
+        />
+      ) : canSelectEvaluation ? (
+        <SelectForEvaluationCard
+          applicationId={application.id}
+          candidateName={application.candidate.fullName}
+          openingTitle={application.opening.title}
+          supervisorOptions={supervisorOptions}
+          evaluationHrefBase="/admin/evaluations"
+        />
+      ) : application.joinedEmployee ? (
+        <JoinedEmployeeNotice
+          employee={application.joinedEmployee}
+          employeeHref={`/admin/employees/${application.joinedEmployee.id}`}
+        />
+      ) : null}
 
       {/* Pending Interview Evaluation Form (if scheduled) */}
       {pendingInterview && (

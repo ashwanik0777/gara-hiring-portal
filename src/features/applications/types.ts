@@ -1,3 +1,4 @@
+import type { CareerInterest } from "@/types/enums";
 import { ApplicationStatus } from "@prisma/client";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
 
@@ -50,4 +51,5 @@ export interface CandidateProfileData {
   linkedinUrl?: string | null;
   githubUrl?: string | null;
   portfolioUrl?: string | null;
+  careerInterest?: CareerInterest | null;
 }

@@ -63,72 +63,6 @@ export const ADMIN_NAV_ITEMS: DashboardNavItem[] = [
   },
 ];
 
-export const CANDIDATE_NAV_ITEMS: DashboardNavItem[] = [
-  {
-    label: "Dashboard",
-    href: "/candidate/dashboard",
-    iconName: "LayoutDashboard",
-  },
-  {
-    label: "My Applications",
-    href: "/candidate/applications",
-    iconName: "FileText",
-  },
-  {
-    label: "Candidate Profile",
-    href: "/candidate/profile",
-    iconName: "User",
-  },
-  {
-    label: "Explore Openings",
-    href: "/careers",
-    iconName: "Briefcase",
-  },
-  {
-    label: "Verify Certificate",
-    href: "/verify",
-    iconName: "Award",
-  },
-  {
-    label: "Support & Help",
-    href: "/help",
-    iconName: "MessageSquare",
-  },
-];
-
-export const INTERN_NAV_ITEMS: DashboardNavItem[] = [
-  {
-    label: "Workspace",
-    href: "/intern/dashboard",
-    iconName: "LayoutDashboard",
-  },
-  {
-    label: "My Applications",
-    href: "/candidate/dashboard",
-    iconName: "FileText",
-  },
-  {
-    label: "Attendance",
-    href: "/hrms/attendance",
-    iconName: "Clock",
-  },
-  {
-    label: "Leave Requests",
-    href: "/hrms/leave",
-    iconName: "CalendarDays",
-  },
-  {
-    label: "Verify Certificate",
-    href: "/verify",
-    iconName: "Award",
-  },
-  {
-    label: "Support & Help",
-    href: "/help",
-    iconName: "MessageSquare",
-  },
-];
-
 export const HRMS_NAV_ITEMS: DashboardNavItem[] = [
   {
     label: "Attendance",
@@ -147,7 +81,7 @@ export const HRMS_NAV_ITEMS: DashboardNavItem[] = [
   },
   {
     label: "Employee Directory",
-    href: "/admin/employees",
+    href: "/subadmin/employees",
     iconName: "UserCheck",
   },
   {

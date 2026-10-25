@@ -1,21 +1,34 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { hireEmployeeFromApplicationAction } from "../actions";
+import { todayDateInputValue } from "../joining";
 import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
-import { UserPlus, AlertCircle, X, ShieldCheck } from "lucide-react";
+import { UserPlus, AlertCircle, ShieldCheck } from "lucide-react";
+import { AccessibleDialog } from "./accessible-dialog";
+import {
+  FieldError,
+  InitialStatusField,
+  joiningInputClass,
+  type JoiningInitialStatus,
+} from "./joining-fields";
 
 interface HireEmployeeModalProps {
   applicationId: string;
   candidateName: string;
   defaultDepartment: string;
   defaultDesignation: string;
+  /** Agreed joining date when it has already been reached, otherwise "" (see `joiningDatePrefill`). */
   defaultJoiningDate: string;
   onClose: () => void;
 }
 
+/**
+ * Full-time "Mark as joined": records that a candidate with an accepted offer has joined.
+ * The server re-checks the accepted offer, separation of duties, permissions and that the
+ * joining date is not in the future before granting the EMPLOYEE role.
+ */
 export function HireEmployeeModal({
   applicationId,
   candidateName,
@@ -25,11 +38,15 @@ export function HireEmployeeModal({
   onClose,
 }: HireEmployeeModalProps) {
   const router = useRouter();
+  const baseId = useId();
+  const id = (suffix: string) => `${baseId}-${suffix}`;
+
   // No pre-filled code: the employee numbering series is not defined.
   const [employeeCode, setEmployeeCode] = useState("");
   const [department, setDepartment] = useState(defaultDepartment);
   const [designation, setDesignation] = useState(defaultDesignation);
   const [joiningDate, setJoiningDate] = useState(defaultJoiningDate);
+  const [initialStatus, setInitialStatus] = useState<JoiningInitialStatus | "">("");
   const [personalPhone, setPersonalPhone] = useState("");
   const [ecName, setEcName] = useState("");
   const [ecRel, setEcRel] = useState("");
@@ -37,10 +54,22 @@ export function HireEmployeeModal({
   const [internalNotes, setInternalNotes] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  const close = () => {
+    if (!isSubmitting) onClose();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setFieldErrors({});
+
+    if (!initialStatus) {
+      setFieldErrors({ initialStatus: "Choose the initial employment status (Active or Probation)" });
+      return;
+    }
+
     setIsSubmitting(true);
 
     const formData = new FormData();
@@ -49,6 +78,7 @@ export function HireEmployeeModal({
     formData.append("department", department);
     formData.append("designation", designation);
     formData.append("joiningDate", joiningDate);
+    formData.append("initialStatus", initialStatus);
     formData.append("personalPhone", personalPhone);
     formData.append("emergencyContactName", ecName);
     formData.append("emergencyContactRelation", ecRel);
@@ -58,194 +88,237 @@ export function HireEmployeeModal({
     try {
       const res = await hireEmployeeFromApplicationAction(formData);
       if (!res.success) {
-        const details = Object.values(res.fieldErrors ?? {});
-        setError(details.length > 0 ? `${res.error}: ${details.join(" ")}` : res.error);
+        setError(res.error);
+        setFieldErrors(res.fieldErrors ?? {});
       } else {
         onClose();
         // Stay on the current portal page; it re-renders with the HIRED status.
         router.refresh();
       }
+    } catch {
+      setError("Marking the employee as joined failed. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const describedBy = (field: string, extra?: string) =>
+    [extra, fieldErrors[field] ? id(`${field}-error`) : null].filter(Boolean).join(" ") || undefined;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
-      <Card className="border-border shadow-lg max-w-xl w-full my-8">
-        <form onSubmit={handleSubmit}>
-          <CardHeader className="pb-3 border-b border-border/50">
-            <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <UserPlus className="h-4 w-4 text-primary" /> Hire Employee: {candidateName}
-                </CardTitle>
-              </div>
-              <button
-                type="button"
-                onClick={onClose}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
+    <AccessibleDialog
+      open
+      onClose={close}
+      labelledBy={id("title")}
+      describedBy={id("description")}
+      busy={isSubmitting}
+    >
+      <form onSubmit={handleSubmit}>
+        <div className="border-b border-border/50 px-5 py-4">
+          <h2 id={id("title")} className="flex items-center gap-2 text-base font-semibold text-foreground">
+            <UserPlus className="h-4 w-4 text-primary" aria-hidden="true" /> Mark as joined: {candidateName}
+          </h2>
+        </div>
+
+        <div className="space-y-4 px-5 py-4 text-xs">
+          <div
+            id={id("description")}
+            className="flex items-start gap-2 rounded-lg border border-border/40 bg-muted/40 p-3 text-muted-foreground"
+          >
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            <span>
+              Requires an offer the candidate has accepted (OFFER_ACCEPTED). Marking {candidateName} as
+              joined creates the full-time employee record, grants the EMPLOYEE role (employee home,
+              attendance, leave, payslips), starts the onboarding checklist, moves the application to
+              HIRED and emails a welcome message.
+            </span>
+          </div>
+
+          {error && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-destructive"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{error}</span>
             </div>
-          </CardHeader>
-          <CardContent className="pt-6 space-y-4 text-xs">
-            {error && (
-              <div className="p-3 rounded-md bg-destructive/10 text-destructive border border-destructive/20 flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
+          )}
 
-            <div className="p-2.5 rounded bg-muted/40 border border-border/40 text-[11px] text-muted-foreground flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-success shrink-0" />
-              <span>
-                Gated transition: This operation requires an offer the candidate has accepted (OFFER_ACCEPTED). Creating an employee record will assign the official EMPLOYEE role, initiate the onboarding checklist, and transition recruitment to HIRED.
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block font-medium text-foreground mb-1">
-                  Employee Code <span className="text-destructive">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={employeeCode}
-                  onChange={(e) => setEmployeeCode(e.target.value)}
-                  placeholder="Uppercase letters, digits, - or _"
-                  className="w-full px-3 py-2 rounded-md border border-input bg-background font-mono uppercase"
-                />
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1">
-                  Official Joining Date <span className="text-destructive">*</span>
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={joiningDate}
-                  onChange={(e) => setJoiningDate(e.target.value)}
-                  className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block font-medium text-foreground mb-1">
-                  Department <span className="text-destructive">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={department}
-                  onChange={(e) => setDepartment(e.target.value)}
-                  className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                />
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1">
-                  Designation <span className="text-destructive">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={designation}
-                  onChange={(e) => setDesignation(e.target.value)}
-                  className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                />
-              </div>
-            </div>
-
-            <div className="pt-2 border-t border-border/40">
-              <div className="font-semibold text-foreground mb-2">
-                Confidential Employee Details (Restricted RBAC):
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-medium text-foreground mb-1">
-                    Personal Phone
-                  </label>
-                  <input
-                    type="tel"
-                    value={personalPhone}
-                    onChange={(e) => setPersonalPhone(e.target.value)}
-                    placeholder="+91 9876543210"
-                    className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1">
-                    Emergency Contact Name
-                  </label>
-                  <input
-                    type="text"
-                    value={ecName}
-                    onChange={(e) => setEcName(e.target.value)}
-                    placeholder="e.g. John Doe"
-                    className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1">
-                    Relationship
-                  </label>
-                  <input
-                    type="text"
-                    value={ecRel}
-                    onChange={(e) => setEcRel(e.target.value)}
-                    placeholder="e.g. Spouse, Parent"
-                    className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1">
-                    Emergency Phone
-                  </label>
-                  <input
-                    type="tel"
-                    value={ecPhone}
-                    onChange={(e) => setEcPhone(e.target.value)}
-                    placeholder="+91 9123456789"
-                    className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                  />
-                </div>
-              </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <label htmlFor={id("employeeCode")} className="mb-1 block font-medium text-foreground">
+                Employee code <span className="text-destructive">*</span>
+              </label>
+              <input
+                id={id("employeeCode")}
+                type="text"
+                required
+                autoComplete="off"
+                value={employeeCode}
+                onChange={(e) => setEmployeeCode(e.target.value.toUpperCase())}
+                placeholder="Uppercase letters, digits, - or _"
+                aria-invalid={Boolean(fieldErrors.employeeCode)}
+                aria-describedby={describedBy("employeeCode")}
+                disabled={isSubmitting}
+                className={`${joiningInputClass} font-mono`}
+              />
+              <FieldError id={id("employeeCode-error")} message={fieldErrors.employeeCode} />
             </div>
 
             <div>
-              <label className="block font-medium text-foreground mb-1">
-                Internal HR / Onboarding Notes
+              <label htmlFor={id("joiningDate")} className="mb-1 block font-medium text-foreground">
+                Joining date <span className="text-destructive">*</span>
               </label>
-              <textarea
-                rows={2}
-                value={internalNotes}
-                onChange={(e) => setInternalNotes(e.target.value)}
-                placeholder="Initial setup notes, mentor pairing, equipment dispatch..."
-                className="w-full px-3 py-2 rounded-md border border-input bg-background resize-y"
+              <input
+                id={id("joiningDate")}
+                type="date"
+                required
+                max={todayDateInputValue()}
+                value={joiningDate}
+                onChange={(e) => setJoiningDate(e.target.value)}
+                aria-invalid={Boolean(fieldErrors.joiningDate)}
+                aria-describedby={describedBy("joiningDate", id("joiningDate-hint"))}
+                disabled={isSubmitting}
+                className={joiningInputClass}
               />
+              <p id={id("joiningDate-hint")} className="mt-1 text-[11px] text-muted-foreground">
+                The employee&apos;s first day. It cannot be in the future.
+              </p>
+              <FieldError id={id("joiningDate-error")} message={fieldErrors.joiningDate} />
             </div>
-          </CardContent>
-          <CardFooter className="pt-2 border-t border-border/50 flex justify-end gap-2">
-            <Button variant="outline" size="sm" type="button" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button variant="primary" size="sm" type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Creating Employee..." : "Confirm & Hire Employee"}
-            </Button>
-          </CardFooter>
-        </form>
-      </Card>
-    </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <label htmlFor={id("department")} className="mb-1 block font-medium text-foreground">
+                Department <span className="text-destructive">*</span>
+              </label>
+              <input
+                id={id("department")}
+                type="text"
+                required
+                value={department}
+                onChange={(e) => setDepartment(e.target.value)}
+                aria-invalid={Boolean(fieldErrors.department)}
+                aria-describedby={describedBy("department")}
+                disabled={isSubmitting}
+                className={joiningInputClass}
+              />
+              <FieldError id={id("department-error")} message={fieldErrors.department} />
+            </div>
+
+            <div>
+              <label htmlFor={id("designation")} className="mb-1 block font-medium text-foreground">
+                Designation <span className="text-destructive">*</span>
+              </label>
+              <input
+                id={id("designation")}
+                type="text"
+                required
+                value={designation}
+                onChange={(e) => setDesignation(e.target.value)}
+                aria-invalid={Boolean(fieldErrors.designation)}
+                aria-describedby={describedBy("designation")}
+                disabled={isSubmitting}
+                className={joiningInputClass}
+              />
+              <FieldError id={id("designation-error")} message={fieldErrors.designation} />
+            </div>
+          </div>
+
+          <InitialStatusField
+            value={initialStatus}
+            onChange={setInitialStatus}
+            error={fieldErrors.initialStatus}
+            disabled={isSubmitting}
+          />
+
+          <fieldset className="border-t border-border/40 pt-3" disabled={isSubmitting}>
+            <legend className="mb-2 font-semibold text-foreground">
+              Confidential employee details (HR, Admin and the employee only)
+            </legend>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <label htmlFor={id("personalPhone")} className="mb-1 block font-medium text-foreground">
+                  Personal phone
+                </label>
+                <input
+                  id={id("personalPhone")}
+                  type="tel"
+                  value={personalPhone}
+                  onChange={(e) => setPersonalPhone(e.target.value)}
+                  className={joiningInputClass}
+                />
+              </div>
+
+              <div>
+                <label htmlFor={id("ecName")} className="mb-1 block font-medium text-foreground">
+                  Emergency contact name
+                </label>
+                <input
+                  id={id("ecName")}
+                  type="text"
+                  value={ecName}
+                  onChange={(e) => setEcName(e.target.value)}
+                  className={joiningInputClass}
+                />
+              </div>
+
+              <div>
+                <label htmlFor={id("ecRel")} className="mb-1 block font-medium text-foreground">
+                  Relationship
+                </label>
+                <input
+                  id={id("ecRel")}
+                  type="text"
+                  value={ecRel}
+                  onChange={(e) => setEcRel(e.target.value)}
+                  className={joiningInputClass}
+                />
+              </div>
+
+              <div>
+                <label htmlFor={id("ecPhone")} className="mb-1 block font-medium text-foreground">
+                  Emergency phone
+                </label>
+                <input
+                  id={id("ecPhone")}
+                  type="tel"
+                  value={ecPhone}
+                  onChange={(e) => setEcPhone(e.target.value)}
+                  className={joiningInputClass}
+                />
+              </div>
+            </div>
+            {fieldErrors.emergencyContact && (
+              <p className="mt-1 text-xs text-destructive">{fieldErrors.emergencyContact}</p>
+            )}
+          </fieldset>
+
+          <div>
+            <label htmlFor={id("internalNotes")} className="mb-1 block font-medium text-foreground">
+              Internal HR / onboarding notes
+            </label>
+            <textarea
+              id={id("internalNotes")}
+              rows={2}
+              value={internalNotes}
+              onChange={(e) => setInternalNotes(e.target.value)}
+              disabled={isSubmitting}
+              className={`${joiningInputClass} resize-y`}
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-border/50 px-5 py-3">
+          <Button variant="outline" size="sm" type="button" onClick={close} disabled={isSubmitting}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="sm" type="submit" isLoading={isSubmitting}>
+            {isSubmitting ? "Marking as joined…" : "Confirm: mark as joined"}
+          </Button>
+        </div>
+      </form>
+    </AccessibleDialog>
   );
 }

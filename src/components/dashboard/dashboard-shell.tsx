@@ -37,6 +37,8 @@ import {
   Plus,
   ArrowLeft,
   SlidersHorizontal,
+  History,
+  House,
   LucideIcon,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
@@ -73,11 +75,19 @@ export interface DashboardShellProps {
   navItems: DashboardNavItem[];
   title?: string;
   headerAction?: React.ReactNode;
+  /**
+   * Self-service portals (candidate, intern, employee): page titles come from the
+   * lifecycle navigation, and header shortcuts only link to pages present in it, so a
+   * feature hidden for the user's stage is never offered from the header either.
+   */
+  selfService?: boolean;
   children: React.ReactNode;
 }
 
 const ICON_MAP: Record<string, LucideIcon> = {
   LayoutDashboard,
+  History,
+  House,
   Users,
   Briefcase,
   Calendar,
@@ -170,6 +180,7 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
   "/admin/payroll": { label: "Payroll & Compensation", iconName: "CreditCard" },
   "/hrms/payroll": { label: "Payroll & Compensation", iconName: "CreditCard" },
   "/admin/reports": { label: "Analytics & Reports", iconName: "BarChart3" },
+  "/hrms": { label: "Home", iconName: "House" },
   "/candidate/dashboard": {
     label: "Dashboard",
     iconName: "LayoutDashboard",
@@ -269,6 +280,7 @@ export function DashboardShell({
   navItems,
   title,
   headerAction,
+  selfService = false,
   children,
 }: DashboardShellProps) {
   const pathname = usePathname();
@@ -315,6 +327,7 @@ export function DashboardShell({
       path !== "/subadmin" &&
       path !== "/candidate/dashboard" &&
       path !== "/intern/dashboard" &&
+      path !== "/hrms" &&
       pathname.startsWith(path)
     )?.[1];
 
@@ -324,14 +337,24 @@ export function DashboardShell({
     if (item.href === "/subadmin") return pathname === "/subadmin";
     if (item.href === "/candidate/dashboard") return pathname === "/candidate/dashboard";
     if (item.href === "/intern/dashboard") return pathname === "/intern/dashboard";
+    if (item.href === "/hrms") return pathname === "/hrms";
     return pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
   });
 
-  const displayTitle = title || routeMeta?.label || activeNavItem?.label || "Overview";
+  const displayTitle =
+    title ||
+    (selfService ? activeNavItem?.label : undefined) ||
+    routeMeta?.label ||
+    activeNavItem?.label ||
+    "Overview";
   const iconKey = routeMeta?.iconName || activeNavItem?.iconName || "LayoutDashboard";
   const HeaderIcon = ICON_MAP[iconKey] || LayoutDashboard;
 
-  const currentAction = routeMeta?.action;
+  const navHrefs = new Set(navItems.map((item) => item.href.split("#")[0]));
+  const currentAction =
+    selfService && routeMeta?.action?.href && !navHrefs.has(routeMeta.action.href)
+      ? undefined
+      : routeMeta?.action;
   const ActionIcon = currentAction?.iconName ? ICON_MAP[currentAction.iconName] || Plus : Plus;
 
   return (
@@ -424,6 +447,7 @@ export function DashboardShell({
               item.href !== "/subadmin" &&
               item.href !== "/candidate/dashboard" &&
               item.href !== "/intern/dashboard" &&
+              item.href !== "/hrms" &&
               item.href !== "/" &&
               pathname.startsWith(item.href);
             const isActive = isExact || isSubPath;

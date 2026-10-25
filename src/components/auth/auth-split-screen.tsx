@@ -19,6 +19,9 @@ import {
   MailCheck,
 } from "lucide-react";
 import { getPostLoginRedirectAction } from "@/features/auth/password-actions";
+import { saveCareerInterestAction } from "@/features/lifecycle/actions";
+import { CareerInterestPicker } from "@/features/lifecycle/components/career-interest-picker";
+import type { CareerInterest } from "@/types/enums";
 import { sanitizeCallbackPath } from "@/lib/auth/redirects";
 
 interface AuthSplitScreenProps {
@@ -102,6 +105,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const [regPassword, setRegPassword] = useState("");
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(false);
+  const [regInterest, setRegInterest] = useState<CareerInterest | null>(null);
   const [regLoading, setRegLoading] = useState(false);
   const [regGoogleLoading, setRegGoogleLoading] = useState(false);
   const [regError, setRegError] = useState<string | null>(null);
@@ -176,6 +180,11 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
       return;
     }
 
+    if (!regInterest) {
+      setRegError("Please choose whether you are looking for a job, an internship, or both.");
+      return;
+    }
+
     if (!agreeTerms) {
       setRegError("Please accept the Terms of Service and Privacy Policy to continue.");
       return;
@@ -198,6 +207,9 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
         return;
       }
 
+      // The new account is signed in; store what the candidate is looking for.
+      // A failure here is not fatal: the dashboard asks again.
+      await saveCareerInterestAction({ careerInterest: regInterest }).catch(() => null);
       await navigateAfterAuth();
     } catch {
       isNavigatingRef.current = false;
@@ -722,6 +734,9 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                     )}
                   </div>
 
+                  {/* What the candidate is looking for */}
+                  <CareerInterestPicker name="register-interest" value={regInterest} onChange={setRegInterest} />
+
                   {/* Agree Terms */}
                   <label className="flex items-start gap-2.5 cursor-pointer pt-1 select-none">
                     <input
@@ -1062,6 +1077,31 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                     className="w-full h-10 px-3.5 rounded-xl border border-border/80 bg-background text-xs"
                   />
                 </div>
+                <CareerInterestPicker
+                  name="register-interest-mobile"
+                  value={regInterest}
+                  onChange={setRegInterest}
+                  compact
+                />
+                <label className="flex items-start gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={agreeTerms}
+                    onChange={(e) => setAgreeTerms(e.target.checked)}
+                    required
+                    className="mt-0.5 rounded border-border accent-blue-600 cursor-pointer shrink-0"
+                  />
+                  <span className="text-[11px] text-muted-foreground leading-relaxed">
+                    I agree to the{" "}
+                    <Link href="/help" className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
+                      Terms of Service
+                    </Link>{" "}
+                    and{" "}
+                    <Link href="/help" className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
+                      Privacy Policy
+                    </Link>
+                  </span>
+                </label>
                 <button
                   type="submit"
                   disabled={regLoading}

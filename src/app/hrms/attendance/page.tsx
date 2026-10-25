@@ -1,6 +1,7 @@
 import React from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
+import { isStaffUser, requirePortalCapability } from "@/features/lifecycle/services/lifecycle-service";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { loadAttendancePageData } from "@/features/attendance/services/attendance-page-data";
 import { AttendanceManagementClient } from "@/features/attendance/components/attendance-management-client";
@@ -19,6 +20,11 @@ export default async function AttendanceModulePage() {
   }
   if (user.mustChangePassword) {
     redirect("/set-password");
+  }
+
+  // Interns and employees reach this page through their lifecycle stage; staff keep the team view.
+  if (!isStaffUser(user)) {
+    await requirePortalCapability("attendance", { callbackPath: "/hrms/attendance" });
   }
 
   // Team view only for staff holding `canAttendance`; everyone else sees only their own records.

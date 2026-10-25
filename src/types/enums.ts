@@ -209,3 +209,16 @@ export const PayrollStatus = {
   VOID: "VOID",
 } as const;
 export type PayrollStatus = (typeof PayrollStatus)[keyof typeof PayrollStatus];
+
+export const CareerInterest = {
+  JOB: "JOB",
+  INTERNSHIP: "INTERNSHIP",
+  BOTH: "BOTH",
+} as const;
+export type CareerInterest = (typeof CareerInterest)[keyof typeof CareerInterest];
+
+export const EmploymentType = {
+  FULL_TIME: "FULL_TIME",
+  INTERN: "INTERN",
+} as const;
+export type EmploymentType = (typeof EmploymentType)[keyof typeof EmploymentType];

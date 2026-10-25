@@ -7,9 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { CheckCircle2, AlertCircle } from "lucide-react";
+import { CareerInterestPicker } from "@/features/lifecycle/components/career-interest-picker";
+import type { CareerInterest } from "@/types/enums";
 
 export function CandidateProfileForm({ profile }: { profile: CandidateProfileData }) {
   const [phone, setPhone] = useState(profile.phone || "");
+  const [careerInterest, setCareerInterest] = useState<CareerInterest | null>(profile.careerInterest ?? null);
   const [location, setLocation] = useState(profile.location || "");
   const [currentOrganization, setCurrentOrganization] = useState(profile.currentOrganization || "");
   const [highestEducation, setHighestEducation] = useState(profile.highestEducation || "");
@@ -37,6 +40,7 @@ export function CandidateProfileForm({ profile }: { profile: CandidateProfileDat
     formData.append("linkedinUrl", linkedinUrl);
     formData.append("githubUrl", githubUrl);
     formData.append("portfolioUrl", portfolioUrl);
+    if (careerInterest) formData.append("careerInterest", careerInterest);
 
     try {
       const res = await updateCandidateProfileAction(formData);
@@ -68,6 +72,21 @@ export function CandidateProfileForm({ profile }: { profile: CandidateProfileDat
           <span>{errorMessage}</span>
         </div>
       )}
+
+      <Card className="border-border">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-base">Career Preference</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <CareerInterestPicker
+            name="profile-career-interest"
+            value={careerInterest}
+            onChange={setCareerInterest}
+            error={fieldErrors.careerInterest}
+            legend="Show me openings for"
+          />
+        </CardContent>
+      </Card>
 
       <Card className="border-border">
         <CardHeader className="pb-4">

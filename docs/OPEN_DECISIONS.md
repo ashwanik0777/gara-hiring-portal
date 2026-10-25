@@ -365,3 +365,17 @@
 - **Tests stay local:** `tests/` is excluded from Git again (`.gitignore`), reversing the earlier inclusion; the suite runs locally with `npm test` and is not available to CI.
 - **Single environment file:** keep one gitignored `.env` with every variable; no `.env.example`. This overrides the `.env.example` instruction in `docs/PROJECT_BASELINE.md` (rules 12 and the Prompt 0 checklist). The variable reference is `docs/RUNBOOK.md` section 2.
 
+### Resolved by the product owner (2026-10-25): candidate-to-employee lifecycle
+
+- **Public signup:** open to anyone, but it always creates a CANDIDATE account and asks what the person is looking for (`CandidateProfile.careerInterest`: job, internship or both). Staff, HR and admin accounts are created only by administrators.
+- **Internship role grant (resolves the INTERN-role part of OD-003 / OD-020):** two steps. Selection for the 7-working-day evaluation unlocks the evaluation workspace while the person is still a candidate; evaluation PASSED plus HR "Mark as joined" grants the INTERN role (attendance, leave, payslips, ID card, certificate).
+- **Full-time role grant:** an accepted offer plus HR "Mark as joined" grants the EMPLOYEE role (employee home, attendance, leave, payslips).
+- **After joining:** candidate features (explore openings, apply, candidate dashboard) are hidden and applications stay visible as read-only history; joined users and staff cannot submit new applications.
+- Stage rules live in `src/features/lifecycle/capabilities.ts`; see `docs/CANDIDATE_LIFECYCLE.md`.
+
+### Lifecycle follow-ups (2026-10-25)
+
+1. **Re-joining after exit:** `Employee.userId` is unique, so a person whose record is `EXITED` cannot be marked as joined again (the action returns a clear conflict). Supporting re-joining needs a schema decision.
+2. **Intern → full-time conversion:** for the same reason a joined intern cannot later be marked as joined from a full-time offer. The conversion process (new record vs. updating the existing one, history, payroll impact) is undefined.
+3. **Supervisor reassignment:** the supervisor must be chosen when selecting a candidate for the evaluation because there is no screen to assign or change it later.
+

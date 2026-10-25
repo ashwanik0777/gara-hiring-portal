@@ -3,10 +3,11 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { requireAuth } from "@/lib/auth/guards";
+import { getApplyBlockedReason } from "@/features/lifecycle/services/lifecycle-service";
 import { applicationService } from "./services/application-service";
 import { CandidateProfileSchema } from "./schemas";
 import { formResponsesPayloadSchema } from "@/features/application-forms/schemas";
-import { toActionError, ValidationError } from "@/lib/errors";
+import { toActionError, ValidationError, ForbiddenError } from "@/lib/errors";
 import { defaultRateLimiter, RATE_LIMIT_POLICIES } from "@/lib/security/rate-limit";
 import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
 
@@ -60,6 +61,11 @@ export async function submitApplicationAction(
 ): Promise<ApplicationActionResult<{ applicationId: string; referenceCode: string }>> {
   try {
     const user = await requireAuth();
+
+    const blockedReason = await getApplyBlockedReason(user);
+    if (blockedReason) {
+      throw new ForbiddenError(blockedReason);
+    }
 
     // Technical safeguard against submission floods (duplicate rules are pending OD-005).
     await defaultRateLimiter.enforce(user.id, RATE_LIMIT_POLICIES.APPLICATION_SUBMIT);
@@ -157,6 +163,7 @@ export async function updateCandidateProfileAction(
       linkedinUrl: getOptionalTrimmedField(formData, "linkedinUrl"),
       githubUrl: getOptionalTrimmedField(formData, "githubUrl"),
       portfolioUrl: getOptionalTrimmedField(formData, "portfolioUrl"),
+      careerInterest: getOptionalTrimmedField(formData, "careerInterest") || undefined,
     };
 
     const validated = CandidateProfileSchema.safeParse(rawData);

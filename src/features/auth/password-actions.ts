@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { auth } from "@/lib/auth/auth";
 import { getCurrentUser, requireAuth } from "@/lib/auth/guards";
-import { getHomePathForUser } from "@/lib/auth/home";
+import { resolveHomePath } from "@/features/lifecycle/services/lifecycle-service";
 import { toActionError } from "@/lib/errors";
 import { hashPassword } from "better-auth/crypto";
 import { z } from "zod";
@@ -107,6 +107,7 @@ export async function setNewPasswordAction(rawInput: { newPassword: string }) {
     return {
       success: true,
       message: "Permanent password successfully updated. Welcome to GARA Innovation!",
+      redirectTo: await resolveHomePath({ ...user, mustChangePassword: false }),
     };
   } catch (error) {
     return { success: false, error: toActionError(error, "Failed to set new password.") };
@@ -128,7 +129,7 @@ export async function getPostLoginRedirectAction(): Promise<{
     return { redirectTo: null, mustChangePassword: false };
   }
   return {
-    redirectTo: getHomePathForUser(user),
+    redirectTo: await resolveHomePath(user),
     mustChangePassword: Boolean(user.mustChangePassword),
   };
 }

@@ -82,6 +82,7 @@ export class ApplicationService {
         linkedinUrl: user.candidateProfile.linkedinUrl,
         githubUrl: user.candidateProfile.githubUrl,
         portfolioUrl: user.candidateProfile.portfolioUrl,
+        careerInterest: user.candidateProfile.careerInterest,
       };
     }
 
@@ -119,6 +120,7 @@ export class ApplicationService {
         linkedinUrl: data.linkedinUrl || null,
         githubUrl: data.githubUrl || null,
         portfolioUrl: data.portfolioUrl || null,
+        ...(data.careerInterest ? { careerInterest: data.careerInterest } : {}),
       },
       include: { user: true },
     });

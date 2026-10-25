@@ -7,6 +7,20 @@ const recordId = (label: string) => z.string().trim().uuid(`Invalid ${label}`);
 const optionalText = <T extends z.ZodTypeAny>(schema: T) =>
   z.preprocess((value) => (value === "" || value === null ? undefined : value), schema.optional());
 
+/**
+ * Selection for the 7-working-day evaluation. A supervisor is chosen explicitly: there is no
+ * screen to assign one later, and OD-001 limits evaluation actions to HR, Admin and the
+ * assigned supervisor.
+ */
+export const EnrollCandidateSchema = z.object({
+  applicationId: recordId("application ID"),
+  supervisorId: z
+    .string({ error: "Please choose a supervisor" })
+    .trim()
+    .min(1, "Please choose a supervisor")
+    .uuid("Invalid supervisor ID"),
+});
+
 export const TriggerEvaluationStartSchema = z.object({
   enrollmentId: recordId("enrollment ID"),
   startDate: z

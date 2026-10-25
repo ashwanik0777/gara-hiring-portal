@@ -1,8 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { SetPasswordScreen } from "@/components/auth/set-password-screen";
-import { Role } from "@prisma/client";
-import { SUB_ADMIN_ROLES } from "@/lib/auth/permissions";
+import { resolveHomePath } from "@/features/lifecycle/services/lifecycle-service";
 
 export const instant = false;
 
@@ -19,13 +18,7 @@ export default async function SetPasswordPage() {
 
   // If user does not need to change password, redirect them to their home portal
   if (!user.mustChangePassword) {
-    if (user.roles.includes(Role.ADMIN)) {
-      redirect("/admin");
-    } else if (user.roles.some((r) => SUB_ADMIN_ROLES.includes(r))) {
-      redirect("/subadmin");
-    } else {
-      redirect("/candidate/dashboard");
-    }
+    redirect(await resolveHomePath(user));
   }
 
   return (

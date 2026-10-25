@@ -316,6 +316,17 @@ export class RecruitmentService {
             },
           },
         },
+        enrollment: {
+          select: {
+            id: true,
+            status: true,
+            supervisorId: true,
+            supervisor: { select: { name: true } },
+          },
+        },
+        hiredEmployee: {
+          select: { id: true, employeeCode: true, employmentType: true, joiningDate: true },
+        },
       },
     });
 
@@ -341,6 +352,9 @@ export class RecruitmentService {
     const visibleSchedules = scoped
       ? app.interviewSchedules.filter((s) => s.interviewerId === user.id)
       : app.interviewSchedules;
+    // Evaluation and joining summaries are pipeline information: omitted for interviewer-scoped views.
+    const enrollment = scoped ? null : app.enrollment ?? null;
+    const hiredEmployee = scoped ? null : app.hiredEmployee ?? null;
 
     return {
       id: app.id,
@@ -366,6 +380,22 @@ export class RecruitmentService {
       submittedResponses: (app.submittedResponses ?? {}) as Record<string, unknown>,
       resumeStorageKey: app.resumeStorageKey,
       resumeDownloadUrl: `/api/candidate/applications/${app.id}/resume`,
+      evaluation: enrollment
+        ? {
+            enrollmentId: enrollment.id,
+            status: enrollment.status,
+            supervisorId: enrollment.supervisorId,
+            supervisorName: enrollment.supervisor?.name ?? null,
+          }
+        : null,
+      joinedEmployee: hiredEmployee
+        ? {
+            id: hiredEmployee.id,
+            employeeCode: hiredEmployee.employeeCode,
+            employmentType: hiredEmployee.employmentType,
+            joiningDate: hiredEmployee.joiningDate,
+          }
+        : null,
       statusHistory: app.statusHistory.map((h) => ({
         id: h.id,
         fromStatus: h.fromStatus,
@@ -496,8 +526,8 @@ export class RecruitmentService {
 
   /**
    * Executes an authorized recruitment stage transition.
-   * Enforces state machine validation and decision authority. Offer and hiring
-   * statuses are owned by their dedicated flows and cannot be set here.
+   * Enforces state machine validation and decision authority. Evaluation selection,
+   * offer and joining statuses are owned by their dedicated flows and cannot be set here.
    */
   async transitionApplicationStatus(
     user: AuthenticatedUser,
@@ -508,7 +538,7 @@ export class RecruitmentService {
 
     if (FLOW_OWNED_APPLICATION_STATUSES.includes(input.toStatus)) {
       throw new ValidationError(
-        `${input.toStatus} can only be reached through the job offer and hiring workflow (extend offer, candidate acceptance, employee creation).`
+        `${input.toStatus} can only be reached through its dedicated workflow (select for evaluation, extend offer, candidate acceptance, mark as joined).`
       );
     }
 
@@ -521,7 +551,7 @@ export class RecruitmentService {
               user: { select: { id: true, email: true, name: true } },
             },
           },
-          opening: { select: { title: true, type: true } },
+          opening: { select: { title: true } },
           jobOffer: { select: { status: true } },
         },
       });
@@ -531,15 +561,6 @@ export class RecruitmentService {
       }
 
       assertNotOwnApplication(user, app.candidate.user.id);
-
-      if (
-        input.toStatus === ApplicationStatus.EVALUATION_SELECTED &&
-        app.opening.type !== "INTERNSHIP"
-      ) {
-        throw new ValidationError(
-          "7-working-day supervised evaluation is restricted to internship openings. Full-time positions proceed directly to offer preparation."
-        );
-      }
 
       const allowedNextStatuses = VALID_APPLICATION_TRANSITIONS[app.status] ?? [];
       if (!allowedNextStatuses.includes(input.toStatus)) {

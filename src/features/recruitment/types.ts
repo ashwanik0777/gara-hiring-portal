@@ -1,5 +1,7 @@
 import {
   ApplicationStatus,
+  EmploymentType,
+  EvaluationStatus,
   InterviewStatus,
   InterviewRecommendation,
 } from "@prisma/client";
@@ -103,6 +105,20 @@ export interface RecruiterApplicationDetail extends RecruiterApplicationItem {
   resumeDownloadUrl: string;
   statusHistory: RecruiterStatusHistoryItem[];
   interviewSchedules: InterviewScheduleItem[];
+  /** Internship evaluation enrollment; null when none exists or for interviewer-scoped views. */
+  evaluation: {
+    enrollmentId: string;
+    status: EvaluationStatus;
+    supervisorId: string | null;
+    supervisorName: string | null;
+  } | null;
+  /** Employee record created when the person was marked as joined; null until then. */
+  joinedEmployee: {
+    id: string;
+    employeeCode: string;
+    employmentType: EmploymentType | null;
+    joiningDate: Date;
+  } | null;
 }
 
 /**

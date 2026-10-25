@@ -1,15 +1,18 @@
 import React from "react";
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { notFound } from "next/navigation";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
+import { requirePortalCapability } from "@/features/lifecycle/services/lifecycle-service";
 import { applicationService } from "@/features/applications/services/application-service";
 import { offerService } from "@/features/employees/services/offer-service";
 import { CandidateOfferView } from "@/features/employees/components/candidate-offer-view";
-import { ApplicationStatus } from "@/features/applications/types";
+import { ReadOnlyOfferSummary } from "@/features/lifecycle/components/read-only-offer-summary";
+import {
+  ApplicationStatusBadge,
+  JoinedHistoryNote,
+  linkButtonClass,
+} from "@/features/lifecycle/components/self-service-ui";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft,
   Calendar,
@@ -30,45 +33,13 @@ interface ApplicationDetailPageProps {
 // Next.js 16 Cache Components: Allow runtime data streaming
 export const instant = false;
 
-function getStatusBadge(status: ApplicationStatus) {
-  switch (status) {
-    case ApplicationStatus.SUBMITTED:
-      return <Badge variant="default">Submitted</Badge>;
-    case ApplicationStatus.SCREENING:
-      return <Badge variant="warning">Under Screening</Badge>;
-    case ApplicationStatus.SHORTLISTED:
-      return <Badge variant="warning">Shortlisted</Badge>;
-    case ApplicationStatus.INTERVIEW_SCHEDULED:
-      return <Badge variant="warning">Interview Scheduled</Badge>;
-    case ApplicationStatus.INTERVIEWED:
-      return <Badge variant="secondary">Interview Completed</Badge>;
-    case ApplicationStatus.EVALUATION_SELECTED:
-      return <Badge variant="success">Evaluation Selected</Badge>;
-    case ApplicationStatus.OFFERED:
-      return <Badge variant="success">Offer Extended</Badge>;
-    case ApplicationStatus.OFFER_ACCEPTED:
-      return <Badge variant="success">Offer Accepted</Badge>;
-    case ApplicationStatus.HIRED:
-      return <Badge variant="success">Hired (Employee)</Badge>;
-    case ApplicationStatus.REJECTED:
-      return <Badge variant="destructive">Not Selected</Badge>;
-    case ApplicationStatus.WITHDRAWN:
-      return <Badge variant="outline">Withdrawn</Badge>;
-    case ApplicationStatus.ARCHIVED:
-      return <Badge variant="secondary">Archived</Badge>;
-    default:
-      return <Badge variant="outline">{status}</Badge>;
-  }
-}
-
 export default async function ApplicationDetailPage({ params }: ApplicationDetailPageProps) {
-  const user = await getCurrentUser();
-  if (!user) {
-    redirect("/login?callbackUrl=/candidate/applications");
-  }
-  if (user.mustChangePassword) {
-    redirect("/set-password");
-  }
+  // Candidates see their own application; after joining it is read-only history.
+  const { user, lifecycle } = await requirePortalCapability("journey", {
+    callbackPath: "/candidate/applications",
+  });
+  const readOnly = lifecycle.applicationsReadOnly;
+  const backLabel = readOnly ? "Back to My Journey" : "Back to Applications";
 
   const { id } = await params;
 
@@ -87,20 +58,20 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
     return (
       <div className="container mx-auto px-4 py-16 max-w-xl text-center">
         <div className="mx-auto w-12 h-12 rounded-full bg-destructive/10 text-destructive flex items-center justify-center mb-4">
-          <AlertCircle className="h-6 w-6" />
+          <AlertCircle className="h-6 w-6" aria-hidden="true" />
         </div>
-        <h1 className="text-xl font-bold text-foreground">Access Restricted</h1>
+        <h2 className="text-xl font-bold text-foreground">Access Restricted</h2>
+        <p className="mt-2 text-sm text-muted-foreground">This application is not linked to your account.</p>
         <div className="mt-6">
-          <Link href="/candidate/dashboard">
-            <Button variant="outline">
-              <ArrowLeft className="h-4 w-4 mr-2" /> Back to My Dashboard
-            </Button>
+          <Link href="/candidate/applications" className={linkButtonClass("outline", "md")}>
+            <ArrowLeft className="h-4 w-4" aria-hidden="true" /> {backLabel}
           </Link>
         </div>
       </div>
     );
   }
 
+  // Returns null unless this user may see the offer (candidate projection, no staff notes).
   const offer = await offerService.getOfferByApplicationId(user, application.id);
 
   return (
@@ -109,73 +80,79 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
       <div>
         <Link
           href="/candidate/applications"
-          className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 transition-colors mb-4"
+          className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 transition-colors mb-4 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to Applications
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> {backLabel}
         </Link>
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-6">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2 mb-2">
               <span className="font-mono text-xs font-bold text-primary bg-primary/10 px-2.5 py-0.5 rounded">
                 {application.referenceCode}
               </span>
-              {getStatusBadge(application.status)}
+              <ApplicationStatusBadge status={application.status} />
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
               {application.opening.title}
-            </h1>
+            </h2>
             <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground mt-2">
               <span className="flex items-center gap-1.5">
-                <Building className="h-3.5 w-3.5" /> {application.opening.department}
+                <Building className="h-3.5 w-3.5" aria-hidden="true" /> {application.opening.department}
               </span>
               <span className="flex items-center gap-1.5">
-                <MapPin className="h-3.5 w-3.5" /> {application.opening.location}
+                <MapPin className="h-3.5 w-3.5" aria-hidden="true" /> {application.opening.location}
               </span>
               <span className="flex items-center gap-1.5">
-                <Calendar className="h-3.5 w-3.5" /> Submitted on {new Date(application.createdAt).toLocaleDateString()}
+                <Calendar className="h-3.5 w-3.5" aria-hidden="true" /> Submitted on {new Date(application.createdAt).toLocaleDateString()}
               </span>
               <span className="flex items-center gap-1.5">
-                <Briefcase className="h-3.5 w-3.5" /> Form Version v{application.formVersion.versionNumber}
+                <Briefcase className="h-3.5 w-3.5" aria-hidden="true" /> Form Version v{application.formVersion.versionNumber}
               </span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Official Employment Offer Card */}
-      {offer && <CandidateOfferView offer={offer} />}
+      {readOnly && <JoinedHistoryNote joinedAt={lifecycle.employment?.joiningDate ?? lifecycle.upgradedAt} />}
+
+      {/* Official Employment Offer Card: actions only before joining. */}
+      {offer && (readOnly ? <ReadOnlyOfferSummary offer={offer} /> : <CandidateOfferView offer={offer} />)}
 
       {/* Status Timeline */}
       <Card className="border-border shadow-xs">
         <CardHeader className="pb-3 border-b border-border/50">
           <CardTitle className="text-base flex items-center gap-2">
-            <Clock className="h-4 w-4 text-primary" /> Application Progress Timeline
+            <Clock className="h-4 w-4 text-primary" aria-hidden="true" /> Application Progress Timeline
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-6">
-          <div className="relative border-l-2 border-border ml-3 space-y-6 pl-6 py-2">
-            {application.timeline.map((entry) => (
-              <div key={entry.id} className="relative group">
-                <div className="absolute -left-[31px] top-1 h-4 w-4 rounded-full border-2 border-primary bg-card" />
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-foreground">
-                      {entry.toStatus.replace(/_/g, " ")}
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {new Date(entry.createdAt).toLocaleString()}
-                    </span>
+          {application.timeline.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic">No stage changes have been recorded yet.</p>
+          ) : (
+            <ol className="relative border-l-2 border-border ml-3 space-y-6 pl-6 py-2">
+              {application.timeline.map((entry) => (
+                <li key={entry.id} className="relative group">
+                  <div className="absolute -left-[31px] top-1 h-4 w-4 rounded-full border-2 border-primary bg-card" aria-hidden="true" />
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-foreground">
+                        {entry.toStatus.replace(/_/g, " ")}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {new Date(entry.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                    {entry.candidateMessage && (
+                      <p className="text-xs text-muted-foreground mt-1.5 bg-muted/40 p-3 rounded-lg border border-border/50 leading-relaxed">
+                        {entry.candidateMessage}
+                      </p>
+                    )}
                   </div>
-                  {entry.candidateMessage && (
-                    <p className="text-xs text-muted-foreground mt-1.5 bg-muted/40 p-3 rounded-lg border border-border/50 leading-relaxed">
-                      {entry.candidateMessage}
-                    </p>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+                </li>
+              ))}
+            </ol>
+          )}
         </CardContent>
       </Card>
 
@@ -183,14 +160,14 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
       <Card className="border-border shadow-xs">
         <CardHeader className="pb-3 border-b border-border/50">
           <CardTitle className="text-base flex items-center gap-2">
-            <FileText className="h-4 w-4 text-primary" /> Uploaded Application Documents
+            <FileText className="h-4 w-4 text-primary" aria-hidden="true" /> Uploaded Application Documents
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-6">
           {application.hasResume ? (
-            <div className="flex items-center justify-between p-4 rounded-lg border border-border bg-muted/30">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 rounded-lg border border-border bg-muted/30">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-primary/10 rounded-md text-primary">
+                <div className="p-2.5 bg-primary/10 rounded-md text-primary" aria-hidden="true">
                   <FileText className="h-5 w-5" />
                 </div>
                 <div>
@@ -203,11 +180,10 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
                 href={application.resumeDownloadUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-block"
+                className={linkButtonClass("outline")}
               >
-                <Button variant="outline" size="sm" className="gap-1.5">
-                  <Download className="h-3.5 w-3.5" /> Download Document
-                </Button>
+                <Download className="h-3.5 w-3.5" aria-hidden="true" /> Download Document
+                <span className="sr-only">(opens in a new tab)</span>
               </a>
             </div>
           ) : (
@@ -222,11 +198,11 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
       <Card className="border-border shadow-xs">
         <CardHeader className="pb-3 border-b border-border/50">
           <CardTitle className="text-base flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 text-primary" /> Submitted Form Answers
+            <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" /> Submitted Form Answers
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {Object.entries(application.submittedResponses).map(([key, val]) => {
               if (key === "resume") return null;
               const displayVal =
@@ -236,16 +212,16 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
 
               return (
                 <div key={key} className="p-3 rounded-lg border border-border/50 bg-card">
-                  <div className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider">
+                  <dt className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider">
                     {key.replace(/_/g, " ")}
-                  </div>
-                  <div className="text-sm font-medium text-foreground mt-1 break-words">
+                  </dt>
+                  <dd className="text-sm font-medium text-foreground mt-1 break-words">
                     {displayVal || "—"}
-                  </div>
+                  </dd>
                 </div>
               );
             })}
-          </div>
+          </dl>
         </CardContent>
       </Card>
     </div>

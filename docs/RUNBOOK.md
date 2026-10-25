@@ -114,6 +114,8 @@ npx prisma migrate deploy
 ```
 Fresh databases skip step 2 and simply run `npx prisma migrate deploy`.
 
+Later migrations (for example `20261025000000_candidate_lifecycle`) are applied with `npx prisma migrate deploy` against the direct endpoint, **before** deploying the code that uses them.
+
 ### 4.2 Applying Migrations in Production
 ```bash
 # Applies pending versioned migrations in prisma/migrations/ without resetting data or running dev seeds

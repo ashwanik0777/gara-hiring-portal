@@ -18,6 +18,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { HireEmployeeModal } from "./hire-employee-modal";
+import { joiningDatePrefill } from "../joining";
 
 interface JobOfferCardProps {
   offer: JobOfferDetail;
@@ -188,7 +189,7 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
                   onClick={() => setShowHireModal(true)}
                   className="gap-1.5"
                 >
-                  <UserPlus className="h-3.5 w-3.5" /> Hire & Create Employee Record
+                  <UserPlus className="h-3.5 w-3.5" aria-hidden="true" /> Mark as joined
                 </Button>
               )}
             </div>
@@ -214,7 +215,7 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
           candidateName={offer.candidateName}
           defaultDepartment={offer.department}
           defaultDesignation={offer.designation}
-          defaultJoiningDate={new Date(offer.expectedJoiningDate).toISOString().split("T")[0]}
+          defaultJoiningDate={joiningDatePrefill(offer.expectedJoiningDate)}
           onClose={() => setShowHireModal(false)}
         />
       )}

@@ -12,6 +12,7 @@ import {
   Prisma,
 } from "@prisma/client";
 import { VALID_APPLICATION_TRANSITIONS } from "@/features/recruitment/schemas";
+import { assertNotOwnApplication } from "@/features/recruitment/services/application-access";
 import { workingDayService, DEFAULT_WORKING_CALENDAR } from "./working-day-service";
 import {
   assertEnrollmentInScope,
@@ -27,6 +28,7 @@ import {
   EvaluationEnrollmentDetail,
   EvaluationEnrollmentListItem,
   OnboardingChecklistItem,
+  SupervisorOption,
 } from "../types";
 import { CHECKPOINT_REVIEW_OUTCOMES } from "../schemas";
 import {
@@ -143,7 +145,37 @@ export class EvaluationService {
   }
 
   /**
-   * Enrolls a selected internship candidate into the supervised evaluation pipeline.
+   * Staff who may be assigned as evaluation supervisor (ADMIN / HR / MENTOR / MANAGER /
+   * INTERVIEWER). The candidate is excluded so nobody supervises their own evaluation.
+   * Gated like enrollment itself: ADMIN / HR with canEvaluations.
+   */
+  async listSupervisorOptions(
+    user: AuthenticatedUser,
+    excludeUserId?: string
+  ): Promise<SupervisorOption[]> {
+    await assertEvaluationDecisionAuthority(user);
+
+    const users = await prisma.user.findMany({
+      where: {
+        roles: { some: { role: { in: SUPERVISOR_ELIGIBLE_ROLES } } },
+        ...(excludeUserId ? { id: { not: excludeUserId } } : {}),
+      },
+      select: { id: true, name: true, email: true, roles: { select: { role: true } } },
+      orderBy: { name: "asc" },
+    });
+
+    return users.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      roles: u.roles.map((r) => r.role).filter((role) => SUPERVISOR_ELIGIBLE_ROLES.includes(role)),
+    }));
+  }
+
+  /**
+   * Selects an internship candidate for the 7-working-day supervised evaluation (internship
+   * step 1): moves the application to EVALUATION_SELECTED (a flow-owned stage) and creates the
+   * enrollment, its checkpoints, the candidate email and the audit row in one transaction.
    * Status defaults safely to PENDING_TRIGGER pending the approved start trigger policy (OD-001).
    */
   async enrollCandidate(
@@ -163,15 +195,14 @@ export class EvaluationService {
     });
 
     if (!app) throw new NotFoundError("Application record not found.");
+    // Separation of duties comes first: staff never act on (or learn about) their own enrollment.
+    assertNotOwnApplication(user, app.candidate.userId);
     if (app.enrollment) {
       return { enrollmentId: app.enrollment.id, created: false };
     }
 
     if (app.opening.type !== OpeningType.INTERNSHIP) {
       throw new ValidationError("Only internship applications can enter the supervised evaluation.");
-    }
-    if (app.candidate.userId === user.id) {
-      throw new ForbiddenError("You cannot enroll your own application.");
     }
 
     const needsTransition = app.status !== ApplicationStatus.EVALUATION_SELECTED;
@@ -825,6 +856,7 @@ export class EvaluationService {
           select: {
             referenceCode: true,
             opening: { select: { title: true, department: true } },
+            hiredEmployee: { select: { id: true, employmentType: true } },
           },
         },
         supervisor: { select: { name: true } },
@@ -848,6 +880,8 @@ export class EvaluationService {
       reviewedCheckpoints: enr.checkpoints.filter((c) => c.status === CheckpointStatus.REVIEWED).length,
       totalCheckpoints: enr.checkpoints.length,
       idCardNumber: enr.idCard?.cardNumber ?? null,
+      joined: Boolean(enr.application.hiredEmployee),
+      joinedEmploymentType: enr.application.hiredEmployee?.employmentType ?? null,
     }));
   }
 
@@ -893,15 +927,43 @@ export class EvaluationService {
         },
         completion: true,
         certificate: true,
+        user: {
+          select: {
+            employeeProfile: {
+              select: {
+                id: true,
+                employeeCode: true,
+                status: true,
+                employmentType: true,
+                joiningDate: true,
+                applicationId: true,
+              },
+            },
+          },
+        },
       },
     });
 
     if (!enrollment) throw new NotFoundError("Evaluation enrollment not found.");
     assertEnrollmentInScope(access, user, enrollment);
 
+    const employeeProfile = enrollment.user?.employeeProfile ?? null;
+
     return {
       id: enrollment.id,
       applicationId: enrollment.applicationId,
+      applicationStatus: enrollment.application.status,
+      openingType: enrollment.application.opening.type,
+      employment: employeeProfile
+        ? {
+            id: employeeProfile.id,
+            employeeCode: employeeProfile.employeeCode,
+            status: employeeProfile.status,
+            employmentType: employeeProfile.employmentType,
+            joiningDate: employeeProfile.joiningDate,
+            viaThisApplication: employeeProfile.applicationId === enrollment.applicationId,
+          }
+        : null,
       referenceCode: enrollment.application.referenceCode,
       candidateName: enrollment.application.candidate.user.name,
       candidateEmail: enrollment.application.candidate.user.email,

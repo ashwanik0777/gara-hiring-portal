@@ -6,6 +6,10 @@ import { StartEvaluationDialog } from "./start-evaluation-dialog";
 import { CheckpointReviewPanel } from "./checkpoint-review-panel";
 import { FinalizeEvaluationDialog } from "./finalize-evaluation-dialog";
 import { OnboardingChecklistPanel } from "./onboarding-checklist-panel";
+import { InternJoiningPanel } from "./intern-joining-panel";
+import { InternJourneyBadge } from "./intern-journey-badge";
+import { getInternJourneyState } from "../joining-state";
+import type { ReportingManagerOption } from "@/features/employees/types";
 import { CompletionAndCertificatePanel } from "@/features/certificates/components/completion-and-certificate-panel";
 import { CreateTaskDialog } from "@/features/intern-tasks/components/create-task-dialog";
 import { InternTaskList } from "@/features/intern-tasks/components/intern-task-list";
@@ -48,6 +52,13 @@ interface EvaluationCockpitProps {
   applicationHref: string | null;
   /** ADMIN / HR decision authority (finalize, ID card, certificate issuance). */
   canDecide: boolean;
+  /** Intern "Mark as joined" (ADMIN, or HR with canEmployees). */
+  joining: {
+    canMarkJoined: boolean;
+    managerOptions: ReportingManagerOption[];
+    /** Employee records route for this portal, or null when the viewer cannot open them. */
+    employeesHrefBase: string | null;
+  };
 }
 
 /**
@@ -59,8 +70,13 @@ export function EvaluationCockpit({
   listHref,
   applicationHref,
   canDecide,
+  joining,
 }: EvaluationCockpitProps) {
   const isRunning = enrollment.status === EvaluationStatus.IN_PROGRESS;
+  const journeyState = getInternJourneyState({
+    evaluationStatus: enrollment.status,
+    joinedAs: enrollment.employment?.viaThisApplication ? enrollment.employment.employmentType : undefined,
+  });
   const canFinalize = canDecide && FINALIZABLE_STATUSES.includes(enrollment.status);
   const isPassed = enrollment.status === EvaluationStatus.PASSED;
 
@@ -76,11 +92,12 @@ export function EvaluationCockpit({
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-6">
           <div>
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex flex-wrap items-center gap-2 mb-2">
               <span className="font-mono text-xs font-bold text-primary bg-primary/10 px-2.5 py-0.5 rounded">
                 {enrollment.referenceCode}
               </span>
               {getEvaluationBadge(enrollment.status)}
+              <InternJourneyBadge state={journeyState} />
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
               {enrollment.candidateName}
@@ -172,6 +189,13 @@ export function EvaluationCockpit({
           </CardContent>
         </Card>
       )}
+
+      <InternJoiningPanel
+        enrollment={enrollment}
+        canMarkJoined={joining.canMarkJoined}
+        managerOptions={joining.managerOptions}
+        employeesHrefBase={joining.employeesHrefBase}
+      />
 
       <OnboardingChecklistPanel
         enrollmentId={enrollment.id}

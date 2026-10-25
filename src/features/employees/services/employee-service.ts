@@ -8,11 +8,16 @@ import {
   Role,
   ApplicationStatus,
   EmployeeStatus,
+  EmploymentType,
+  EvaluationStatus,
   OfferStatus,
+  OpeningType,
   Prisma,
 } from "@prisma/client";
 import {
   CreateEmployeeFromApplicationInput,
+  JOINING_INITIAL_STATUSES,
+  MarkInternJoinedInput,
   DirectCreateEmployeeInput,
   UpdateEmployeeStatusInput,
   AssignManagerInput,
@@ -26,6 +31,7 @@ import {
   EmployeeDirectoryFilters,
   EmergencyContact,
   OnboardingChecklistItem,
+  ReportingManagerOption,
 } from "../types";
 import {
   ConflictError,
@@ -35,6 +41,7 @@ import {
   ValidationError,
 } from "@/lib/errors";
 import { assertNotOwnApplication } from "@/features/recruitment/services/application-access";
+import { isFutureJoiningDate } from "../joining";
 
 const EMPLOYEE_ADMIN_ROLES: Role[] = [Role.ADMIN, Role.HR];
 
@@ -82,6 +89,92 @@ function sanitizeStaffNotes(notes: string | null | undefined): string | null {
   return trimmed;
 }
 
+/** Offer statuses that are still open: joining as an intern would leave them dangling. */
+const PENDING_OFFER_STATUSES: OfferStatus[] = [OfferStatus.DRAFT, OfferStatus.EXTENDED];
+
+/** Result of an intern "Mark as joined". */
+export interface InternJoiningResult {
+  employeeId: string;
+  applicationId: string;
+  enrollmentId: string;
+}
+
+/**
+ * "Mark as joined" records that the person has already joined, so the joining date may not
+ * lie in the future (see `isFutureJoiningDate` for the time-zone tolerance).
+ */
+function parseJoiningDate(value: string): Date {
+  const joiningDate = new Date(value);
+  if (Number.isNaN(joiningDate.getTime())) {
+    throw new ValidationError("A valid joining date is required.");
+  }
+  if (isFutureJoiningDate(joiningDate)) {
+    throw new ValidationError(
+      "The joining date cannot be in the future. Mark the person as joined on or after their first day."
+    );
+  }
+  return joiningDate;
+}
+
+/** The initial status is an explicit HR choice; anything other than ACTIVE / PROBATION is rejected. */
+function assertJoiningInitialStatus(status: EmployeeStatus): void {
+  if (!(JOINING_INITIAL_STATUSES as readonly EmployeeStatus[]).includes(status)) {
+    throw new ValidationError("The initial employment status must be ACTIVE or PROBATION.");
+  }
+}
+
+/**
+ * One employment record per user (`Employee.userId` is unique). An active record blocks a
+ * second joining; an exited record cannot be reused because re-joining is not defined yet.
+ */
+function assertNoEmployeeRecord(
+  personName: string,
+  profile: { employeeCode: string; status: EmployeeStatus } | null
+): void {
+  if (!profile) return;
+  if (profile.status === EmployeeStatus.EXITED) {
+    throw new ConflictError(
+      `${personName} has an exited employment record (${profile.employeeCode}). Re-joining with a new record is not supported yet.`
+    );
+  }
+  throw new ConflictError(
+    `${personName} already has an active employee record (${profile.employeeCode}).`
+  );
+}
+
+/**
+ * Grants the portal role that comes with joining. `assignedAt` is always refreshed, even when
+ * a stale row exists, because it drives the portal upgrade banner.
+ */
+async function grantJoiningRole(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  role: typeof Role.INTERN | typeof Role.EMPLOYEE,
+  actorId: string,
+  now: Date
+): Promise<void> {
+  await tx.userRole.upsert({
+    where: { userId_role: { userId, role } },
+    create: { userId, role, assignedBy: actorId, assignedAt: now },
+    update: { assignedBy: actorId, assignedAt: now },
+  });
+}
+
+/** Re-throws unique-constraint races (employee code, user, application) as a conflict. */
+function rethrowJoiningConflict(error: unknown): never {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code: unknown }).code === "P2002"
+  ) {
+    throw new ConflictError(
+      "An employee record with this code, person or application was created at the same time. Reload and try again."
+    );
+  }
+  throw error;
+}
+
 export class EmployeeService {
   /**
    * Employee records management: HR/Admin role plus the canEmployees module permission.
@@ -124,191 +217,392 @@ export class EmployeeService {
   }
 
   /**
-   * Creates an employee record from a successfully accepted recruitment application.
+   * Full-time "Mark as joined": creates the employee record from an accepted offer.
    * STRICT GATING:
    * 1. Requires ADMIN or HR role and the canEmployees permission.
    * 2. Requires an ACCEPTED job offer and application status OFFER_ACCEPTED.
-   * 3. Candidate must not already have an employee profile.
+   * 3. The candidate must not already have an employee record.
    * 4. The actor must not be the candidate (separation of duties).
+   * 5. The joining date must not be in the future (the person has joined).
+   * Grants the EMPLOYEE role with a fresh `assignedAt` and queues the EMPLOYEE_JOINED email.
    */
   async createEmployeeFromApplication(
     user: AuthenticatedUser,
     input: CreateEmployeeFromApplicationInput
   ): Promise<ConfidentialEmployeeDetail> {
     await this.assertAdminAccess(user);
+    const joiningDate = parseJoiningDate(input.joiningDate);
+    assertJoiningInitialStatus(input.initialStatus);
+    const employeeCode = input.employeeCode.trim();
 
-    const createdEmployee = await prisma.$transaction(async (tx) => {
-      const application = await tx.application.findUnique({
-        where: { id: input.applicationId },
-        include: {
-          candidate: {
-            include: {
-              user: {
-                include: {
-                  employeeProfile: true,
+    let createdEmployee: { id: string };
+    try {
+      createdEmployee = await prisma.$transaction(async (tx) => {
+        const application = await tx.application.findUnique({
+          where: { id: input.applicationId },
+          include: {
+            candidate: {
+              include: {
+                user: {
+                  include: {
+                    employeeProfile: true,
+                  },
                 },
               },
             },
+            jobOffer: { select: { id: true, status: true } },
           },
-          jobOffer: { select: { id: true, status: true } },
-        },
-      });
+        });
 
-      if (!application) {
-        throw new NotFoundError("Application record not found.");
-      }
+        if (!application) {
+          throw new NotFoundError("Application record not found.");
+        }
 
-      // Separation of duties: staff can never hire themselves.
-      assertNotOwnApplication(user, application.candidate.user.id);
+        // Separation of duties: staff can never hire themselves.
+        assertNotOwnApplication(user, application.candidate.user.id);
 
-      // STRICT CHECK 1: The candidate must have explicitly accepted a job offer.
-      if (!application.jobOffer || application.jobOffer.status !== OfferStatus.ACCEPTED) {
-        throw new ValidationError(
-          "Cannot create employee record: the candidate has not accepted a job offer for this application."
-        );
-      }
+        // STRICT CHECK 1: The candidate must have explicitly accepted a job offer.
+        if (!application.jobOffer || application.jobOffer.status !== OfferStatus.ACCEPTED) {
+          throw new ValidationError(
+            "Cannot mark as joined: the candidate has not accepted a job offer for this application."
+          );
+        }
 
-      // STRICT CHECK 2: Application status must be OFFER_ACCEPTED
-      if (application.status !== ApplicationStatus.OFFER_ACCEPTED) {
-        throw new ValidationError(
-          `Cannot create employee record: Application status is currently '${application.status}'. A candidate can only be hired after their job offer is explicitly accepted ('OFFER_ACCEPTED').`
-        );
-      }
+        // STRICT CHECK 2: Application status must be OFFER_ACCEPTED
+        if (application.status !== ApplicationStatus.OFFER_ACCEPTED) {
+          throw new ValidationError(
+            `Cannot mark as joined: the application status is currently '${application.status}'. A candidate can only join after their job offer is explicitly accepted ('OFFER_ACCEPTED').`
+          );
+        }
 
-      const candidateUser = application.candidate.user;
+        const candidateUser = application.candidate.user;
 
-      // STRICT CHECK 3: User must not already be an employee
-      if (candidateUser.employeeProfile) {
-        throw new ValidationError(
-          `Candidate ${candidateUser.name} already has an active employee record (${candidateUser.employeeProfile.employeeCode}).`
-        );
-      }
+        // STRICT CHECK 3: User must not already have an employee record
+        assertNoEmployeeRecord(candidateUser.name, candidateUser.employeeProfile);
 
-      // STRICT CHECK 4: Employee code uniqueness (the unique constraint also guards races)
-      const existingCode = await tx.employee.findUnique({
-        where: { employeeCode: input.employeeCode.trim() },
-        select: { id: true },
-      });
-      if (existingCode) {
-        throw new ValidationError(
-          `Employee code '${input.employeeCode}' is already assigned to another employee.`
-        );
-      }
+        // STRICT CHECK 4: Employee code uniqueness (the unique constraint also guards races)
+        const existingCode = await tx.employee.findUnique({
+          where: { employeeCode },
+          select: { id: true },
+        });
+        if (existingCode) {
+          throw new ValidationError(
+            `Employee code '${employeeCode}' is already assigned to another employee.`
+          );
+        }
 
-      // STRICT CHECK 5: Manager existence if supplied
-      if (input.managerId) {
-        await this.assertValidManager(tx, input.managerId);
-      }
+        // STRICT CHECK 5: Manager existence if supplied
+        if (input.managerId) {
+          await this.assertValidManager(tx, input.managerId);
+        }
 
-      // Conditional transition: fails if the application stage changed concurrently.
-      const transitioned = await tx.application.updateMany({
-        where: { id: application.id, status: ApplicationStatus.OFFER_ACCEPTED },
-        data: { status: ApplicationStatus.HIRED },
-      });
-      if (transitioned.count !== 1) {
-        throw new ConflictError(
-          "The application stage was changed by another action. Reload and try again."
-        );
-      }
+        // Conditional transition: fails if the application stage changed concurrently.
+        const transitioned = await tx.application.updateMany({
+          where: { id: application.id, status: ApplicationStatus.OFFER_ACCEPTED },
+          data: { status: ApplicationStatus.HIRED },
+        });
+        if (transitioned.count !== 1) {
+          throw new ConflictError(
+            "The application stage was changed by another action. Reload and try again."
+          );
+        }
 
-      // 1. Create Employee record
-      const employee = await tx.employee.create({
-        data: {
-          userId: candidateUser.id,
-          employeeCode: input.employeeCode.trim(),
-          department: input.department.trim(),
-          designation: input.designation.trim(),
-          joiningDate: new Date(input.joiningDate),
-          status: EmployeeStatus.PROBATION,
-          managerId: input.managerId || null,
-          personalPhone: input.personalPhone?.trim() || null,
-          emergencyContact: input.emergencyContact
-            ? (input.emergencyContact as unknown as Prisma.InputJsonValue)
-            : undefined,
-          internalNotes: sanitizeStaffNotes(input.internalNotes),
-          applicationId: application.id,
-          onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
-        },
-      });
+        const now = new Date();
 
-      // 2. Initial employment history entry
-      await tx.employmentHistory.create({
-        data: {
-          employeeId: employee.id,
-          changeType: "HIRED",
-          previousValue: null,
-          newValue: EmployeeStatus.PROBATION,
-          remarks: `Hired via application ${application.referenceCode} for ${input.designation} (${input.department})`,
-          changedById: user.id,
-        },
-      });
-
-      // 3. Application stage history (status already moved to HIRED above)
-      await tx.applicationStatusHistory.create({
-        data: {
-          applicationId: application.id,
-          fromStatus: ApplicationStatus.OFFER_ACCEPTED,
-          toStatus: ApplicationStatus.HIRED,
-          actorId: user.id,
-          internalNotes: `Employee record created with code ${employee.employeeCode}. Onboarding initiated.`,
-          candidateMessage: `Welcome to GARA Innovation! Your employee record has been created (${employee.employeeCode}). Please check your portal for onboarding details.`,
-        },
-      });
-
-      // 4. Assign EMPLOYEE role to candidate user
-      await tx.userRole.upsert({
-        where: {
-          userId_role: {
+        // 1. Create Employee record
+        const employee = await tx.employee.create({
+          data: {
             userId: candidateUser.id,
-            role: Role.EMPLOYEE,
-          },
-        },
-        create: {
-          userId: candidateUser.id,
-          role: Role.EMPLOYEE,
-          assignedBy: user.id,
-        },
-        update: {},
-      });
-
-      // 5. Welcome notification in outbox
-      await tx.notificationOutbox.create({
-        data: {
-          recipientEmail: candidateUser.email,
-          templateName: "EMPLOYEE_ONBOARDING_WELCOME",
-          payload: {
-            employeeName: candidateUser.name,
-            employeeCode: employee.employeeCode,
-            department: employee.department,
-            designation: employee.designation,
-            joiningDate: employee.joiningDate.toISOString(),
-          },
-          status: "PENDING",
-        },
-      });
-
-      // 6. Audit Log
-      await tx.auditLog.create({
-        data: {
-          actorId: user.id,
-          actorRole: user.roles[0] ?? "HR",
-          action: "CREATE_EMPLOYEE_FROM_APPLICATION",
-          resourceType: "EMPLOYEE",
-          resourceId: employee.id,
-          diffPayload: {
+            employeeCode,
+            department: input.department.trim(),
+            designation: input.designation.trim(),
+            joiningDate,
+            status: input.initialStatus,
+            employmentType: EmploymentType.FULL_TIME,
+            managerId: input.managerId || null,
+            personalPhone: input.personalPhone?.trim() || null,
+            emergencyContact: input.emergencyContact
+              ? (input.emergencyContact as unknown as Prisma.InputJsonValue)
+              : undefined,
+            internalNotes: sanitizeStaffNotes(input.internalNotes),
             applicationId: application.id,
-            jobOfferId: application.jobOffer.id,
-            employeeCode: employee.employeeCode,
-            userId: candidateUser.id,
-            joiningDate: employee.joiningDate.toISOString(),
+            onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
           },
-        },
-      });
+        });
 
-      return employee;
-    });
+        // 2. Initial employment history entry
+        await tx.employmentHistory.create({
+          data: {
+            employeeId: employee.id,
+            changeType: "HIRED",
+            previousValue: null,
+            newValue: employee.status,
+            remarks: `Marked as joined (full-time) via application ${application.referenceCode} for ${employee.designation} (${employee.department})`,
+            changedById: user.id,
+          },
+        });
+
+        // 3. Application stage history (status already moved to HIRED above)
+        await tx.applicationStatusHistory.create({
+          data: {
+            applicationId: application.id,
+            fromStatus: ApplicationStatus.OFFER_ACCEPTED,
+            toStatus: ApplicationStatus.HIRED,
+            actorId: user.id,
+            internalNotes: `Marked as joined. Employee record created with code ${employee.employeeCode}. Onboarding initiated.`,
+            candidateMessage: `Welcome to GARA Innovation! You have joined as an employee (${employee.employeeCode}). Your employee home, attendance, leave and payslips are now available in your portal.`,
+          },
+        });
+
+        // 4. Grant the EMPLOYEE role (fresh assignedAt drives the portal upgrade banner)
+        await grantJoiningRole(tx, candidateUser.id, Role.EMPLOYEE, user.id, now);
+
+        // 5. Welcome notification in outbox
+        await tx.notificationOutbox.create({
+          data: {
+            recipientEmail: candidateUser.email,
+            templateName: "EMPLOYEE_JOINED",
+            payload: {
+              employeeName: candidateUser.name,
+              employeeCode: employee.employeeCode,
+              department: employee.department,
+              designation: employee.designation,
+              joiningDate: employee.joiningDate.toISOString(),
+            },
+            status: "PENDING",
+          },
+        });
+
+        // 6. Audit Log
+        await tx.auditLog.create({
+          data: {
+            actorId: user.id,
+            actorRole: user.roles[0] ?? "HR",
+            action: "MARK_EMPLOYEE_JOINED",
+            resourceType: "EMPLOYEE",
+            resourceId: employee.id,
+            diffPayload: {
+              applicationId: application.id,
+              jobOfferId: application.jobOffer.id,
+              employeeCode: employee.employeeCode,
+              userId: candidateUser.id,
+              joiningDate: employee.joiningDate.toISOString(),
+              initialStatus: employee.status,
+              employmentType: EmploymentType.FULL_TIME,
+              applicationFromStatus: ApplicationStatus.OFFER_ACCEPTED,
+              applicationToStatus: ApplicationStatus.HIRED,
+              roleGranted: Role.EMPLOYEE,
+            },
+          },
+        });
+
+        return employee;
+      });
+    } catch (error) {
+      rethrowJoiningConflict(error);
+    }
 
     return this.getEmployeeDetail(user, createdEmployee.id);
+  }
+
+  /**
+   * Intern "Mark as joined" (internship step 2): after the supervised evaluation was recorded as
+   * PASSED, HR records that the person has joined. In one transaction with conditional writes it
+   * creates the INTERN employee record, moves the application EVALUATION_SELECTED → HIRED, writes
+   * stage, employment and audit history, grants the INTERN role with a fresh `assignedAt` and
+   * queues the INTERN_JOINED welcome email.
+   * Gated: ADMIN, or HR with canEmployees; never for one's own enrollment.
+   */
+  async createEmployeeFromInternship(
+    user: AuthenticatedUser,
+    input: MarkInternJoinedInput
+  ): Promise<InternJoiningResult> {
+    await this.assertAdminAccess(user);
+    const joiningDate = parseJoiningDate(input.joiningDate);
+    assertJoiningInitialStatus(input.initialStatus);
+    const employeeCode = input.employeeCode.trim();
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const enrollment = await tx.internshipEnrollment.findUnique({
+          where: { id: input.enrollmentId },
+          select: {
+            id: true,
+            userId: true,
+            status: true,
+            application: {
+              select: {
+                id: true,
+                referenceCode: true,
+                status: true,
+                opening: { select: { title: true, type: true } },
+                jobOffer: { select: { status: true } },
+              },
+            },
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                employeeProfile: { select: { employeeCode: true, status: true } },
+              },
+            },
+          },
+        });
+
+        if (!enrollment) {
+          throw new NotFoundError("Evaluation enrollment not found.");
+        }
+
+        // Separation of duties: staff never mark themselves as joined.
+        if (enrollment.userId === user.id) {
+          throw new ForbiddenError("You cannot mark your own internship as joined.");
+        }
+
+        const application = enrollment.application;
+        if (application.opening.type !== OpeningType.INTERNSHIP) {
+          throw new ValidationError("Only internship applications can join as an intern.");
+        }
+
+        if (enrollment.status !== EvaluationStatus.PASSED) {
+          throw new ValidationError(
+            `Only an evaluation recorded as PASSED can be marked as joined. Current evaluation status: ${enrollment.status}.`
+          );
+        }
+
+        if (application.status === ApplicationStatus.HIRED) {
+          throw new ConflictError("This intern has already been marked as joined.");
+        }
+        if (application.status !== ApplicationStatus.EVALUATION_SELECTED) {
+          throw new ValidationError(
+            `Cannot mark as joined: the application is in stage ${application.status}. Intern joining starts from EVALUATION_SELECTED.`
+          );
+        }
+
+        if (application.jobOffer && PENDING_OFFER_STATUSES.includes(application.jobOffer.status)) {
+          throw new ValidationError(
+            "This application has a pending job offer. Revoke the offer before marking the intern as joined."
+          );
+        }
+
+        assertNoEmployeeRecord(enrollment.user.name, enrollment.user.employeeProfile);
+
+        const existingCode = await tx.employee.findUnique({
+          where: { employeeCode },
+          select: { id: true },
+        });
+        if (existingCode) {
+          throw new ValidationError(
+            `Employee code '${employeeCode}' is already assigned to another employee.`
+          );
+        }
+
+        if (input.managerId) {
+          await this.assertValidManager(tx, input.managerId);
+        }
+
+        // Conditional transition: the application must still be EVALUATION_SELECTED and the
+        // enrollment PASSED, otherwise a concurrent action won and nothing is written.
+        const transitioned = await tx.application.updateMany({
+          where: {
+            id: application.id,
+            status: ApplicationStatus.EVALUATION_SELECTED,
+            enrollment: { is: { status: EvaluationStatus.PASSED } },
+          },
+          data: { status: ApplicationStatus.HIRED },
+        });
+        if (transitioned.count !== 1) {
+          throw new ConflictError(
+            "The application or evaluation was changed by another action. Reload and try again."
+          );
+        }
+
+        const now = new Date();
+
+        const employee = await tx.employee.create({
+          data: {
+            userId: enrollment.userId,
+            employeeCode,
+            department: input.department.trim(),
+            designation: input.designation.trim(),
+            joiningDate,
+            status: input.initialStatus,
+            employmentType: EmploymentType.INTERN,
+            managerId: input.managerId || null,
+            applicationId: application.id,
+            onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
+          },
+        });
+
+        await tx.employmentHistory.create({
+          data: {
+            employeeId: employee.id,
+            changeType: "INTERN_JOINED",
+            previousValue: null,
+            newValue: employee.status,
+            remarks: `Marked as joined (intern) via application ${application.referenceCode} after a PASSED evaluation, as ${employee.designation} (${employee.department})`,
+            changedById: user.id,
+          },
+        });
+
+        await tx.applicationStatusHistory.create({
+          data: {
+            applicationId: application.id,
+            fromStatus: ApplicationStatus.EVALUATION_SELECTED,
+            toStatus: ApplicationStatus.HIRED,
+            actorId: user.id,
+            internalNotes: `Marked as joined as an intern. Employee record created with code ${employee.employeeCode}.`,
+            candidateMessage:
+              "Welcome to GARA Innovation! You have joined as an intern. Your intern workspace, attendance, leave, payslips, ID card and certificate are now available in your portal.",
+          },
+        });
+
+        await grantJoiningRole(tx, enrollment.userId, Role.INTERN, user.id, now);
+
+        await tx.notificationOutbox.create({
+          data: {
+            recipientEmail: enrollment.user.email,
+            templateName: "INTERN_JOINED",
+            payload: {
+              recipientName: enrollment.user.name,
+              employeeCode: employee.employeeCode,
+              department: employee.department,
+              designation: employee.designation,
+              openingTitle: application.opening.title,
+              joiningDate: employee.joiningDate.toISOString(),
+            },
+            status: "PENDING",
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            actorId: user.id,
+            actorRole: user.roles[0] ?? "HR",
+            action: "MARK_INTERN_JOINED",
+            resourceType: "EMPLOYEE",
+            resourceId: employee.id,
+            diffPayload: {
+              enrollmentId: enrollment.id,
+              applicationId: application.id,
+              userId: enrollment.userId,
+              employeeCode: employee.employeeCode,
+              joiningDate: employee.joiningDate.toISOString(),
+              initialStatus: employee.status,
+              employmentType: EmploymentType.INTERN,
+              managerId: employee.managerId,
+              applicationFromStatus: ApplicationStatus.EVALUATION_SELECTED,
+              applicationToStatus: ApplicationStatus.HIRED,
+              roleGranted: Role.INTERN,
+            },
+          },
+        });
+
+        return { employeeId: employee.id, applicationId: application.id, enrollmentId: enrollment.id };
+      });
+    } catch (error) {
+      rethrowJoiningConflict(error);
+    }
   }
 
   /**
@@ -472,6 +766,7 @@ export class EmployeeService {
         designation: true,
         joiningDate: true,
         status: true,
+        employmentType: true,
         user: {
           select: {
             name: true,
@@ -500,6 +795,7 @@ export class EmployeeService {
       designation: emp.designation,
       joiningDate: emp.joiningDate,
       status: emp.status,
+      employmentType: emp.employmentType,
       avatar: emp.user.image,
       manager: emp.manager
         ? {
@@ -512,6 +808,31 @@ export class EmployeeService {
     }));
   }
 
+  /**
+   * Active (non-exited) employees that may be chosen as reporting manager in the joining
+   * dialogs. Gated like every joining action: HR / Admin with canEmployees.
+   */
+  async listReportingManagerOptions(user: AuthenticatedUser): Promise<ReportingManagerOption[]> {
+    await this.assertAdminAccess(user);
+
+    const managers = await prisma.employee.findMany({
+      where: { status: { not: EmployeeStatus.EXITED } },
+      select: {
+        id: true,
+        employeeCode: true,
+        designation: true,
+        user: { select: { name: true } },
+      },
+      orderBy: { employeeCode: "asc" },
+    });
+
+    return managers.map((m) => ({
+      id: m.id,
+      employeeCode: m.employeeCode,
+      name: m.user.name,
+      designation: m.designation,
+    }));
+  }
 
   /**
    * Retrieves comprehensive employee detail with strict authorization.
@@ -591,6 +912,7 @@ export class EmployeeService {
       designation: emp.designation,
       joiningDate: emp.joiningDate,
       status: emp.status,
+      employmentType: emp.employmentType,
       avatar: emp.user.image,
       manager: emp.manager
         ? {

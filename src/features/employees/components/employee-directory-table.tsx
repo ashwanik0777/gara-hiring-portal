@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { EmployeeStatus, PublicEmployeeDirectoryItem } from "../types";
 import { Badge } from "@/components/ui/badge";
+import { EmploymentTypeBadge } from "./employment-type-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
@@ -183,7 +184,12 @@ export function EmployeeDirectoryTable({
                           <span className="italic text-muted-foreground/60">—</span>
                         )}
                       </td>
-                      <td className="py-3.5 px-4">{getStatusBadge(emp.status)}</td>
+                      <td className="py-3.5 px-4">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {getStatusBadge(emp.status)}
+                          <EmploymentTypeBadge employmentType={emp.employmentType} />
+                        </div>
+                      </td>
                       <td className="py-3.5 px-4 text-right">
                         {detailHrefBase && (
                           <Link href={`${detailHrefBase}/${emp.id}`}>

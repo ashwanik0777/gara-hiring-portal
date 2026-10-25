@@ -19,7 +19,7 @@ export function StageTransitionDialog({
   currentStatus,
   candidateName,
 }: StageTransitionDialogProps) {
-  // Offer and hiring stages are excluded: they are reached only through the offer workflow.
+  // Evaluation selection, offer and joining stages are excluded: each has its own workflow.
   const allowedNextStatuses = getManualTransitionTargets(currentStatus);
   const hasWorkflowOwnedTargets =
     (VALID_APPLICATION_TRANSITIONS[currentStatus] ?? []).length > allowedNextStatuses.length;
@@ -37,7 +37,7 @@ export function StageTransitionDialog({
     return (
       <Card className="border-border bg-muted/20">
         <CardContent className="pt-6 text-center text-xs text-muted-foreground">
-          The next stage for <span className="font-semibold text-foreground">{currentStatus}</span> is managed by the job offer and hiring workflow below.
+          The next stage for <span className="font-semibold text-foreground">{currentStatus}</span> is managed by the evaluation, job offer and joining workflows on this page.
         </CardContent>
       </Card>
     );
@@ -125,6 +125,11 @@ export function StageTransitionDialog({
                 </option>
               ))}
             </select>
+            {hasWorkflowOwnedTargets && (
+              <p className="text-[11px] text-muted-foreground">
+                Selecting for the 7-day evaluation, offers and &quot;Mark as joined&quot; use their own controls on this page.
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">

@@ -1,10 +1,13 @@
 "use server";
 
-import { requireAuth } from "@/lib/auth/guards";
+import { Role } from "@prisma/client";
+import { revalidatePath } from "next/cache";
+import { requireAuth, requirePermission } from "@/lib/auth/guards";
 import { toActionError } from "@/lib/errors";
 import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
 import { evaluationService, type IssueIdCardResult } from "./services/evaluation-service";
 import {
+  EnrollCandidateSchema,
   FinalizeEvaluationSchema,
   IssueIdCardSchema,
   ReviewCheckpointSchema,
@@ -18,6 +21,39 @@ import { revalidateEvaluationViews } from "./revalidate";
 export type EvaluationActionResult<T = unknown> =
   | { success: true; data: T }
   | { success: false; error: string };
+
+/**
+ * Internship step 1: selects a candidate for the 7-working-day supervised evaluation and
+ * creates the enrollment. ADMIN / HR with canEvaluations; never on one's own application
+ * (enforced by the service). The candidate is emailed and the evaluation workspace unlocks.
+ */
+export async function enrollCandidateAction(
+  formData: FormData
+): Promise<EvaluationActionResult<{ enrollmentId: string; created: boolean }>> {
+  try {
+    const user = await requirePermission("canEvaluations", { roles: [Role.ADMIN, Role.HR] });
+    const input = parseInput(
+      EnrollCandidateSchema,
+      readFormFields(formData, ["applicationId", "supervisorId"])
+    );
+
+    const result = await evaluationService.enrollCandidate(user, input.applicationId, input.supervisorId);
+    if (result.created) {
+      scheduleOutboxFlush();
+    }
+
+    revalidateEvaluationViews(result.enrollmentId);
+    for (const base of ["/admin/applications", "/subadmin/applications"]) {
+      revalidatePath(base);
+      revalidatePath(`${base}/${input.applicationId}`);
+    }
+    revalidatePath("/candidate/dashboard");
+
+    return { success: true, data: result };
+  } catch (err: unknown) {
+    return { success: false, error: toActionError(err, "Failed to select the candidate for evaluation") };
+  }
+}
 
 export async function triggerEvaluationStartAction(
   formData: FormData

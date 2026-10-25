@@ -6,6 +6,7 @@ import type { ZodError } from "zod";
 import { requireAuth, requirePermission } from "@/lib/auth/guards";
 import { toActionError } from "@/lib/errors";
 import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
+import { revalidateEvaluationViews } from "@/features/internship-evaluation/revalidate";
 import { offerService } from "./services/offer-service";
 import { employeeService } from "./services/employee-service";
 import {
@@ -14,6 +15,7 @@ import {
   RevokeJobOfferSchema,
   CandidateOfferDecisionSchema,
   CreateEmployeeFromApplicationSchema,
+  MarkInternJoinedSchema,
   UpdateEmployeeStatusSchema,
   AssignManagerSchema,
   UpdateOnboardingChecklistSchema,
@@ -62,6 +64,13 @@ function revalidateEmployeeViews(employeeId?: string): void {
     if (employeeId) {
       revalidatePath(`${base}/${employeeId}`);
     }
+  }
+}
+
+/** Self-service portal homes whose navigation changes when a person joins. */
+function revalidateJoinedPortals(): void {
+  for (const path of ["/candidate/dashboard", "/intern/dashboard", "/hrms"]) {
+    revalidatePath(path);
   }
 }
 
@@ -167,6 +176,10 @@ export async function revokeJobOfferAction(
   }
 }
 
+/**
+ * Full-time "Mark as joined": requires an accepted offer; grants the EMPLOYEE role and queues
+ * the EMPLOYEE_JOINED welcome email.
+ */
 export async function hireEmployeeFromApplicationAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
@@ -185,6 +198,7 @@ export async function hireEmployeeFromApplicationAction(
       department: readText(formData, "department"),
       designation: readText(formData, "designation"),
       joiningDate: readText(formData, "joiningDate"),
+      initialStatus: readText(formData, "initialStatus"),
       managerId: readOptionalText(formData, "managerId"),
       personalPhone: readOptionalText(formData, "personalPhone"),
       emergencyContact,
@@ -199,9 +213,46 @@ export async function hireEmployeeFromApplicationAction(
 
     revalidateApplicationViews(validated.data.applicationId);
     revalidateEmployeeViews(employee.id);
+    revalidateJoinedPortals();
     return { success: true, data: employee };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Employee hiring failed.") };
+    return { success: false, error: toActionError(err, "Marking the employee as joined failed.") };
+  }
+}
+
+/**
+ * Intern "Mark as joined" (internship step 2): requires a PASSED evaluation; grants the INTERN
+ * role and queues the INTERN_JOINED welcome email. ADMIN, or HR with canEmployees.
+ */
+export async function markInternJoinedAction(
+  formData: FormData
+): Promise<EmployeeActionResult<{ employeeId: string }>> {
+  try {
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
+
+    const validated = MarkInternJoinedSchema.safeParse({
+      enrollmentId: readText(formData, "enrollmentId"),
+      employeeCode: readText(formData, "employeeCode"),
+      department: readText(formData, "department"),
+      designation: readText(formData, "designation"),
+      joiningDate: readText(formData, "joiningDate"),
+      initialStatus: readText(formData, "initialStatus"),
+      managerId: readOptionalText(formData, "managerId"),
+    });
+    if (!validated.success) {
+      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
+    }
+
+    const result = await employeeService.createEmployeeFromInternship(user, validated.data);
+    scheduleOutboxFlush();
+
+    revalidateEvaluationViews(result.enrollmentId);
+    revalidateApplicationViews(result.applicationId);
+    revalidateEmployeeViews(result.employeeId);
+    revalidateJoinedPortals();
+    return { success: true, data: { employeeId: result.employeeId } };
+  } catch (err: unknown) {
+    return { success: false, error: toActionError(err, "Marking the intern as joined failed.") };
   }
 }
 

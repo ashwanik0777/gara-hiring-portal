@@ -1,19 +1,12 @@
 import React from "react";
-import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { requirePortalCapability } from "@/features/lifecycle/services/lifecycle-service";
 import { applicationService } from "@/features/applications/services/application-service";
 import { CandidateProfileForm } from "@/features/applications/components/candidate-profile-form";
 
 export const instant = false;
 
 export default async function CandidateProfilePage() {
-  const user = await getCurrentUser();
-  if (!user) {
-    redirect("/login?callbackUrl=/candidate/profile");
-  }
-  if (user.mustChangePassword) {
-    redirect("/set-password");
-  }
+  const { user } = await requirePortalCapability("profile", { callbackPath: "/candidate/profile" });
 
   const profile = await applicationService.getOrCreateCandidateProfile(user.id);
 

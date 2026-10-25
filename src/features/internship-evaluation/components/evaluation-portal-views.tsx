@@ -1,24 +1,56 @@
 import React from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { Role } from "@prisma/client";
+import { getCurrentUser, hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Award, ArrowRight, Calendar, Clock, UserCheck } from "lucide-react";
+import { employeeService } from "@/features/employees/services/employee-service";
+import type { ReportingManagerOption } from "@/features/employees/types";
 import { evaluationService } from "../services/evaluation-service";
 import { resolveEvaluationAccess } from "../services/enrollment-access";
+import { getInternJourneyState } from "../joining-state";
+import type { EvaluationEnrollmentDetail } from "../types";
 import { EvaluationCockpit, getEvaluationBadge } from "./evaluation-cockpit";
+import { InternJourneyBadge } from "./intern-journey-badge";
 
 export type EvaluationPortal = "admin" | "subadmin" | "recruitment";
 
-const PORTAL_PATHS: Record<EvaluationPortal, { evaluations: string; applications: string }> = {
-  admin: { evaluations: "/admin/evaluations", applications: "/admin/applications" },
-  subadmin: { evaluations: "/subadmin/evaluations", applications: "/subadmin/applications" },
-  recruitment: { evaluations: "/recruitment/evaluations", applications: "/recruitment/applications" },
+const PORTAL_PATHS: Record<
+  EvaluationPortal,
+  { evaluations: string; applications: string; employees: string }
+> = {
+  admin: { evaluations: "/admin/evaluations", applications: "/admin/applications", employees: "/admin/employees" },
+  subadmin: {
+    evaluations: "/subadmin/evaluations",
+    applications: "/subadmin/applications",
+    employees: "/subadmin/employees",
+  },
+  recruitment: {
+    evaluations: "/recruitment/evaluations",
+    applications: "/recruitment/applications",
+    employees: "/recruitment/employees",
+  },
 };
+
+/** Mirrors the joining Server Action: ADMIN, or HR with the canEmployees permission. */
+async function canMarkInternJoined(user: AuthenticatedUser): Promise<boolean> {
+  if (user.roles.includes(Role.ADMIN)) return true;
+  return user.roles.includes(Role.HR) && (await hasPermission(user, "canEmployees"));
+}
+
+/** True when the cockpit should offer "Mark as joined" for this enrollment. */
+function awaitsJoining(enrollment: EvaluationEnrollmentDetail): boolean {
+  return (
+    enrollment.status === "PASSED" &&
+    enrollment.employment === null &&
+    enrollment.applicationStatus === "EVALUATION_SELECTED"
+  );
+}
 
 const UNAUTHORIZED_MESSAGE =
   "Evaluation records are available to ADMIN and HR with evaluation permission, and to the supervisor assigned to the intern.";
@@ -93,6 +125,12 @@ export async function EvaluationListView({ portal }: { portal: EvaluationPortal 
                       {enr.referenceCode}
                     </span>
                     {getEvaluationBadge(enr.status)}
+                    <InternJourneyBadge
+                      state={getInternJourneyState({
+                        evaluationStatus: enr.status,
+                        joinedAs: enr.joined ? enr.joinedEmploymentType : undefined,
+                      })}
+                    />
                     <span className="text-xs text-muted-foreground">
                       {enr.openingTitle} ({enr.openingDepartment})
                     </span>
@@ -173,6 +211,13 @@ export async function EvaluationCockpitView({
   }
 
   const paths = PORTAL_PATHS[portal];
+  const canMarkJoined = await canMarkInternJoined(user);
+  // Reporting manager choices are only loaded when the joining dialog can be shown.
+  const managerOptions: ReportingManagerOption[] =
+    canMarkJoined && awaitsJoining(enrollment)
+      ? await employeeService.listReportingManagerOptions(user)
+      : [];
+
   return (
     <EvaluationCockpit
       enrollment={enrollment}
@@ -181,6 +226,11 @@ export async function EvaluationCockpitView({
         access.permissions.canApplications ? `${paths.applications}/${enrollment.applicationId}` : null
       }
       canDecide={access.scope === "ALL"}
+      joining={{
+        canMarkJoined,
+        managerOptions,
+        employeesHrefBase: canMarkJoined ? paths.employees : null,
+      }}
     />
   );
 }

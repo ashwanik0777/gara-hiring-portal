@@ -1,4 +1,8 @@
 import {
+  ApplicationStatus,
+  EmployeeStatus,
+  EmploymentType,
+  OpeningType,
   EvaluationStatus,
   CheckpointStatus,
   OnboardingStatus,
@@ -74,11 +78,35 @@ export interface EvaluationEnrollmentListItem {
   reviewedCheckpoints: number;
   totalCheckpoints: number;
   idCardNumber: string | null;
+  /** True once HR marked the person as joined from this application. */
+  joined: boolean;
+  /** Employment type recorded at joining (null when not joined or for legacy records). */
+  joinedEmploymentType: EmploymentType | null;
+}
+
+/** Staff member who may be assigned to supervise an internship evaluation. */
+export interface SupervisorOption {
+  id: string;
+  name: string;
+  email: string;
+  roles: string[];
 }
 
 export interface EvaluationEnrollmentDetail {
   id: string;
   applicationId: string;
+  /** Current recruitment stage of the linked application (HIRED once marked as joined). */
+  applicationStatus: ApplicationStatus;
+  openingType: OpeningType;
+  /** The person's employment record, if any (joined from this application or otherwise). */
+  employment: {
+    id: string;
+    employeeCode: string;
+    status: EmployeeStatus;
+    employmentType: EmploymentType | null;
+    joiningDate: Date;
+    viaThisApplication: boolean;
+  } | null;
   referenceCode: string;
   candidateName: string;
   candidateEmail: string;

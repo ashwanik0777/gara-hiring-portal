@@ -5,6 +5,7 @@ import { EmployeeLifecycleCard } from "./employee-lifecycle-card";
 import { EmployeeOnboardingChecklist } from "./employee-onboarding-checklist";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { EmploymentTypeBadge } from "./employment-type-badge";
 import {
   Calendar,
   FileText,
@@ -83,6 +84,7 @@ export function EmployeeDetailView({
                 <div className="flex flex-wrap items-center gap-2.5">
                   <h1 className="text-xl font-bold text-foreground">{employee.name}</h1>
                   {getStatusBadge(employee.status)}
+                  <EmploymentTypeBadge employmentType={employee.employmentType} />
                   <span className="font-mono text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground border border-border">
                     {employee.employeeCode}
                   </span>

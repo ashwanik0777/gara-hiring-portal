@@ -39,6 +39,7 @@ export const VALID_APPLICATION_TRANSITIONS: Record<ApplicationStatus, Applicatio
   [ApplicationStatus.EVALUATION_SELECTED]: [
     ApplicationStatus.OFFERED,
     ApplicationStatus.REJECTED,
+    ApplicationStatus.HIRED, // Intern "Mark as joined" after a PASSED evaluation (joining flow only)
   ],
   [ApplicationStatus.OFFERED]: [
     ApplicationStatus.OFFER_ACCEPTED,
@@ -55,12 +56,15 @@ export const VALID_APPLICATION_TRANSITIONS: Record<ApplicationStatus, Applicatio
 };
 
 /**
- * Statuses owned by the offer and hiring flows. They are reachable only through
- * extending an offer (OFFERED), the candidate's own acceptance (OFFER_ACCEPTED)
- * and employee creation from an accepted offer (HIRED) — never through the
- * generic stage-transition endpoint, so candidate consent cannot be bypassed.
+ * Statuses owned by dedicated flows. They are reachable only through selecting an
+ * internship candidate for the 7-working-day evaluation (EVALUATION_SELECTED, which
+ * also creates the enrollment), extending an offer (OFFERED), the candidate's own
+ * acceptance (OFFER_ACCEPTED) and HR "Mark as joined" (HIRED) — never through the
+ * generic stage-transition endpoint, so no stage can be reached without the records
+ * and consent its flow requires.
  */
 export const FLOW_OWNED_APPLICATION_STATUSES: readonly ApplicationStatus[] = [
+  ApplicationStatus.EVALUATION_SELECTED,
   ApplicationStatus.OFFERED,
   ApplicationStatus.OFFER_ACCEPTED,
   ApplicationStatus.HIRED,
@@ -89,6 +93,18 @@ export const FEEDBACK_LOCKED_APPLICATION_STATUSES: readonly ApplicationStatus[] 
   ApplicationStatus.WITHDRAWN,
   ApplicationStatus.ARCHIVED,
 ];
+
+/**
+ * True when an internship application may be selected for the supervised evaluation:
+ * its stage allows EVALUATION_SELECTED, or it already reached that stage without an
+ * enrollment (records created before selection became a dedicated flow).
+ */
+export function canSelectForEvaluation(status: ApplicationStatus): boolean {
+  return (
+    status === ApplicationStatus.EVALUATION_SELECTED ||
+    (VALID_APPLICATION_TRANSITIONS[status] ?? []).includes(ApplicationStatus.EVALUATION_SELECTED)
+  );
+}
 
 /**
  * Targets that staff may choose through the generic stage-transition endpoint.

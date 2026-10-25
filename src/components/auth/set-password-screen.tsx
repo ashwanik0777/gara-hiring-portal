@@ -88,21 +88,9 @@ export function SetPasswordScreen({
       }
 
       setIsSuccess(true);
+      const destination = res.redirectTo ?? "/dashboard";
       setTimeout(() => {
-        // Determine role destination
-        if (userRoles.includes("ADMIN")) {
-          router.replace("/admin");
-        } else if (
-          userRoles.includes("HR") ||
-          userRoles.includes("MANAGER") ||
-          userRoles.includes("INTERVIEWER") ||
-          userRoles.includes("MENTOR")
-        ) {
-          router.replace("/subadmin");
-        } else {
-          router.replace("/candidate/dashboard");
-        }
-        router.refresh();
+        router.replace(destination);
       }, 1200);
     } catch {
       setErrorMsg("An unexpected error occurred. Please try again.");

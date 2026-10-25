@@ -31,18 +31,40 @@ export const CandidateOfferDecisionSchema = z.object({
   declineReason: z.string().max(1000).optional().nullable(),
 });
 
+/**
+ * Initial employment status recorded at joining. HR chooses it explicitly: no probation
+ * rule is defined (OD-015), so there is no default.
+ */
+export const JOINING_INITIAL_STATUSES = [EmployeeStatus.ACTIVE, EmployeeStatus.PROBATION] as const;
+
+const JoiningEmployeeCodeSchema = z
+  .string()
+  .trim()
+  .min(3, "Employee code must be at least 3 characters")
+  .max(50, "Employee code must be at most 50 characters")
+  .regex(/^[A-Z0-9-_]+$/, "Employee code must contain only uppercase alphanumeric characters, dashes, or underscores");
+
+const JoiningDateSchema = z
+  .string()
+  .trim()
+  .min(1, "Joining date is required")
+  .max(64)
+  .refine((val) => !isNaN(Date.parse(val)), {
+    message: "Valid ISO date required for joining date",
+  });
+
+const JoiningInitialStatusSchema = z.enum(
+  JOINING_INITIAL_STATUSES,
+  "Choose the initial employment status (Active or Probation)"
+);
+
 export const CreateEmployeeFromApplicationSchema = z.object({
   applicationId: z.string().uuid("Invalid application ID"),
-  employeeCode: z
-    .string()
-    .min(3, "Employee code must be at least 3 characters")
-    .max(50, "Employee code must be at most 50 characters")
-    .regex(/^[A-Z0-9-_]+$/, "Employee code must contain only uppercase alphanumeric characters, dashes, or underscores"),
+  employeeCode: JoiningEmployeeCodeSchema,
   department: z.string().trim().min(2, "Department is required").max(150),
   designation: z.string().trim().min(2, "Designation is required").max(150),
-  joiningDate: z.string().max(64).refine((val) => !isNaN(Date.parse(val)), {
-    message: "Valid ISO date required for joining date",
-  }),
+  joiningDate: JoiningDateSchema,
+  initialStatus: JoiningInitialStatusSchema,
   managerId: z.string().uuid("Invalid manager ID").optional().nullable(),
   personalPhone: z.string().max(30).optional().nullable(),
   emergencyContact: z
@@ -54,6 +76,17 @@ export const CreateEmployeeFromApplicationSchema = z.object({
     .optional()
     .nullable(),
   internalNotes: z.string().max(2000).optional().nullable(),
+});
+
+/** Intern "Mark as joined" from a PASSED internship evaluation. */
+export const MarkInternJoinedSchema = z.object({
+  enrollmentId: z.string().uuid("Invalid enrollment ID"),
+  employeeCode: JoiningEmployeeCodeSchema,
+  department: z.string().trim().min(2, "Department is required").max(150),
+  designation: z.string().trim().min(2, "Designation is required").max(150),
+  joiningDate: JoiningDateSchema,
+  initialStatus: JoiningInitialStatusSchema,
+  managerId: z.string().uuid("Invalid manager ID").optional().nullable(),
 });
 
 export const DirectCreateEmployeeSchema = z.object({
@@ -142,6 +175,7 @@ export type CreateJobOfferInput = z.infer<typeof CreateJobOfferSchema>;
 export type RevokeJobOfferInput = z.infer<typeof RevokeJobOfferSchema>;
 export type CandidateOfferDecisionInput = z.infer<typeof CandidateOfferDecisionSchema>;
 export type CreateEmployeeFromApplicationInput = z.infer<typeof CreateEmployeeFromApplicationSchema>;
+export type MarkInternJoinedInput = z.infer<typeof MarkInternJoinedSchema>;
 export type DirectCreateEmployeeInput = z.infer<typeof DirectCreateEmployeeSchema>;
 export type UpdateEmployeeStatusInput = z.infer<typeof UpdateEmployeeStatusSchema>;
 export type AssignManagerInput = z.infer<typeof AssignManagerSchema>;
