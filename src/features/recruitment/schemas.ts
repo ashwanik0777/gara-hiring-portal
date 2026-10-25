@@ -179,3 +179,89 @@ export type ScheduleInterviewInput = z.infer<typeof ScheduleInterviewSchema>;
 export type RescheduleInterviewInput = z.infer<typeof RescheduleInterviewSchema>;
 export type CancelInterviewInput = z.infer<typeof CancelInterviewSchema>;
 export type SubmitFeedbackInput = z.infer<typeof SubmitFeedbackSchema>;
+
+// -----------------------------------------------------------------------------
+// Candidate self-scheduling (booking requests)
+// -----------------------------------------------------------------------------
+
+export const MIN_BOOKING_SLOTS = 2;
+export const MAX_BOOKING_SLOTS = 8;
+/** Offered times must be at least this far apart (product-owner decision, round 4). */
+export const MIN_BOOKING_SLOT_GAP_MINUTES = 15;
+
+const IsoDateTimeSchema = z.string().max(64).refine((val) => !isNaN(Date.parse(val)), {
+  message: "Each time option must be a valid date and time",
+});
+
+/** Optional meeting link for offered times: https only. */
+const HttpsMeetingLinkSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .url("Please enter a valid meeting URL")
+  .refine((u) => u.startsWith("https://"), { message: "Meeting link must start with https://" });
+
+export const CreateBookingRequestSchema = z.object({
+  applicationId: z.string().uuid("Invalid application ID"),
+  roundNumber: z.coerce.number().int().min(1).max(10),
+  roundName: z.string().trim().min(2, "Round name is required").max(100),
+  durationMinutes: z.coerce.number().int().min(15).max(180),
+  interviewerId: z.string().uuid("Invalid interviewer ID").optional().nullable(),
+  meetingLink: HttpsMeetingLinkSchema.or(z.literal("")).optional().nullable(),
+  slots: z
+    .array(IsoDateTimeSchema)
+    .min(MIN_BOOKING_SLOTS, `Offer at least ${MIN_BOOKING_SLOTS} time options`)
+    .max(MAX_BOOKING_SLOTS, `Offer at most ${MAX_BOOKING_SLOTS} time options`),
+});
+
+export const CancelBookingRequestSchema = z.object({
+  requestId: z.string().uuid("Invalid request ID"),
+  reason: z.string().trim().min(3, "Please give a short reason").max(500),
+});
+
+export const BookInterviewSlotSchema = z.object({
+  requestId: z.string().uuid("Invalid request ID"),
+  slotId: z.string().uuid("Invalid time option"),
+});
+
+export type CreateBookingRequestInput = z.infer<typeof CreateBookingRequestSchema>;
+export type CancelBookingRequestInput = z.infer<typeof CancelBookingRequestSchema>;
+export type BookInterviewSlotInput = z.infer<typeof BookInterviewSlotSchema>;
+
+export type BookingSlotValidation = { ok: true; slots: Date[] } | { ok: false; error: string };
+
+/**
+ * Validates offered interview times against the current time: 2-8 options, all in the
+ * future, no duplicates and at least 15 minutes apart. Returns the times sorted.
+ * Pure (the caller passes `now`), so the client form and the server share it.
+ */
+export function validateBookingSlotTimes(values: readonly string[], now: Date): BookingSlotValidation {
+  if (values.length < MIN_BOOKING_SLOTS || values.length > MAX_BOOKING_SLOTS) {
+    return {
+      ok: false,
+      error: `Offer between ${MIN_BOOKING_SLOTS} and ${MAX_BOOKING_SLOTS} time options.`,
+    };
+  }
+  const slots = values.map((value) => new Date(value));
+  if (slots.some((slot) => Number.isNaN(slot.getTime()))) {
+    return { ok: false, error: "Each time option must be a valid date and time." };
+  }
+  if (slots.some((slot) => slot.getTime() <= now.getTime())) {
+    return { ok: false, error: "Every time option must be in the future." };
+  }
+  slots.sort((a, b) => a.getTime() - b.getTime());
+  const minGapMs = MIN_BOOKING_SLOT_GAP_MINUTES * 60 * 1000;
+  for (let i = 1; i < slots.length; i += 1) {
+    const gap = slots[i].getTime() - slots[i - 1].getTime();
+    if (gap === 0) {
+      return { ok: false, error: "Each time option must be different." };
+    }
+    if (gap < minGapMs) {
+      return {
+        ok: false,
+        error: `Time options must be at least ${MIN_BOOKING_SLOT_GAP_MINUTES} minutes apart.`,
+      };
+    }
+  }
+  return { ok: true, slots };
+}

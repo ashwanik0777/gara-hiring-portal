@@ -2,14 +2,20 @@
 
 import { Role } from "@prisma/client";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import type { ZodError } from "zod";
 import { requireAuth, requirePermission } from "@/lib/auth/guards";
-import { toActionError } from "@/lib/errors";
+import { toActionError, ValidationError } from "@/lib/errors";
+import { getClientIpHash } from "@/lib/security/client-ip";
 import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
 import { revalidateEvaluationViews } from "@/features/internship-evaluation/revalidate";
 import { offerService } from "./services/offer-service";
 import { employeeService } from "./services/employee-service";
+import { conversionService } from "./services/conversion-service";
+import type { ConversionResponseResult, ReviewOutcomeResult } from "./types";
 import {
+  ConversionOfferResponseSchema,
+  RecordReviewOutcomeSchema,
   CreateJobOfferSchema,
   OfferReferenceSchema,
   RevokeJobOfferSchema,
@@ -27,6 +33,9 @@ export type EmployeeActionResult<T = unknown> =
   | { success: false; error: string; fieldErrors?: Record<string, string> };
 
 const EMPLOYEE_ADMIN_ROLES: Role[] = [Role.ADMIN, Role.HR];
+
+/** Shown when some fields are invalid; the field messages explain what to fix. */
+const CHECK_FIELDS_MESSAGE = "Please check the highlighted fields and try again.";
 
 /** Reads a text field; File values and missing fields become undefined so zod rejects them. */
 function readText(formData: FormData, key: string): string | undefined {
@@ -74,6 +83,12 @@ function revalidateJoinedPortals(): void {
   }
 }
 
+function revalidateInternReviewViews(): void {
+  for (const path of ["/admin/intern-reviews", "/subadmin/intern-reviews"]) {
+    revalidatePath(path);
+  }
+}
+
 export async function createJobOfferAction(
   formData: FormData
 ): Promise<EmployeeActionResult> {
@@ -90,7 +105,7 @@ export async function createJobOfferAction(
       notes: readOptionalText(formData, "notes"),
     });
     if (!validated.success) {
-      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
+      return { success: false, error: CHECK_FIELDS_MESSAGE, fieldErrors: toFieldErrors(validated.error) };
     }
 
     const offer = await offerService.createDraftOffer(user, validated.data);
@@ -98,7 +113,7 @@ export async function createJobOfferAction(
     revalidateApplicationViews(validated.data.applicationId);
     return { success: true, data: offer };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Offer creation failed.") };
+    return { success: false, error: toActionError(err, "We couldn't save the offer. Please try again.") };
   }
 }
 
@@ -114,7 +129,7 @@ export async function extendJobOfferAction(
 
     const validated = OfferReferenceSchema.safeParse({ offerId });
     if (!validated.success) {
-      return { success: false, error: "Invalid offer reference" };
+      return { success: false, error: "This offer could not be found. Please reload the page." };
     }
 
     const result = await offerService.extendOffer(user, validated.data.offerId);
@@ -123,31 +138,85 @@ export async function extendJobOfferAction(
     revalidateApplicationViews(result.applicationId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Offer extension failed.") };
+    return { success: false, error: toActionError(err, "We couldn't extend the offer. Please try again.") };
   }
 }
 
+/** Fields of the accept form a candidate can correct; other problems need a page reload. */
+const SIGNATURE_FIELDS = new Set(["signedName", "consent"]);
+
+/** Field errors carried by a service ValidationError (`issues: [{ path, message }]`). */
+function fieldErrorsFromIssues(issues: readonly unknown[]): Record<string, string> | undefined {
+  const fieldErrors: Record<string, string> = {};
+  for (const issue of issues) {
+    if (!issue || typeof issue !== "object") continue;
+    const { path, message } = issue as { path?: unknown; message?: unknown };
+    const field = Array.isArray(path) ? path[0] : undefined;
+    if (typeof field === "string" && typeof message === "string") {
+      fieldErrors[field] = message;
+    }
+  }
+  return Object.keys(fieldErrors).length > 0 ? fieldErrors : undefined;
+}
+
+/**
+ * The signed-in candidate answers their own extended offer. Accepting is an electronic
+ * signature: the typed full legal name, explicit consent and the hash of the letter they
+ * reviewed are required, and the IP hash and browser are recorded as evidence. Declining
+ * needs no signature. Ownership and state are enforced by the service.
+ */
 export async function candidateDecideOfferAction(
   formData: FormData
-): Promise<EmployeeActionResult> {
+): Promise<EmployeeActionResult<{ decision: "ACCEPT" | "DECLINE" }>> {
   try {
     const user = await requireAuth();
 
+    const consent = readText(formData, "consent");
     const validated = CandidateOfferDecisionSchema.safeParse({
       offerId: readText(formData, "offerId"),
       decision: readText(formData, "decision"),
       declineReason: readOptionalText(formData, "declineReason"),
+      signedName: readText(formData, "signedName"),
+      consent: consent === "true" || consent === "on",
+      letterHash: readText(formData, "letterHash"),
     });
     if (!validated.success) {
-      return { success: false, error: "Invalid offer decision parameters" };
+      const fieldErrors = Object.fromEntries(
+        Object.entries(toFieldErrors(validated.error)).filter(([field]) => SIGNATURE_FIELDS.has(field))
+      );
+      const onlySignatureProblems = validated.error.issues.every(
+        (issue) => typeof issue.path[0] === "string" && SIGNATURE_FIELDS.has(issue.path[0])
+      );
+      return onlySignatureProblems
+        ? { success: false, error: CHECK_FIELDS_MESSAGE, fieldErrors }
+        : { success: false, error: "We couldn't record your answer. Please reload the page and try again." };
     }
 
-    const result = await offerService.candidateDecideOffer(user, validated.data);
+    let applicationId: string;
+    if (validated.data.decision === "ACCEPT") {
+      const requestHeaders = await headers();
+      const result = await offerService.acceptOfferElectronically(user, validated.data, {
+        ipHash: getClientIpHash(requestHeaders, "offer-esign"),
+        userAgent: requestHeaders.get("user-agent"),
+      });
+      // The acceptance queued a confirmation email.
+      scheduleOutboxFlush();
+      applicationId = result.applicationId;
+    } else {
+      const result = await offerService.declineOffer(user, validated.data);
+      applicationId = result.applicationId;
+    }
 
-    revalidateApplicationViews(result.applicationId);
-    return { success: true, data: null };
+    revalidateApplicationViews(applicationId);
+    return { success: true, data: { decision: validated.data.decision } };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to process offer decision.") };
+    if (err instanceof ValidationError) {
+      const fieldErrors = fieldErrorsFromIssues(err.issues);
+      if (fieldErrors) {
+        return { success: false, error: err.message, fieldErrors };
+      }
+    }
+    return { success: false, error: toActionError(err, "We couldn't record your answer. Please try again.") };
   }
 }
 
@@ -164,7 +233,7 @@ export async function revokeJobOfferAction(
 
     const validated = RevokeJobOfferSchema.safeParse({ offerId, reason: reason ?? null });
     if (!validated.success) {
-      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
+      return { success: false, error: CHECK_FIELDS_MESSAGE, fieldErrors: toFieldErrors(validated.error) };
     }
 
     const result = await offerService.revokeOffer(user, validated.data);
@@ -172,7 +241,7 @@ export async function revokeJobOfferAction(
     revalidateApplicationViews(result.applicationId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Revoking offer failed.") };
+    return { success: false, error: toActionError(err, "We couldn't revoke the offer. Please try again.") };
   }
 }
 
@@ -205,7 +274,7 @@ export async function hireEmployeeFromApplicationAction(
       internalNotes: readOptionalText(formData, "internalNotes"),
     });
     if (!validated.success) {
-      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
+      return { success: false, error: CHECK_FIELDS_MESSAGE, fieldErrors: toFieldErrors(validated.error) };
     }
 
     const employee = await employeeService.createEmployeeFromApplication(user, validated.data);
@@ -216,7 +285,7 @@ export async function hireEmployeeFromApplicationAction(
     revalidateJoinedPortals();
     return { success: true, data: employee };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Marking the employee as joined failed.") };
+    return { success: false, error: toActionError(err, "We couldn't mark the employee as joined. Please try again.") };
   }
 }
 
@@ -238,9 +307,10 @@ export async function markInternJoinedAction(
       joiningDate: readText(formData, "joiningDate"),
       initialStatus: readText(formData, "initialStatus"),
       managerId: readOptionalText(formData, "managerId"),
+      reviewAfterMonths: readText(formData, "reviewAfterMonths"),
     });
     if (!validated.success) {
-      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
+      return { success: false, error: CHECK_FIELDS_MESSAGE, fieldErrors: toFieldErrors(validated.error) };
     }
 
     const result = await employeeService.createEmployeeFromInternship(user, validated.data);
@@ -250,9 +320,10 @@ export async function markInternJoinedAction(
     revalidateApplicationViews(result.applicationId);
     revalidateEmployeeViews(result.employeeId);
     revalidateJoinedPortals();
+    revalidateInternReviewViews();
     return { success: true, data: { employeeId: result.employeeId } };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Marking the intern as joined failed.") };
+    return { success: false, error: toActionError(err, "We couldn't mark the intern as joined. Please try again.") };
   }
 }
 
@@ -268,7 +339,7 @@ export async function updateEmployeeStatusAction(
       remarks: readOptionalText(formData, "remarks"),
     });
     if (!validated.success) {
-      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
+      return { success: false, error: CHECK_FIELDS_MESSAGE, fieldErrors: toFieldErrors(validated.error) };
     }
 
     await employeeService.updateEmployeeStatus(user, validated.data);
@@ -276,7 +347,7 @@ export async function updateEmployeeStatusAction(
     revalidateEmployeeViews(validated.data.employeeId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Status update failed.") };
+    return { success: false, error: toActionError(err, "We couldn't update the status. Please try again.") };
   }
 }
 
@@ -292,7 +363,7 @@ export async function assignEmployeeManagerAction(
       remarks: readOptionalText(formData, "remarks"),
     });
     if (!validated.success) {
-      return { success: false, error: "Validation failed", fieldErrors: toFieldErrors(validated.error) };
+      return { success: false, error: CHECK_FIELDS_MESSAGE, fieldErrors: toFieldErrors(validated.error) };
     }
 
     await employeeService.assignManager(user, validated.data);
@@ -300,7 +371,7 @@ export async function assignEmployeeManagerAction(
     revalidateEmployeeViews(validated.data.employeeId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Manager assignment failed.") };
+    return { success: false, error: toActionError(err, "We couldn't update the reporting manager. Please try again.") };
   }
 }
 
@@ -318,7 +389,7 @@ export async function updateEmployeeChecklistAction(
       completed,
     });
     if (!validated.success) {
-      return { success: false, error: "Invalid checklist parameters" };
+      return { success: false, error: "We couldn't update this checklist item. Please reload the page and try again." };
     }
 
     await employeeService.updateOnboardingChecklist(user, validated.data);
@@ -326,7 +397,7 @@ export async function updateEmployeeChecklistAction(
     revalidateEmployeeViews(validated.data.employeeId);
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Checklist update failed.") };
+    return { success: false, error: toActionError(err, "We couldn't update the checklist. Please try again.") };
   }
 }
 
@@ -344,14 +415,85 @@ export async function processEmployeeExitAction(
       exitInterviewNotes: readOptionalText(formData, "exitInterviewNotes"),
     });
     if (!validated.success) {
-      return { success: false, error: "Exit validation failed", fieldErrors: toFieldErrors(validated.error) };
+      return { success: false, error: CHECK_FIELDS_MESSAGE, fieldErrors: toFieldErrors(validated.error) };
     }
 
     await employeeService.processEmployeeExit(user, validated.data);
 
     revalidateEmployeeViews(validated.data.employeeId);
+    revalidateInternReviewViews();
+    revalidateJoinedPortals();
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Exit processing failed.") };
+    return { success: false, error: toActionError(err, "We couldn't record the exit. Please try again.") };
+  }
+}
+
+/**
+ * Records the outcome of an intern progress review (CONVERT / EXTEND / END_INTERNSHIP).
+ * ADMIN, or HR with canEmployees; never for one's own internship (enforced by the service).
+ */
+export async function recordInternReviewOutcomeAction(
+  formData: FormData
+): Promise<EmployeeActionResult<ReviewOutcomeResult>> {
+  try {
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
+
+    const validated = RecordReviewOutcomeSchema.safeParse({
+      reviewId: readText(formData, "reviewId"),
+      outcome: readText(formData, "outcome"),
+      internalNotes: readOptionalText(formData, "internalNotes"),
+      sharedSummary: readOptionalText(formData, "sharedSummary"),
+      proposedDesignation: readText(formData, "proposedDesignation"),
+      proposedDepartment: readText(formData, "proposedDepartment"),
+      effectiveDate: readText(formData, "effectiveDate"),
+      initialStatus: readText(formData, "initialStatus"),
+      nextReviewAfterMonths: readText(formData, "nextReviewAfterMonths"),
+    });
+    if (!validated.success) {
+      return { success: false, error: CHECK_FIELDS_MESSAGE, fieldErrors: toFieldErrors(validated.error) };
+    }
+
+    const result = await conversionService.recordReviewOutcome(user, validated.data);
+    scheduleOutboxFlush();
+
+    revalidateInternReviewViews();
+    revalidateEmployeeViews(result.employeeId);
+    revalidatePath("/intern/dashboard");
+    return { success: true, data: result };
+  } catch (err: unknown) {
+    return { success: false, error: toActionError(err, "We couldn't save the review outcome. Please try again.") };
+  }
+}
+
+/**
+ * The signed-in intern accepts or declines their own full-time conversion offer. Any signed-in
+ * user may call it, but the service only finds reviews of the caller's own employee record.
+ */
+export async function respondToConversionOfferAction(
+  formData: FormData
+): Promise<EmployeeActionResult<ConversionResponseResult>> {
+  try {
+    const user = await requireAuth();
+
+    const validated = ConversionOfferResponseSchema.safeParse({
+      reviewId: readText(formData, "reviewId"),
+      decision: readText(formData, "decision"),
+    });
+    if (!validated.success) {
+      return { success: false, error: "We couldn't record your answer. Please reload the page and try again." };
+    }
+
+    const result = await conversionService.respondToOffer(user, validated.data);
+    if (result.converted) {
+      scheduleOutboxFlush();
+    }
+
+    revalidateJoinedPortals();
+    revalidateInternReviewViews();
+    revalidateEmployeeViews();
+    return { success: true, data: result };
+  } catch (err: unknown) {
+    return { success: false, error: toActionError(err, "We couldn't record your answer. Please try again.") };
   }
 }

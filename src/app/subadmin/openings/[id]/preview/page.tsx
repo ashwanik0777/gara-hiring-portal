@@ -6,6 +6,7 @@ import {
   type AdminOpeningDetail,
 } from "@/features/openings/services/opening-service";
 import { openingIdSchema } from "@/features/openings/schemas";
+import { env } from "@/lib/env";
 import { OpeningPreviewView } from "@/features/openings/components/opening-preview-view";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { Eye } from "lucide-react";
@@ -61,7 +62,7 @@ export default async function SubAdminPreviewOpeningPage({
           Status: {opening.status})
         </span>
       </div>
-      <OpeningPreviewView opening={opening} basePath="/subadmin/openings" />
+      <OpeningPreviewView opening={opening} basePath="/subadmin/openings" documentMode={env.DOCUMENT_STORAGE_MODE} />
     </div>
   );
 }

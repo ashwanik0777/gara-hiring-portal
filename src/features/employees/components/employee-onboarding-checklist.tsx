@@ -44,6 +44,8 @@ export function EmployeeOnboardingChecklist({
           )
         );
       }
+    } catch {
+      setError("Something went wrong. Please check your connection and try again.");
     } finally {
       setLoadingId(null);
     }

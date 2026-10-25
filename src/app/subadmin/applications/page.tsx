@@ -3,13 +3,21 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
-import { ApplicationStatus } from "@prisma/client";
+import { ApplicationStatus, Role } from "@prisma/client";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { ForbiddenError } from "@/lib/errors";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/feedback/empty-state";
+import { getManualTransitionTargets } from "@/features/recruitment/schemas";
+import {
+  BulkSelectionProvider,
+  BulkSelectCheckbox,
+  BulkSelectPageToggle,
+  type BulkSelectableApplication,
+} from "@/features/recruitment/components/bulk-selection";
+import { BulkActionBar } from "@/features/recruitment/components/bulk-action-bar";
 import {
   Search,
   Filter,
@@ -20,6 +28,8 @@ import {
   FileText,
   Award,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 export const instant = false;
@@ -28,8 +38,12 @@ interface SubAdminApplicationsPageProps {
   searchParams: Promise<{
     status?: string;
     search?: string;
+    page?: string;
   }>;
 }
+
+/** Applications per list page; also the most a "select page" bulk action can include. */
+const PAGE_SIZE = 50;
 
 function getInitials(name?: string | null) {
   if (!name) return "CA";
@@ -134,7 +148,7 @@ export default async function SubAdminApplicationsPage({
     return <UnauthorizedState message="You do not have permission to view applications." />;
   }
 
-  const { status, search } = await searchParams;
+  const { status, search, page } = await searchParams;
 
   const validStatus =
     status && Object.values(ApplicationStatus).includes(status as ApplicationStatus)
@@ -166,6 +180,28 @@ export default async function SubAdminApplicationsPage({
     }
     throw error;
   }
+
+  // Bulk stage changes use the single-transition rules: ADMIN/HR with canApplications.
+  const canBulkAct = user.roles.some((role) => role === Role.ADMIN || role === Role.HR);
+
+  const pageCount = Math.max(1, Math.ceil(applications.length / PAGE_SIZE));
+  const currentPage = Math.min(Math.max(1, Number.parseInt(page ?? "1", 10) || 1), pageCount);
+  const pageApplications = applications.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const bulkItems: BulkSelectableApplication[] = pageApplications.map((app) => ({
+    id: app.id,
+    referenceCode: app.referenceCode,
+    candidateName: app.candidate.fullName,
+    status: app.status,
+    manualTargets: getManualTransitionTargets(app.status),
+  }));
+  const pageHref = (target: number) => {
+    const params = new URLSearchParams();
+    if (validStatus) params.set("status", validStatus);
+    if (search) params.set("search", search);
+    if (target > 1) params.set("page", String(target));
+    const query = params.toString();
+    return `/subadmin/applications${query ? `?${query}` : ""}`;
+  };
 
   const countByStatus = statusCounts.counts;
   const globalTotal = statusCounts.total;
@@ -442,70 +478,132 @@ export default async function SubAdminApplicationsPage({
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-3">
-          {applications.map((app) => (
-            <Card
-              key={app.id}
-              className="rounded-2xl border border-border/80 hover:border-primary/50 transition-all shadow-2xs hover:shadow-xs"
-            >
-              <CardContent className="p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div className="flex items-start gap-3.5 flex-1 min-w-0">
-                  <div className="h-10 w-10 rounded-2xl bg-primary/10 text-primary font-bold text-xs flex items-center justify-center shrink-0 border border-primary/20 shadow-2xs">
-                    {getInitials(app.candidate.fullName)}
-                  </div>
-
-                  <div className="space-y-1 flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-[11px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-lg border border-primary/20">
-                        {app.referenceCode}
-                      </span>
-                      {getStatusBadge(app.status)}
-                      <span className="text-xs text-muted-foreground flex items-center gap-1 truncate">
-                        <Briefcase className="h-3 w-3 shrink-0" />
-                        <span className="font-medium text-foreground">{app.opening.title}</span>
-                        <span>• {app.opening.department}</span>
-                      </span>
-                    </div>
-
-                    <div>
-                      <h3 className="text-sm sm:text-base font-bold text-foreground truncate">
-                        {app.candidate.fullName}
-                      </h3>
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span>{app.candidate.email}</span>
-                        {app.candidate.phone && <span>• {app.candidate.phone}</span>}
-                        {app.candidate.location && <span>• {app.candidate.location}</span>}
-                      </div>
-                    </div>
-
-                    {app.latestInterview && (
-                      <div className="inline-flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2.5 py-1 rounded-xl border border-amber-500/20 font-mono">
-                        <Calendar className="h-3 w-3" />
-                        <span>
-                          {app.latestInterview.roundName}: {new Date(app.latestInterview.scheduledAt).toLocaleDateString()}
-                        </span>
+        <ApplicationListSection canBulkAct={canBulkAct} items={bulkItems}>
+          <div className="grid grid-cols-1 gap-3">
+            {pageApplications.map((app) => (
+              <Card
+                key={app.id}
+                className="rounded-2xl border border-border/80 hover:border-primary/50 transition-all shadow-2xs hover:shadow-xs"
+              >
+                <CardContent className="p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3.5 flex-1 min-w-0">
+                    {canBulkAct && (
+                      <div className="pt-3">
+                        <BulkSelectCheckbox
+                          applicationId={app.id}
+                          label={`Select ${app.referenceCode} (${app.candidate.fullName})`}
+                        />
                       </div>
                     )}
+                    <div className="h-10 w-10 rounded-2xl bg-primary/10 text-primary font-bold text-xs flex items-center justify-center shrink-0 border border-primary/20 shadow-2xs">
+                      {getInitials(app.candidate.fullName)}
+                    </div>
+
+                    <div className="space-y-1 flex-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-[11px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-lg border border-primary/20">
+                          {app.referenceCode}
+                        </span>
+                        {getStatusBadge(app.status)}
+                        <span className="text-xs text-muted-foreground flex items-center gap-1 truncate">
+                          <Briefcase className="h-3 w-3 shrink-0" />
+                          <span className="font-medium text-foreground">{app.opening.title}</span>
+                          <span>• {app.opening.department}</span>
+                        </span>
+                      </div>
+
+                      <div>
+                        <h3 className="text-sm sm:text-base font-bold text-foreground truncate">
+                          {app.candidate.fullName}
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <span>{app.candidate.email}</span>
+                          {app.candidate.phone && <span>• {app.candidate.phone}</span>}
+                          {app.candidate.location && <span>• {app.candidate.location}</span>}
+                        </div>
+                      </div>
+
+                      {app.latestInterview && (
+                        <div className="inline-flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 px-2.5 py-1 rounded-xl border border-amber-500/20 font-mono">
+                          <Calendar className="h-3 w-3" />
+                          <span>
+                            {app.latestInterview.roundName}: {new Date(app.latestInterview.scheduledAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                <div className="flex sm:flex-col items-end justify-between w-full sm:w-auto gap-3 pt-3 sm:pt-0 border-t sm:border-t-0 border-border/60 shrink-0">
-                  <span className="text-[11px] text-muted-foreground flex items-center gap-1 font-mono">
-                    <Clock className="h-3 w-3" />
-                    {new Date(app.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                  </span>
+                  <div className="flex sm:flex-col items-end justify-between w-full sm:w-auto gap-3 pt-3 sm:pt-0 border-t sm:border-t-0 border-border/60 shrink-0">
+                    <span className="text-[11px] text-muted-foreground flex items-center gap-1 font-mono">
+                      <Clock className="h-3 w-3" />
+                      {new Date(app.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    </span>
 
-                  <Link href={`/subadmin/applications/${app.id}`}>
-                    <Button size="sm" className="rounded-xl h-8 text-xs font-semibold gap-1.5 shadow-2xs cursor-pointer">
-                      Review Cockpit <ArrowRight className="h-3.5 w-3.5" />
-                    </Button>
+                    <Link href={`/subadmin/applications/${app.id}`}>
+                      <Button size="sm" className="rounded-xl h-8 text-xs font-semibold gap-1.5 shadow-2xs cursor-pointer">
+                        Review Cockpit <ArrowRight className="h-3.5 w-3.5" />
+                      </Button>
+                    </Link>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+          {pageCount > 1 && (
+            <nav aria-label="Application list pages" className="flex items-center justify-between gap-3 pt-2 text-xs">
+              <span className="text-muted-foreground font-mono">
+                Page {currentPage} of {pageCount} · {applications.length} applications
+              </span>
+              <div className="flex items-center gap-2">
+                {currentPage > 1 ? (
+                  <Link
+                    href={pageHref(currentPage - 1)}
+                    className="inline-flex items-center gap-1 rounded-xl border border-border/80 px-3 py-1.5 font-semibold text-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" /> Previous
                   </Link>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                ) : null}
+                {currentPage < pageCount ? (
+                  <Link
+                    href={pageHref(currentPage + 1)}
+                    className="inline-flex items-center gap-1 rounded-xl border border-border/80 px-3 py-1.5 font-semibold text-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  >
+                    Next <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                  </Link>
+                ) : null}
+              </div>
+            </nav>
+          )}
+        </ApplicationListSection>
       )}
     </div>
+  );
+}
+
+/**
+ * Wraps the list with checkbox selection and the sticky bulk action bar for users who may
+ * change stages; everyone else gets the plain list.
+ */
+function ApplicationListSection({
+  canBulkAct,
+  items,
+  children,
+}: {
+  canBulkAct: boolean;
+  items: BulkSelectableApplication[];
+  children: React.ReactNode;
+}) {
+  if (!canBulkAct) {
+    return <div className="space-y-3">{children}</div>;
+  }
+  return (
+    <BulkSelectionProvider items={items}>
+      <div className="space-y-3">
+        <BulkSelectPageToggle />
+        {children}
+        <BulkActionBar />
+      </div>
+    </BulkSelectionProvider>
   );
 }

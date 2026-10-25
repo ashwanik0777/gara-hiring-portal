@@ -1,11 +1,15 @@
 import React from "react";
-import { Briefcase } from "lucide-react";
+import { Briefcase, FileDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { OfferStatus } from "@/types/enums";
-import { formatCalendarDate, SectionCard } from "./self-service-ui";
+import { offerLetterDownloadPath } from "@/features/employees/offer-esign";
+import { BUSINESS_TIME_ZONE } from "@/lib/time/business-time";
+import { formatCalendarDate, linkButtonClass, SectionCard } from "./self-service-ui";
 
 /** Candidate-visible offer fields; the candidate projection never contains staff notes. */
 export interface ReadOnlyOfferData {
+  /** Offer id; enables the letter download (the route re-checks ownership). */
+  id?: string;
   status: OfferStatus;
   designation: string;
   department: string;
@@ -13,6 +17,19 @@ export interface ReadOnlyOfferData {
   expectedJoiningDate: Date | string;
   termsSummary: string;
   decisionAt?: Date | string | null;
+  /** Electronic acceptance evidence, when the offer was accepted with a typed signature. */
+  signature?: { signedName: string; signedAt: Date | string; documentHash: string } | null;
+}
+
+/** An instant (e.g. the signature time) in the business time zone. */
+function formatInstant(value: Date | string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not set";
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: BUSINESS_TIME_ZONE,
+  }).format(date);
 }
 
 const STATUS_BADGES: Partial<Record<OfferStatus, { label: string; variant: "success" | "destructive" | "outline" }>> = {
@@ -59,10 +76,29 @@ export function ReadOnlyOfferSummary({ offer }: { offer: ReadOnlyOfferData }) {
           {offer.termsSummary}
         </p>
       </div>
-      {offer.decisionAt && offer.status !== OfferStatus.EXTENDED && (
+      {offer.status === OfferStatus.ACCEPTED && offer.signature ? (
         <p className="mt-3 text-xs text-muted-foreground">
-          {offer.status === OfferStatus.ACCEPTED ? "Accepted" : "Declined"} on {formatCalendarDate(offer.decisionAt)}.
+          Accepted electronically as <span className="font-medium text-foreground">{offer.signature.signedName}</span>{" "}
+          on {formatInstant(offer.signature.signedAt)} (document hash{" "}
+          <span className="font-mono">{offer.signature.documentHash.slice(0, 16)}</span>).
         </p>
+      ) : (
+        offer.decisionAt &&
+        offer.status !== OfferStatus.EXTENDED && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {offer.status === OfferStatus.ACCEPTED ? "Accepted" : "Declined"} on {formatCalendarDate(offer.decisionAt)}.
+          </p>
+        )
+      )}
+      {offer.id && (
+        <div className="mt-4">
+          <a href={offerLetterDownloadPath(offer.id)} className={linkButtonClass("outline")}>
+            <FileDown className="h-3.5 w-3.5" aria-hidden="true" />
+            {offer.status === OfferStatus.ACCEPTED && offer.signature
+              ? "Download signed offer letter"
+              : "Download offer letter"}
+          </a>
+        </div>
       )}
     </SectionCard>
   );

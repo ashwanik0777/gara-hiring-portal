@@ -13,7 +13,13 @@ import {
   CandidateProfileData,
 } from "../types";
 import { CandidateProfileInput } from "../schemas";
-import { NotFoundError, ForbiddenError, ValidationError, ConflictError } from "@/lib/errors";
+import {
+  AppError,
+  NotFoundError,
+  ForbiddenError,
+  ValidationError,
+  ConflictError,
+} from "@/lib/errors";
 import { logger } from "@/lib/logging/logger";
 import { hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import {
@@ -22,6 +28,9 @@ import {
   isInterviewerScoped,
 } from "@/features/recruitment/services/application-access";
 import { OpeningStatus, Prisma } from "@prisma/client";
+import { env } from "@/lib/env";
+import { describeDocumentLink, type DocumentLinkView } from "../document-links";
+import { normalizeStoredAttribution, type ResolvedAttribution } from "../source-tracking";
 
 /** Bounded number of attempts to find an unused reference code. */
 export const MAX_REFERENCE_ATTEMPTS = 5;
@@ -31,6 +40,21 @@ export const MAX_REFERENCE_ATTEMPTS = 5;
  * form did not request a document and the candidate attached none.
  */
 export const NO_RESUME_STORAGE_KEY = "";
+
+/** Shown when a file is sent while documents are collected as share links. */
+export const FILE_UPLOADS_DISABLED_MESSAGE =
+  "File uploads aren't available. Please paste a share link to your resume instead.";
+
+/** Returned by the resume download for applications whose resume is an external link. */
+export const RESUME_IS_LINK_MESSAGE =
+  "This resume was shared as a link, so there is no file to download. Open the link from the application page instead.";
+
+/** 404 raised by the resume download when the application only has a share link. */
+export class ResumeIsLinkError extends AppError {
+  constructor() {
+    super(RESUME_IS_LINK_MESSAGE, "RESUME_IS_LINK", 404);
+  }
+}
 
 /**
  * Generates an immutable human-readable reference code.
@@ -54,6 +78,10 @@ function isUniqueConstraintViolation(error: unknown): boolean {
 }
 
 const PDF_MAGIC_BYTES = "%PDF-";
+
+/** Summary shown above per-field errors when the submitted form is invalid. */
+export const APPLICATION_FORM_INVALID_MESSAGE =
+  "Some answers need your attention. Please check the highlighted fields and try again.";
 
 export class ApplicationService {
   /**
@@ -153,8 +181,12 @@ export class ApplicationService {
       type: string;
       buffer: Buffer | Uint8Array;
     };
+    /** Normalized candidate source (see source-tracking.ts); a direct apply when omitted. */
+    attribution?: ResolvedAttribution;
   }): Promise<{ applicationId: string; referenceCode: string }> {
     const { userId, openingSlug, responses, resumeFile } = params;
+    // Re-checked here so only allow-listed codes and bounded plain text are ever stored.
+    const attribution = normalizeStoredAttribution(params.attribution);
 
     // 1. Fetch user & ensure profile exists
     const user = await prisma.user.findUnique({
@@ -188,18 +220,18 @@ export class ApplicationService {
     });
 
     if (!opening) {
-      throw new NotFoundError("Opening not found");
+      throw new NotFoundError("We couldn't find this opening. It may have been removed.");
     }
 
     if (opening.status !== OpeningStatus.PUBLISHED) {
-      throw new ValidationError(
-        `This opening is currently ${opening.status.toLowerCase()} and is not accepting applications.`
-      );
+      throw new ValidationError("This opening is no longer accepting applications.");
     }
 
     const activeFormVersion = opening.formVersions[0];
     if (!activeFormVersion) {
-      throw new ValidationError("This opening does not have an active application form configured.");
+      throw new ValidationError(
+        "This opening isn't accepting applications right now. Please try again later."
+      );
     }
 
     // Duplicate-application handling is undecided (OD-005): repeat submissions are not
@@ -207,30 +239,38 @@ export class ApplicationService {
 
     const formSchema = activeFormVersion.schemaDefinition as unknown as FormSchemaDefinition;
 
-    // 3. Server-side validation of untrusted responses & file.
-    // The single uploaded document maps to the form's primary file field; whether it is
-    // mandatory is decided by the published form definition only.
+    // 3. Server-side validation of untrusted responses & document.
+    // The single document maps to the form's primary file field; whether it is mandatory is
+    // decided by the published form definition only. In "link" mode (decision 2026-10-25) the
+    // candidate provides an https share link and no file is accepted or stored.
+    const documentMode = env.DOCUMENT_STORAGE_MODE;
     const documentField = getPrimaryFileField(formSchema);
-    if (resumeFile && !documentField) {
-      throw new ValidationError("This application form does not accept document uploads", [
-        { field: "resume", message: "Remove the attached document and submit again" },
+    const documentFieldName = documentField?.name ?? "resume";
+    if (resumeFile && documentMode === "link") {
+      throw new ValidationError(FILE_UPLOADS_DISABLED_MESSAGE, [
+        { field: documentFieldName, message: FILE_UPLOADS_DISABLED_MESSAGE },
       ]);
     }
-    const documentFieldName = documentField?.name ?? "resume";
+    if (resumeFile && !documentField) {
+      throw new ValidationError("This application form does not accept documents.", [
+        { field: "resume", message: "Remove the attached document and submit again." },
+      ]);
+    }
 
     const fileInputs: Record<string, FileMetadataInput> = {};
     if (resumeFile && documentField) {
       fileInputs[documentField.name] = resumeFile;
     }
 
-    const validation = validateFormResponses(formSchema, responses, fileInputs);
+    const validation = validateFormResponses(formSchema, responses, fileInputs, { documentMode });
     if (!validation.isValid) {
       const issues = Object.entries(validation.errors).map(([field, message]) => ({
         field,
         message,
       }));
-      throw new ValidationError("Application form validation failed", issues);
+      throw new ValidationError(APPLICATION_FORM_INVALID_MESSAGE, issues);
     }
+    const resumeUrl = documentMode === "link" ? validation.documentLink : null;
 
     if (resumeFile) {
       // Validate PDF magic bytes to prevent MIME type spoofing
@@ -244,17 +284,20 @@ export class ApplicationService {
       }
     }
 
-    // 4. Secure upload to isolated private storage (only when a document was attached)
-    const { getStorageService } = await import("@/infrastructure/storage");
-    const storageService = getStorageService();
-    const uploadResult = resumeFile
-      ? await storageService.upload(
-          resumeFile.buffer,
-          resumeFile.name,
-          resumeFile.type,
-          `resumes/${opening.slug}`
-        )
+    // 4. Secure upload to isolated private storage (local mode, only when a document was
+    // attached). Link mode never touches storage.
+    const storageService = resumeFile
+      ? (await import("@/infrastructure/storage")).getStorageService()
       : null;
+    const uploadResult =
+      resumeFile && storageService
+        ? await storageService.upload(
+            resumeFile.buffer,
+            resumeFile.name,
+            resumeFile.type,
+            `resumes/${opening.slug}`
+          )
+        : null;
     const resumeStorageKey = uploadResult?.storageKey ?? NO_RESUME_STORAGE_KEY;
 
     // 5 + 6. DB Transaction: Application + Status History + Outbox + Audit.
@@ -272,6 +315,9 @@ export class ApplicationService {
               status: ApplicationStatus.SUBMITTED,
               submittedResponses: validation.sanitizedResponses as Prisma.InputJsonValue,
               resumeStorageKey,
+              resumeUrl,
+              source: attribution.source,
+              sourceDetail: attribution.sourceDetail,
             },
           });
 
@@ -310,6 +356,7 @@ export class ApplicationService {
               diffPayload: {
                 referenceCode: application.referenceCode,
                 openingSlug: opening.slug,
+                source: attribution.source,
               },
             },
           });
@@ -324,7 +371,7 @@ export class ApplicationService {
       };
     } catch (error) {
       // Never leave an orphaned private document behind when the records were not written.
-      if (uploadResult) {
+      if (uploadResult && storageService) {
         await storageService.delete(uploadResult.storageKey).catch((cleanupError: unknown) => {
           logger.error("Failed to remove uploaded document after a failed submission", cleanupError, {
             openingId: opening.id,
@@ -478,6 +525,7 @@ export class ApplicationService {
       submittedResponses: (application.submittedResponses ?? {}) as Record<string, unknown>,
       hasResume: application.resumeStorageKey !== NO_RESUME_STORAGE_KEY,
       resumeDownloadUrl: `/api/candidate/applications/${application.id}/resume`,
+      resumeLink: describeDocumentLink(application.resumeUrl),
       timeline: application.statusHistory,
     };
   }
@@ -487,16 +535,57 @@ export class ApplicationService {
    * Readable by the owning candidate, and by recruitment staff holding `canApplications`;
    * interviewer-scoped staff only for applications they are assigned to
    * (docs/SECURITY.md "Record-Level Access Examples").
+   * Link-only resumes have no stored file and raise ResumeIsLinkError (404, RESUME_IS_LINK).
    */
   async getApplicationResume(
     applicationId: string,
     viewer: AuthenticatedUser
   ): Promise<{ buffer: Buffer; mimeType: string; filename: string }> {
+    const application = await this.loadResumeAccessRecord(applicationId, viewer);
+
+    if (application.resumeStorageKey === NO_RESUME_STORAGE_KEY) {
+      if (application.resumeUrl) {
+        throw new ResumeIsLinkError();
+      }
+      throw new NotFoundError("No document was attached to this application.");
+    }
+
+    const { getStorageService } = await import("@/infrastructure/storage");
+    const storage = getStorageService();
+    const file = await storage.get(application.resumeStorageKey);
+    if (!file) {
+      throw new NotFoundError("This resume file is no longer available.");
+    }
+
+    return file;
+  }
+
+  /**
+   * The external resume share link of an application (link mode), with the same access
+   * rules as the file download. Null when the application has no valid link.
+   */
+  async getApplicationResumeLink(
+    applicationId: string,
+    viewer: AuthenticatedUser
+  ): Promise<DocumentLinkView | null> {
+    const application = await this.loadResumeAccessRecord(applicationId, viewer);
+    return describeDocumentLink(application.resumeUrl);
+  }
+
+  /**
+   * Loads the resume columns of an application after checking the viewer may read them:
+   * the owning candidate, or authorized recruitment staff.
+   */
+  private async loadResumeAccessRecord(
+    applicationId: string,
+    viewer: AuthenticatedUser
+  ): Promise<{ resumeStorageKey: string; resumeUrl: string | null }> {
     const application = await prisma.application.findUnique({
       where: { id: applicationId },
       select: {
         id: true,
         resumeStorageKey: true,
+        resumeUrl: true,
         assignedRecruiterId: true,
         candidate: {
           select: { userId: true },
@@ -521,18 +610,10 @@ export class ApplicationService {
       });
     }
 
-    if (application.resumeStorageKey === NO_RESUME_STORAGE_KEY) {
-      throw new NotFoundError("No document was attached to this application");
-    }
-
-    const { getStorageService } = await import("@/infrastructure/storage");
-    const storage = getStorageService();
-    const file = await storage.get(application.resumeStorageKey);
-    if (!file) {
-      throw new NotFoundError("Resume file could not be retrieved from private storage");
-    }
-
-    return file;
+    return {
+      resumeStorageKey: application.resumeStorageKey,
+      resumeUrl: application.resumeUrl ?? null,
+    };
   }
 
   /**

@@ -1,13 +1,14 @@
 import React from "react";
 import Link from "next/link";
 import { EvaluationStatus } from "@prisma/client";
-import type { EvaluationEnrollmentDetail } from "../types";
+import type { EvaluationEnrollmentDetail, SupervisorOption } from "../types";
 import { StartEvaluationDialog } from "./start-evaluation-dialog";
 import { CheckpointReviewPanel } from "./checkpoint-review-panel";
 import { FinalizeEvaluationDialog } from "./finalize-evaluation-dialog";
 import { OnboardingChecklistPanel } from "./onboarding-checklist-panel";
 import { InternJoiningPanel } from "./intern-joining-panel";
 import { InternJourneyBadge } from "./intern-journey-badge";
+import { ChangeSupervisorDialog } from "./change-supervisor-dialog";
 import { getInternJourneyState } from "../joining-state";
 import type { ReportingManagerOption } from "@/features/employees/types";
 import { CompletionAndCertificatePanel } from "@/features/certificates/components/completion-and-certificate-panel";
@@ -59,6 +60,14 @@ interface EvaluationCockpitProps {
     /** Employee records route for this portal, or null when the viewer cannot open them. */
     employeesHrefBase: string | null;
   };
+  /**
+   * Supervisor change (ADMIN / HR with canEvaluations, before a final outcome). `options`
+   * excludes the intern and the current supervisor; the server re-checks everything.
+   */
+  supervisorChange: {
+    canChange: boolean;
+    options: SupervisorOption[];
+  };
 }
 
 /**
@@ -71,6 +80,7 @@ export function EvaluationCockpit({
   applicationHref,
   canDecide,
   joining,
+  supervisorChange,
 }: EvaluationCockpitProps) {
   const isRunning = enrollment.status === EvaluationStatus.IN_PROGRESS;
   const journeyState = getInternJourneyState({
@@ -109,12 +119,21 @@ export function EvaluationCockpit({
               <span className="flex items-center gap-1.5">
                 <Building className="h-3.5 w-3.5" /> {enrollment.openingDepartment}
               </span>
-              {enrollment.supervisor && (
-                <span className="flex items-center gap-1.5">
-                  <UserCheck className="h-3.5 w-3.5" /> Supervisor: {enrollment.supervisor.name}
-                </span>
-              )}
+              <span className="flex items-center gap-1.5">
+                <UserCheck className="h-3.5 w-3.5" aria-hidden="true" /> Supervisor:{" "}
+                {enrollment.supervisor?.name ?? "Not assigned"}
+              </span>
             </div>
+            {supervisorChange.canChange && (
+              <div className="mt-3">
+                <ChangeSupervisorDialog
+                  enrollmentId={enrollment.id}
+                  internName={enrollment.candidateName}
+                  currentSupervisorName={enrollment.supervisor?.name ?? null}
+                  options={supervisorChange.options}
+                />
+              </div>
+            )}
           </div>
 
           {applicationHref && (

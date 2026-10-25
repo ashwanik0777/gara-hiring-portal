@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { AdminOpeningDetail } from "../services/opening-service";
-import { FormSchemaDefinition } from "@/features/application-forms/types";
+import { FormSchemaDefinition, type DocumentStorageMode } from "@/features/application-forms/types";
+import { DocumentModeNotice } from "@/features/application-forms/components/document-mode-notice";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -18,13 +19,15 @@ interface OpeningPreviewViewProps {
   opening: AdminOpeningDetail;
   /** Openings workspace the links stay in, e.g. "/admin/openings" or "/subadmin/openings". */
   basePath: string;
+  /** How document fields are collected (share link vs upload), from env.DOCUMENT_STORAGE_MODE. */
+  documentMode: DocumentStorageMode;
 }
 
 /**
  * Read-only preview of an opening and its active application form. Callers must
  * authorize the viewer (`canOpenings`) before rendering.
  */
-export function OpeningPreviewView({ opening, basePath }: OpeningPreviewViewProps) {
+export function OpeningPreviewView({ opening, basePath, documentMode }: OpeningPreviewViewProps) {
   const activeFormVersion =
     opening.formVersions.find((v) => v.id === opening.activeFormVersionId) ??
     opening.formVersions[0];
@@ -126,6 +129,7 @@ export function OpeningPreviewView({ opening, basePath }: OpeningPreviewViewProp
         </CardHeader>
 
         <CardContent className="space-y-6">
+          <DocumentModeNotice documentMode={documentMode} />
           {formSchema.sections.map((section) => (
             <div key={section.id} className="space-y-3 p-4 rounded-xl bg-muted/20 border border-border/50">
               <div>

@@ -144,12 +144,13 @@ export function SetPasswordScreen({
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* New Password */}
           <div>
-            <label className="text-xs font-semibold text-muted-foreground block mb-1.5">
+            <label htmlFor="set-password-screen-new-password" className="text-xs font-semibold text-muted-foreground block mb-1.5">
               New Password
             </label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <input
+                id="set-password-screen-new-password"
                 type={showPassword ? "text" : "password"}
                 required
                 value={newPassword}
@@ -211,12 +212,13 @@ export function SetPasswordScreen({
 
           {/* Confirm Password */}
           <div>
-            <label className="text-xs font-semibold text-muted-foreground block mb-1.5">
+            <label htmlFor="set-password-screen-confirm-new-password" className="text-xs font-semibold text-muted-foreground block mb-1.5">
               Confirm New Password
             </label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <input
+                id="set-password-screen-confirm-new-password"
                 type={showConfirmPassword ? "text" : "password"}
                 required
                 value={confirmPassword}

@@ -3,6 +3,7 @@
 import React, { useId } from "react";
 import { EmployeeStatus } from "@/types/enums";
 import { cn } from "@/lib/utils";
+import { REVIEW_PERIOD_MONTHS, type ReviewPeriodMonths } from "../conversion-rules";
 
 export type JoiningInitialStatus = typeof EmployeeStatus.ACTIVE | typeof EmployeeStatus.PROBATION;
 
@@ -69,6 +70,62 @@ export function InitialStatusField({ value, onChange, error, disabled }: Initial
           </label>
         ))}
       </div>
+      <FieldError id={errorId} message={error} />
+    </fieldset>
+  );
+}
+
+interface ReviewPeriodFieldProps {
+  legend: string;
+  hint?: string;
+  value: ReviewPeriodMonths | null;
+  onChange: (value: ReviewPeriodMonths) => void;
+  error?: string;
+  disabled?: boolean;
+}
+
+/**
+ * Required, explicit choice of when the intern progress review takes place (3 or 6 months).
+ * Nothing is preselected (product-owner decision 2026-10-25: no default).
+ */
+export function ReviewPeriodField({ legend, hint, value, onChange, error, disabled }: ReviewPeriodFieldProps) {
+  const groupName = useId();
+  const errorId = `${groupName}-error`;
+  const hintId = `${groupName}-hint`;
+  const describedBy = [hint ? hintId : null, error ? errorId : null].filter(Boolean).join(" ") || undefined;
+
+  return (
+    <fieldset aria-describedby={describedBy} disabled={disabled}>
+      <legend className="mb-1.5 block text-xs font-medium text-foreground">
+        {legend} <span className="text-destructive">*</span>
+      </legend>
+      <div className="grid grid-cols-2 gap-2">
+        {REVIEW_PERIOD_MONTHS.map((months) => (
+          <label
+            key={months}
+            className={cn(
+              "flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-xs transition-colors focus-within:ring-2 focus-within:ring-ring",
+              value === months ? "border-primary bg-primary/5" : "border-border bg-background"
+            )}
+          >
+            <input
+              type="radio"
+              name={groupName}
+              value={months}
+              checked={value === months}
+              onChange={() => onChange(months)}
+              required
+              className="h-4 w-4 accent-primary"
+            />
+            <span className="font-semibold text-foreground">{months} months</span>
+          </label>
+        ))}
+      </div>
+      {hint && (
+        <p id={hintId} className="mt-1 text-[11px] text-muted-foreground">
+          {hint}
+        </p>
+      )}
       <FieldError id={errorId} message={error} />
     </fieldset>
   );

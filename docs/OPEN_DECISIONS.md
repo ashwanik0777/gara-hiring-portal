@@ -373,9 +373,66 @@
 - **After joining:** candidate features (explore openings, apply, candidate dashboard) are hidden and applications stay visible as read-only history; joined users and staff cannot submit new applications.
 - Stage rules live in `src/features/lifecycle/capabilities.ts`; see `docs/CANDIDATE_LIFECYCLE.md`.
 
-### Lifecycle follow-ups (2026-10-25)
+### Lifecycle follow-ups (2026-10-25) — resolved the same day (round 3)
 
-1. **Re-joining after exit:** `Employee.userId` is unique, so a person whose record is `EXITED` cannot be marked as joined again (the action returns a clear conflict). Supporting re-joining needs a schema decision.
-2. **Intern → full-time conversion:** for the same reason a joined intern cannot later be marked as joined from a full-time offer. The conversion process (new record vs. updating the existing one, history, payroll impact) is undefined.
-3. **Supervisor reassignment:** the supervisor must be chosen when selecting a candidate for the evaluation because there is no screen to assign or change it later.
+1. ~~Re-joining after exit~~ → **Resolved:** people re-join through normal hiring with the same account; HR "Mark as joined" reuses the same Employee row and employee code and opens a new `EmploymentPeriod` (REJOINED). Earlier periods remain as history.
+2. ~~Intern → full-time conversion~~ → **Resolved:** HR chooses a progress review after 3 or 6 months at intern joining; the review outcome is CONVERT, EXTEND or END_INTERNSHIP; CONVERT creates an offer the intern accepts in the portal, and the conversion takes effect automatically on the effective date (FULL_TIME period, EMPLOYEE role).
+3. ~~Supervisor reassignment~~ → **Resolved:** the evaluation cockpit has a "Change supervisor" action while the evaluation is not finalized.
 
+### Resolved by the product owner (2026-10-25, round 3)
+
+- **Documents (interim for OD-013):** candidates share their resume as an https link (e.g. Google Drive) until the organisation runs its own storage server; uploads remain available behind `DOCUMENT_STORAGE_MODE=local`.
+- **Automation without Vercel Cron:** interview, evaluation and conversion-review reminders plus a staff daily digest run on the app's own job system and are sent through the organisation's SMTP account.
+
+### Behaviour implemented in round 3 that needs confirmation
+
+1. A re-join removes the other joining role (a former employee re-joining as an intern becomes INTERN only), so the portal matches the new period.
+2. When someone exits, scheduled intern reviews are cancelled and open conversion offers (pending, or accepted but not yet effective) are withdrawn.
+3. After an intern declines a conversion offer no further review is scheduled automatically; HR can record a new outcome only through a new review.
+4. There is no action yet to withdraw a pending conversion offer or to reschedule a review date.
+5. Daily reminders that run late (after their business day) are skipped rather than sent a day late; missed days are not backfilled.
+
+### Approved by the product owner (2026-10-25, round 4)
+
+Calendar invites (.ics), interview self-scheduling, offer letter PDF with electronic acceptance, hiring funnel analytics, bulk actions with templated emails, Google Jobs structured data, storage-server readiness (private uploads with virus scanning) and Playwright end-to-end tests.
+
+### Behaviour implemented in round 4 that needs confirmation
+
+**Interview self-scheduling (OD-004)**
+
+1. Managers and interviewers can only name themselves as the interviewer on a booking request; HR and Admin can pick anyone.
+2. One pending booking request per application round is enforced in the service only; a database-level guarantee needs a partial unique index (migration).
+3. Closing an application does not withdraw its pending booking requests; they are hidden from the candidate and booking is refused.
+4. If the interviewer on a request loses their staff role, booking is refused and the candidate is asked to contact the hiring team.
+5. Reasons that staff enter when withdrawing, rescheduling or cancelling are shown to the candidate (unchanged from the existing interview emails).
+6. When a request has no interviewer, no staff member is emailed when the candidate books.
+7. Calendar invites carry https meeting links only; an http link still appears in the email body.
+
+**Offer letter and electronic acceptance (OD-020)**
+
+8. The offer reference printed on the letter is the application reference code (one offer per application); no separate offer numbering series exists.
+9. Staff letter downloads are limited to HR or Admin with `canEmployees` (the same rule as offer visibility); managers with `canEmployees` are refused.
+10. The rupee sign is printed as "Rs." because the built-in PDF fonts lack the glyph; embedding a Unicode font is a separate decision.
+11. Letter dates use `APP_TIMEZONE`. Changing it changes the bytes of regenerated letters, so the staff card reports that the current letter differs from the accepted one; the stored hash still identifies what was accepted.
+12. **Legal sufficiency of a typed-name signature is not decided.** The evidence kept (typed name, time, hashed IP, user agent, SHA-256 of the exact letter) is described in `docs/SECURITY.md`; confirm with counsel whether it is adequate or a qualified e-signature provider is required.
+
+**Source tracking and analytics (OD-019)**
+
+13. The mapping of campaign values to sources (for example `lnkd` → LinkedIn) in `src/features/applications/source-tracking.ts` was written by engineering. The candidate's own answer takes precedence over link parameters.
+14. Funnel "time to hire" counts calendar days from submission to the `HIRED` stage.
+
+**Google Jobs structured data**
+
+15. Openings have no published or closing date, so `datePosted` uses the creation date and `validThrough` is omitted; there is no salary field, so `baseSalary` is omitted. Adding these needs a schema change.
+16. Location is free text; `addressCountry` is set only when the location reads "City, Region, Country".
+
+**Engineering follow-ups**
+
+17. The application list pages paginate 50 rows per page on the page after loading the queue; moving pagination into the recruitment queue query is recommended as volume grows.
+18. The application source is not yet shown on the application detail page.
+19. The application form caps resume uploads at 5 MB while local storage accepts up to 10 MB; the form limit applies.
+
+### Staff workspaces (2026-10-25) — needs confirmation
+
+20. The manager overview lists direct reports from the reporting line on employee records and shows their leave and check-in only when the manager holds the leave or attendance permission. The leave and attendance queues themselves still show every employee to managers holding those permissions; whether managers should act only on their own team is part of open question 15 above (OD-019).
+21. HR sees the whole day's interview schedule instead of a separate "My interviews" list; interviews HR runs appear in that schedule.

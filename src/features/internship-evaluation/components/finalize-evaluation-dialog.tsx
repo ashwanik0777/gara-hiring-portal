@@ -59,7 +59,7 @@ export function FinalizeEvaluationDialog({
         );
       }
     } catch {
-      setError("Failed to finalize evaluation outcome.");
+      setError("We couldn't record the final outcome. Please check your connection and try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -94,10 +94,11 @@ export function FinalizeEvaluationDialog({
           )}
 
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">
+            <label htmlFor="finalize-evaluation-dialog-final-outcome-status" className="block text-xs font-medium text-foreground">
               Final Outcome Status <span className="text-destructive">*</span>
             </label>
             <select
+              id="finalize-evaluation-dialog-final-outcome-status"
               value={status}
               onChange={(e) => setStatus(e.target.value as EvaluationStatus | "")}
               className="w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

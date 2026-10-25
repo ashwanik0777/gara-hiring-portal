@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PAYROLL_PROFILE_MARKER, locatePayoutProfileBlock } from "../payout-notes";
+import { PAYROLL_STAFF_ROLES } from "../roles";
 import { prisma } from "@/lib/db";
 import { assertPermission, hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { Prisma, Role, PayrollStatus, EmployeeStatus } from "@prisma/client";
@@ -26,9 +27,6 @@ import {
   ValidationError,
   ConflictError,
 } from "@/lib/errors";
-
-/** Roles that may hold the payroll module. `canPayroll` is required in addition (ADMIN always passes). */
-const PAYROLL_STAFF_ROLES: Role[] = [Role.ADMIN, Role.HR];
 
 /** Employee statuses that can be enrolled into a payroll period by an explicit staff action. */
 const ENROLLABLE_EMPLOYEE_STATUSES: EmployeeStatus[] = [

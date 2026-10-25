@@ -50,7 +50,7 @@ export function StartEvaluationDialog({
         setSuccess("7-working-day evaluation window initiated successfully.");
       }
     } catch {
-      setError("Failed to trigger evaluation start.");
+      setError("We couldn't start the evaluation. Please check your connection and try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -80,10 +80,11 @@ export function StartEvaluationDialog({
           )}
 
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">
+            <label htmlFor="start-evaluation-dialog-official-start-date" className="block text-xs font-medium text-foreground">
               Official Start Date (Day 1) <span className="text-destructive">*</span>
             </label>
             <input
+              id="start-evaluation-dialog-official-start-date"
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}

@@ -411,6 +411,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
           <div className="w-full max-w-md relative">
             {/* ─── 1. LOGIN FORM (Visible when mode === "login") ─── */}
             <div
+              inert={mode !== "login"}
               className={`transition-all duration-500 ${
                 mode === "login"
                   ? "opacity-100 pointer-events-auto transform translate-y-0"
@@ -484,10 +485,11 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                 <form onSubmit={handleLoginSubmit} className="space-y-4">
                   {/* Email */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-foreground">Email Address</label>
+                    <label htmlFor="auth-split-screen-login-email-address" className="text-xs font-semibold text-foreground">Email Address</label>
                     <div className="relative flex items-center">
                       <Mail className="absolute left-3.5 h-4 w-4 text-muted-foreground pointer-events-none" />
                       <input
+                        id="auth-split-screen-login-email-address"
                         type="email"
                         autoComplete="email"
                         placeholder="you@company.com"
@@ -501,10 +503,11 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
                   {/* Password */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-foreground">Password</label>
+                    <label htmlFor="auth-split-screen-login-password" className="text-xs font-semibold text-foreground">Password</label>
                     <div className="relative flex items-center">
                       <Lock className="absolute left-3.5 h-4 w-4 text-muted-foreground pointer-events-none" />
                       <input
+                        id="auth-split-screen-login-password"
                         type={showLoginPassword ? "text" : "password"}
                         autoComplete="current-password"
                         placeholder="••••••••"
@@ -589,6 +592,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
             {/* ─── 2. REGISTER FORM (Visible when mode === "register") ─── */}
             <div
+              inert={mode !== "register"}
               className={`transition-all duration-500 ${
                 mode === "register"
                   ? "opacity-100 pointer-events-auto transform translate-y-0"
@@ -659,10 +663,11 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                 <form onSubmit={handleRegisterSubmit} className="space-y-4">
                   {/* Full Name */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-foreground">Full Name</label>
+                    <label htmlFor="auth-split-screen-register-full-name" className="text-xs font-semibold text-foreground">Full Name</label>
                     <div className="relative flex items-center">
                       <User className="absolute left-3.5 h-4 w-4 text-muted-foreground pointer-events-none" />
                       <input
+                        id="auth-split-screen-register-full-name"
                         type="text"
                         placeholder="John Doe"
                         value={regName}
@@ -675,10 +680,11 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
                   {/* Email */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-foreground">Email Address</label>
+                    <label htmlFor="auth-split-screen-register-email-address" className="text-xs font-semibold text-foreground">Email Address</label>
                     <div className="relative flex items-center">
                       <Mail className="absolute left-3.5 h-4 w-4 text-muted-foreground pointer-events-none" />
                       <input
+                        id="auth-split-screen-register-email-address"
                         type="email"
                         placeholder="you@company.com"
                         value={regEmail}
@@ -691,10 +697,11 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
                   {/* Password */}
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-foreground">Password</label>
+                    <label htmlFor="auth-split-screen-register-password" className="text-xs font-semibold text-foreground">Password</label>
                     <div className="relative flex items-center">
                       <Lock className="absolute left-3.5 h-4 w-4 text-muted-foreground pointer-events-none" />
                       <input
+                        id="auth-split-screen-register-password"
                         type={showRegPassword ? "text" : "password"}
                         placeholder="Create a strong password"
                         value={regPassword}
@@ -802,6 +809,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
             {/* ─── 3. FORGOT PASSWORD FORM (Inlined in place of Login) ─── */}
             <div
+              inert={mode !== "forgot"}
               className={`transition-all duration-500 ${
                 mode === "forgot"
                   ? "opacity-100 pointer-events-auto transform translate-y-0"
@@ -849,10 +857,11 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                       </div>
                     )}
                     <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-foreground">Email Address</label>
+                      <label htmlFor="auth-split-screen-forgot-email-address" className="text-xs font-semibold text-foreground">Email Address</label>
                       <div className="relative flex items-center">
                         <Mail className="absolute left-3.5 h-4 w-4 text-muted-foreground pointer-events-none" />
                         <input
+                          id="auth-split-screen-forgot-email-address"
                           type="email"
                           placeholder="you@company.com"
                           value={forgotEmail}
@@ -991,8 +1000,9 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
               <form onSubmit={handleLoginSubmit} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-foreground">Email</label>
+                  <label htmlFor="auth-split-screen-login-email" className="text-xs font-medium text-foreground">Email</label>
                   <input
+                    id="auth-split-screen-login-email"
                     type="email"
                     placeholder="you@company.com"
                     value={loginEmail}
@@ -1002,8 +1012,9 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-foreground">Password</label>
+                  <label htmlFor="auth-split-screen-login-password-2" className="text-xs font-medium text-foreground">Password</label>
                   <input
+                    id="auth-split-screen-login-password-2"
                     type={showLoginPassword ? "text" : "password"}
                     placeholder="••••••••"
                     value={loginPassword}
@@ -1045,8 +1056,9 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
               <form onSubmit={handleRegisterSubmit} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-foreground">Full Name</label>
+                  <label htmlFor="auth-split-screen-register-full-name-2" className="text-xs font-medium text-foreground">Full Name</label>
                   <input
+                    id="auth-split-screen-register-full-name-2"
                     type="text"
                     placeholder="John Doe"
                     value={regName}
@@ -1056,8 +1068,9 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-foreground">Email</label>
+                  <label htmlFor="auth-split-screen-register-email" className="text-xs font-medium text-foreground">Email</label>
                   <input
+                    id="auth-split-screen-register-email"
                     type="email"
                     placeholder="you@company.com"
                     value={regEmail}
@@ -1067,8 +1080,9 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-foreground">Password</label>
+                  <label htmlFor="auth-split-screen-register-password-2" className="text-xs font-medium text-foreground">Password</label>
                   <input
+                    id="auth-split-screen-register-password-2"
                     type={showRegPassword ? "text" : "password"}
                     placeholder="Create a strong password"
                     value={regPassword}
@@ -1146,8 +1160,9 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                     </div>
                   )}
                   <div className="space-y-1">
-                    <label className="text-xs font-medium text-foreground">Email</label>
+                    <label htmlFor="auth-split-screen-forgot-email" className="text-xs font-medium text-foreground">Email</label>
                     <input
+                      id="auth-split-screen-forgot-email"
                       type="email"
                       placeholder="you@company.com"
                       value={forgotEmail}

@@ -2,11 +2,23 @@ import { prisma } from "@/lib/db";
 import { assertPermission, hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { Role, ApplicationStatus, OfferStatus, Prisma } from "@prisma/client";
 import {
+  AcceptOfferDecisionInput,
   CreateJobOfferInput,
-  CandidateOfferDecisionInput,
+  DeclineOfferDecisionInput,
   RevokeJobOfferInput,
 } from "../schemas";
-import { JobOfferDetail } from "../types";
+import { JobOfferDetail, OfferSignatureView } from "../types";
+import { cleanSignedName, OFFER_ESIGN_CONSENT_TEXT, signatureNamesMatch } from "../offer-esign";
+import {
+  cleanSignatureUserAgent,
+  offerLetterFilename,
+  offerLetterHash,
+  renderOfferLetter,
+} from "./offer-letter";
+import {
+  OFFER_ACCEPTED_CONFIRMATION_TEMPLATE,
+  type OfferAcceptedConfirmationPayload,
+} from "@/infrastructure/email/templates/offer-letter-emails";
 import { VALID_APPLICATION_TRANSITIONS } from "@/features/recruitment/schemas";
 import { assertNotOwnApplication } from "@/features/recruitment/services/application-access";
 import {
@@ -42,7 +54,15 @@ const offerDetailInclude = {
     include: {
       candidate: {
         include: {
-          user: { select: { id: true, name: true, email: true } },
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              // Staff projection only: an exited record is reused at joining (re-joining).
+              employeeProfile: { select: { employeeCode: true, status: true } },
+            },
+          },
         },
       },
       opening: { select: { title: true } },
@@ -52,6 +72,41 @@ const offerDetailInclude = {
 } satisfies Prisma.JobOfferInclude;
 
 type OfferWithDetail = Prisma.JobOfferGetPayload<{ include: typeof offerDetailInclude }>;
+
+/** Only the fields an offer letter download needs. */
+const offerLetterSelect = {
+  id: true,
+  status: true,
+  expectedJoiningDate: true,
+  department: true,
+  designation: true,
+  location: true,
+  termsSummary: true,
+  extendedAt: true,
+  decisionAt: true,
+  signedName: true,
+  signedAt: true,
+  signedDocumentHash: true,
+  extendedBy: { select: { name: true } },
+  application: {
+    select: {
+      referenceCode: true,
+      candidate: { select: { user: { select: { id: true, name: true } } } },
+    },
+  },
+} satisfies Prisma.JobOfferSelect;
+
+/** Request facts recorded with an electronic signature. */
+export interface OfferSignatureRequest {
+  /** Keyed hash of the signer's IP (getClientIpHash), never the raw address. */
+  ipHash: string;
+  userAgent: string | null;
+}
+
+/** Shown when the typed signature does not match the account name. */
+export function signedNameMismatchMessage(accountName: string): string {
+  return `The name you typed doesn't match the name on your account. Type your full name as shown on your account: ${accountName}.`;
+}
 
 /**
  * An offer may be prepared/extended only from a stage whose transition map allows OFFERED.
@@ -280,118 +335,202 @@ export class OfferService {
   }
 
   /**
-   * Candidate accepts or declines the extended offer.
-   * Gated: authenticated candidate who owns the application. The application must still be
-   * OFFERED. A decline is recorded on the offer only; the application stage is left for staff
-   * to transition explicitly (OD-020).
+   * Loads an offer the signed-in candidate may still answer: they own the application, the
+   * offer is EXTENDED and the application is OFFERED. Runs inside the decision transaction.
    */
-  async candidateDecideOffer(
+  private async loadOfferAwaitingDecision(
+    tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
-    input: CandidateOfferDecisionInput
-  ): Promise<{ applicationId: string }> {
+    offerId: string
+  ): Promise<OfferWithDetail> {
+    const offer = await tx.jobOffer.findUnique({
+      where: { id: offerId },
+      include: offerDetailInclude,
+    });
+
+    if (!offer) {
+      throw new NotFoundError("Job offer not found.");
+    }
+
+    if (offer.application.candidate.user.id !== user.id) {
+      throw new ForbiddenError("You are not authorized to respond to this job offer.");
+    }
+
+    if (offer.status !== OfferStatus.EXTENDED) {
+      throw new ValidationError("This offer is no longer open for a response.");
+    }
+
+    if (offer.application.status !== ApplicationStatus.OFFERED) {
+      throw new ValidationError("This application is no longer awaiting an offer decision.");
+    }
+
+    return offer;
+  }
+
+  /**
+   * Candidate accepts the extended offer with a typed electronic signature.
+   * Gated: the authenticated candidate who owns the application; the offer must be EXTENDED and
+   * the application OFFERED. The typed name must match the account name (case and spacing
+   * ignored) and the letter regenerated on the server must hash to the letter the candidate
+   * reviewed. The signature evidence is written by the same conditional update that accepts
+   * the offer, so an acceptance never exists without its evidence.
+   */
+  async acceptOfferElectronically(
+    user: AuthenticatedUser,
+    input: AcceptOfferDecisionInput,
+    request: OfferSignatureRequest
+  ): Promise<{ applicationId: string; signedDocumentHash: string }> {
     return prisma.$transaction(async (tx) => {
-      const offer = await tx.jobOffer.findUnique({
-        where: { id: input.offerId },
-        include: {
-          application: {
-            include: {
-              candidate: {
-                include: {
-                  user: { select: { id: true } },
-                },
-              },
-            },
-          },
-        },
-      });
+      const offer = await this.loadOfferAwaitingDecision(tx, user, input.offerId);
+      const candidateUser = offer.application.candidate.user;
 
-      if (!offer) {
-        throw new NotFoundError("Job offer not found.");
+      if (!signatureNamesMatch(input.signedName, candidateUser.name)) {
+        const message = signedNameMismatchMessage(candidateUser.name);
+        throw new ValidationError(message, [{ path: ["signedName"], message }]);
       }
 
-      if (offer.application.candidate.user.id !== user.id) {
-        throw new ForbiddenError("You are not authorized to respond to this job offer.");
-      }
-
-      if (offer.status !== OfferStatus.EXTENDED) {
-        throw new ValidationError(
-          "This offer is no longer open for a response."
-        );
-      }
-
-      if (offer.application.status !== ApplicationStatus.OFFERED) {
-        throw new ValidationError(
-          "This application is no longer awaiting an offer decision."
+      // The exact letter bytes being accepted (the letter as issued, without status lines).
+      const documentHash = offerLetterHash(offer);
+      if (documentHash !== input.letterHash) {
+        throw new ConflictError(
+          "The offer letter has changed since you opened this page. Reload the page, review the latest letter and accept again."
         );
       }
 
       const now = new Date();
-      const accepted = input.decision === "ACCEPT";
-      const declineReason = input.declineReason?.trim() || null;
+      const signedName = cleanSignedName(input.signedName);
 
-      // Conditional writes: a concurrent revoke or stage change makes this decision fail.
+      // Conditional write: a concurrent revoke or decision makes the acceptance fail.
       const offerUpdate = await tx.jobOffer.updateMany({
         where: { id: offer.id, status: OfferStatus.EXTENDED },
-        data: accepted
-          ? { status: OfferStatus.ACCEPTED, decisionAt: now }
-          : { status: OfferStatus.DECLINED, decisionAt: now, declineReason },
+        data: {
+          status: OfferStatus.ACCEPTED,
+          decisionAt: now,
+          signedName,
+          signedAt: now,
+          signatureIpHash: request.ipHash,
+          signatureUserAgent: cleanSignatureUserAgent(request.userAgent),
+          signedDocumentHash: documentHash,
+        },
       });
       if (offerUpdate.count !== 1) {
         throw new ConflictError("This offer is no longer open for a response.");
       }
 
-      if (accepted) {
-        const appUpdate = await tx.application.updateMany({
-          where: { id: offer.applicationId, status: ApplicationStatus.OFFERED },
-          data: { status: ApplicationStatus.OFFER_ACCEPTED },
-        });
-        if (appUpdate.count !== 1) {
-          throw new ConflictError("This application is no longer awaiting an offer decision.");
-        }
-
-        await tx.applicationStatusHistory.create({
-          data: {
-            applicationId: offer.applicationId,
-            fromStatus: ApplicationStatus.OFFERED,
-            toStatus: ApplicationStatus.OFFER_ACCEPTED,
-            actorId: user.id,
-            internalNotes: "Candidate formally accepted the job offer terms via portal.",
-            candidateMessage: "Thank you for accepting the offer. Our HR team will reach out with onboarding next steps.",
-          },
-        });
-      } else {
-        // Conditional touch: locks the row and fails if the stage moved concurrently.
-        const appCheck = await tx.application.updateMany({
-          where: { id: offer.applicationId, status: ApplicationStatus.OFFERED },
-          data: { updatedAt: now },
-        });
-        if (appCheck.count !== 1) {
-          throw new ConflictError("This application is no longer awaiting an offer decision.");
-        }
-
-        // Timeline entry only: the application stage is unchanged.
-        await tx.applicationStatusHistory.create({
-          data: {
-            applicationId: offer.applicationId,
-            fromStatus: ApplicationStatus.OFFERED,
-            toStatus: ApplicationStatus.OFFERED,
-            actorId: user.id,
-            internalNotes: `Candidate declined the offer. Reason: ${declineReason ?? "None provided"}`,
-            candidateMessage: "You have declined the offer. Thank you for letting us know.",
-          },
-        });
+      const appUpdate = await tx.application.updateMany({
+        where: { id: offer.applicationId, status: ApplicationStatus.OFFERED },
+        data: { status: ApplicationStatus.OFFER_ACCEPTED },
+      });
+      if (appUpdate.count !== 1) {
+        throw new ConflictError("This application is no longer awaiting an offer decision.");
       }
+
+      await tx.applicationStatusHistory.create({
+        data: {
+          applicationId: offer.applicationId,
+          fromStatus: ApplicationStatus.OFFERED,
+          toStatus: ApplicationStatus.OFFER_ACCEPTED,
+          actorId: user.id,
+          internalNotes: `Candidate accepted the job offer electronically (typed signature, letter SHA-256 ${documentHash}).`,
+          candidateMessage: "Thank you for accepting the offer. Our HR team will reach out with onboarding next steps.",
+        },
+      });
+
+      await tx.notificationOutbox.create({
+        data: {
+          recipientEmail: candidateUser.email,
+          templateName: OFFER_ACCEPTED_CONFIRMATION_TEMPLATE,
+          payload: {
+            recipientName: candidateUser.name,
+            designation: offer.designation,
+            department: offer.department,
+            expectedJoiningDate: offer.expectedJoiningDate.toISOString(),
+            signedName,
+            signedAt: now.toISOString(),
+            documentHashPrefix: documentHash.slice(0, 16),
+            applicationReference: offer.application.referenceCode,
+            portalPath: `/candidate/applications/${offer.applicationId}`,
+          } satisfies OfferAcceptedConfirmationPayload,
+          status: "PENDING",
+        },
+      });
 
       await tx.auditLog.create({
         data: {
           actorId: user.id,
           actorRole: Role.CANDIDATE,
-          action: accepted ? "ACCEPT_JOB_OFFER" : "DECLINE_JOB_OFFER",
+          action: "ACCEPT_JOB_OFFER",
           resourceType: "JOB_OFFER",
           resourceId: offer.id,
-          diffPayload: accepted
-            ? { decision: "ACCEPT", decisionAt: now.toISOString() }
-            : { decision: "DECLINE", reason: declineReason, decisionAt: now.toISOString() },
+          diffPayload: {
+            decision: "ACCEPT",
+            decisionAt: now.toISOString(),
+            signatureMethod: "TYPED_NAME",
+            signedName,
+            consentText: OFFER_ESIGN_CONSENT_TEXT,
+            signedDocumentHash: documentHash,
+          },
+        },
+      });
+
+      return { applicationId: offer.applicationId, signedDocumentHash: documentHash };
+    });
+  }
+
+  /**
+   * Candidate declines the extended offer (no signature needed).
+   * Gated: the authenticated candidate who owns the application; the offer must be EXTENDED and
+   * the application OFFERED. A decline is recorded on the offer only; the application stage is
+   * left for staff to transition explicitly (OD-020).
+   */
+  async declineOffer(
+    user: AuthenticatedUser,
+    input: DeclineOfferDecisionInput
+  ): Promise<{ applicationId: string }> {
+    return prisma.$transaction(async (tx) => {
+      const offer = await this.loadOfferAwaitingDecision(tx, user, input.offerId);
+
+      const now = new Date();
+      const declineReason = input.declineReason?.trim() || null;
+
+      // Conditional write: a concurrent revoke or acceptance makes this decision fail.
+      const offerUpdate = await tx.jobOffer.updateMany({
+        where: { id: offer.id, status: OfferStatus.EXTENDED },
+        data: { status: OfferStatus.DECLINED, decisionAt: now, declineReason },
+      });
+      if (offerUpdate.count !== 1) {
+        throw new ConflictError("This offer is no longer open for a response.");
+      }
+
+      // Conditional touch: locks the row and fails if the stage moved concurrently.
+      const appCheck = await tx.application.updateMany({
+        where: { id: offer.applicationId, status: ApplicationStatus.OFFERED },
+        data: { updatedAt: now },
+      });
+      if (appCheck.count !== 1) {
+        throw new ConflictError("This application is no longer awaiting an offer decision.");
+      }
+
+      // Timeline entry only: the application stage is unchanged.
+      await tx.applicationStatusHistory.create({
+        data: {
+          applicationId: offer.applicationId,
+          fromStatus: ApplicationStatus.OFFERED,
+          toStatus: ApplicationStatus.OFFERED,
+          actorId: user.id,
+          internalNotes: `Candidate declined the offer. Reason: ${declineReason ?? "None provided"}`,
+          candidateMessage: "You have declined the offer. Thank you for letting us know.",
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: Role.CANDIDATE,
+          action: "DECLINE_JOB_OFFER",
+          resourceType: "JOB_OFFER",
+          resourceId: offer.id,
+          diffPayload: { decision: "DECLINE", reason: declineReason, decisionAt: now.toISOString() },
         },
       });
 
@@ -554,6 +693,40 @@ export class OfferService {
       // Staff notes are confidential and NEVER sent to candidate
       notes: isStaffView ? offer.notes : null,
       createdAt: offer.createdAt,
+      candidateEmployment: isStaffView ? offer.application.candidate.user.employeeProfile ?? null : null,
+      signature: this.toSignatureView(offer, isStaffView),
+      // The accept form echoes this hash; only the candidate answering an open offer needs it.
+      letterHash: !isStaffView && offer.status === OfferStatus.EXTENDED ? offerLetterHash(offer) : null,
+    };
+  }
+
+  /**
+   * Signature evidence of an electronically accepted offer. Candidates see what they signed;
+   * staff also see the browser, whether an IP hash was recorded and whether the letter
+   * regenerated now still matches the accepted bytes.
+   */
+  private toSignatureView(offer: OfferWithDetail, isStaffView: boolean): OfferSignatureView | null {
+    if (
+      offer.status !== OfferStatus.ACCEPTED ||
+      !offer.signedName ||
+      !offer.signedAt ||
+      !offer.signedDocumentHash
+    ) {
+      return null;
+    }
+    const view: OfferSignatureView = {
+      signedName: offer.signedName,
+      signedAt: offer.signedAt,
+      documentHash: offer.signedDocumentHash,
+    };
+    if (!isStaffView) {
+      return view;
+    }
+    return {
+      ...view,
+      userAgent: offer.signatureUserAgent,
+      ipHashRecorded: Boolean(offer.signatureIpHash),
+      documentMatches: offerLetterHash(offer) === offer.signedDocumentHash,
     };
   }
 
@@ -600,6 +773,37 @@ export class OfferService {
       throw new ForbiddenError("You are not authorized to view this offer.");
     }
     return projection;
+  }
+
+  /**
+   * The offer letter PDF for download. The candidate who owns the offer may download it once
+   * it was extended (EXTENDED / ACCEPTED / DECLINED), also after joining; drafts, revoked and
+   * expired offers stay internal. HR / Admin with canEmployees may download any offer's letter
+   * (a draft as a preview). The candidate is always treated as the candidate for their own offer.
+   */
+  async getOfferLetterPdf(
+    user: AuthenticatedUser,
+    offerId: string
+  ): Promise<{ pdf: Buffer; filename: string }> {
+    const offer = await prisma.jobOffer.findUnique({
+      where: { id: offerId },
+      select: offerLetterSelect,
+    });
+
+    if (!offer) {
+      throw new NotFoundError("This offer letter could not be found.");
+    }
+
+    const isCandidateOwner = offer.application.candidate.user.id === user.id;
+    if (isCandidateOwner) {
+      if (!CANDIDATE_VISIBLE_OFFER_STATUSES.includes(offer.status)) {
+        throw new NotFoundError("This offer letter could not be found.");
+      }
+    } else if (!(await this.isOfferManager(user))) {
+      throw new ForbiddenError("You are not authorized to download this offer letter.");
+    }
+
+    return { pdf: renderOfferLetter(offer, "CURRENT"), filename: offerLetterFilename(offer) };
   }
 
   /**

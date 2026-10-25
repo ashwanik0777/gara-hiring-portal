@@ -1,6 +1,7 @@
 import type { CareerInterest } from "@/types/enums";
 import { ApplicationStatus } from "@prisma/client";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
+import type { DocumentLinkView } from "./document-links";
 
 export { ApplicationStatus };
 
@@ -33,9 +34,11 @@ export interface CandidateApplicationDetail extends CandidateApplicationSummary 
     schemaDefinition: FormSchemaDefinition;
   };
   submittedResponses: Record<string, unknown>;
-  /** False when the published form did not request a document and none was attached. */
+  /** True when a resume file is stored for this application (local storage mode). */
   hasResume: boolean;
   resumeDownloadUrl: string;
+  /** The resume share link the candidate submitted (link mode); null when none. */
+  resumeLink: DocumentLinkView | null;
   timeline: CandidateStatusTimelineEntry[];
 }
 

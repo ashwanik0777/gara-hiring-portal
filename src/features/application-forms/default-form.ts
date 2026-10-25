@@ -91,16 +91,18 @@ export function getDefaultApplicationFormSchema(
       {
         id: "documents-upload",
         title: "Resume & Documents",
-        description: "Upload your resume in PDF format (maximum 5MB).",
+        // Mode-neutral copy: the apply form explains whether a share link or a PDF upload
+        // is collected (DOCUMENT_STORAGE_MODE).
+        description: "Share your resume with the hiring team.",
         order: 3,
         fields: [
           {
             id: "resume-file",
             name: "resume",
-            label: "Resume / CV (PDF)",
+            label: "Resume / CV",
             type: "file",
             required: true,
-            helpText: "Only PDF format is accepted. Max file size: 5MB.",
+            // Upload limits, used only when documents are uploaded ("local" mode).
             validation: {
               allowedFileTypes: ["application/pdf"],
               maxFileSizeMb: 5,

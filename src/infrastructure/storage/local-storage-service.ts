@@ -3,15 +3,30 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { env } from "@/lib/env";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { logger } from "@/lib/logging/logger";
 import { StorageService, StorageUploadResult, StorageGetResult } from "./types";
+import {
+  ALLOWED_PRIVATE_UPLOAD_MIME_TYPES,
+  MAX_PRIVATE_UPLOAD_BYTES,
+  matchesFileSignature,
+} from "./upload-policy";
+import {
+  createVirusScannerFromEnv,
+  INFECTED_UPLOAD_MESSAGE,
+  VirusScanner,
+  VirusScanResult,
+  VirusScanUnavailableError,
+} from "./virus-scanner";
 
-export const ALLOWED_PRIVATE_UPLOAD_MIME_TYPES = new Set([
-  "application/pdf",
-  "image/jpeg",
-  "image/png",
-]);
+export { ALLOWED_PRIVATE_UPLOAD_MIME_TYPES, MAX_PRIVATE_UPLOAD_BYTES };
 
-export const MAX_PRIVATE_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+export interface LocalStorageServiceOptions {
+  /**
+   * Scanner run on every upload before it is written. Omitted: chosen by VIRUS_SCAN_MODE.
+   * Null: no scanning.
+   */
+  virusScanner?: VirusScanner | null;
+}
 
 /**
  * Safe local filesystem storage provider for development environments.
@@ -23,11 +38,14 @@ export const MAX_PRIVATE_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
  */
 export class LocalStorageService implements StorageService {
   private readonly baseDir: string;
+  private readonly virusScanner: VirusScanner | null;
 
-  constructor(customBaseDir?: string) {
+  constructor(customBaseDir?: string, options: LocalStorageServiceOptions = {}) {
     this.baseDir = customBaseDir
       ? path.resolve(/*turbopackIgnore: true*/ customBaseDir)
       : path.join(/*turbopackIgnore: true*/ process.cwd(), ".storage", "private");
+    this.virusScanner =
+      options.virusScanner === undefined ? createVirusScannerFromEnv() : options.virusScanner;
   }
 
   private assertSafeEnvironment(): void {
@@ -89,6 +107,50 @@ export class LocalStorageService implements StorageService {
         `Unsupported file MIME type '${mimeType}'. Allowed types: PDF, JPEG, PNG.`
       );
     }
+    if (!matchesFileSignature(fileBuffer, mimeType)) {
+      throw new ValidationError(
+        "The file content does not match its type. Please upload a genuine PDF, JPEG or PNG file."
+      );
+    }
+  }
+
+  /**
+   * Scans the content with the configured scanner, failing closed: an infected file is a
+   * ValidationError, and a scanner that cannot give a verdict refuses the upload.
+   */
+  private async assertContentIsSafe(
+    fileBuffer: Buffer | Uint8Array,
+    mimeType: string,
+    prefix: string
+  ): Promise<void> {
+    if (!this.virusScanner) {
+      return;
+    }
+
+    let verdict: VirusScanResult;
+    try {
+      verdict = await this.virusScanner.scan(fileBuffer);
+    } catch (err) {
+      if (err instanceof ValidationError) {
+        throw err;
+      }
+      logger.error("Upload refused: virus scan unavailable", err, {
+        mimeType,
+        sizeBytes: fileBuffer.byteLength,
+        prefix,
+      });
+      throw new VirusScanUnavailableError();
+    }
+
+    if (!verdict.clean) {
+      logger.warn("Upload refused: virus scan flagged the file", {
+        signature: verdict.signature,
+        mimeType,
+        sizeBytes: fileBuffer.byteLength,
+        prefix,
+      });
+      throw new ValidationError(INFECTED_UPLOAD_MESSAGE);
+    }
   }
 
   async upload(
@@ -99,6 +161,8 @@ export class LocalStorageService implements StorageService {
   ): Promise<StorageUploadResult> {
     this.assertSafeEnvironment();
     this.validateUploadInput(fileBuffer, mimeType);
+    // Nothing touches the disk until the content has been scanned.
+    await this.assertContentIsSafe(fileBuffer, mimeType, prefix);
 
     const sanitized = this.sanitizeFilename(filename);
     const uniqueId = crypto.randomUUID();

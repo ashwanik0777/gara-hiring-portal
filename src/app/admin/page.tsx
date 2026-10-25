@@ -1,4 +1,4 @@
-import React from "react";
+import React, { Suspense } from "react";
 import Link from "next/link";
 import { connection } from "next/server";
 import { redirect } from "next/navigation";
@@ -28,12 +28,15 @@ import {
   BarChart3,
   ArrowRight,
   Plus,
-  CheckCircle2,
   AlertCircle,
   Building,
   TrendingUp,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  ActionCenterPanel,
+  ActionCenterSkeleton,
+} from "@/features/automation/components/action-center-panel";
 
 export const instant = false;
 
@@ -88,7 +91,6 @@ async function loadAdminOverview(todayStart: Date, todayEnd: Date) {
     pendingLeaves,
     todayAttendance,
     todayOnLeave,
-    pendingRegularizations,
     totalVisitors,
     subAdminCount,
     submittedCount,
@@ -119,7 +121,6 @@ async function loadAdminOverview(todayStart: Date, todayEnd: Date) {
         endDate: { gte: todayStart },
       },
     }),
-    prisma.attendanceRegularization.count({ where: { status: "PENDING" } }),
     getUniqueVisitorCount(),
     prisma.userRole.count({
       where: { role: { in: ["HR", "MANAGER", "INTERVIEWER", "MENTOR", "ADMIN"] } },
@@ -181,7 +182,6 @@ async function loadAdminOverview(todayStart: Date, todayEnd: Date) {
     pendingLeaves,
     todayAttendance,
     todayOnLeave,
-    pendingRegularizations,
     totalVisitors,
     subAdminCount,
     submittedCount,
@@ -255,7 +255,6 @@ export default async function AdminOverviewPage() {
     pendingLeaves,
     todayAttendance,
     todayOnLeave,
-    pendingRegularizations,
     totalVisitors,
     subAdminCount,
     submittedCount,
@@ -299,70 +298,10 @@ export default async function AdminOverviewPage() {
 
   return (
     <div className="w-full space-y-6">
-      {/* ─── Operational Attention Notice Bar ─── */}
-      {(pendingLeaves > 0 || pendingRegularizations > 0 || scheduledInterviews > 0) ? (
-        <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-2xs">
-          <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0">
-              <AlertCircle className="h-4 w-4" />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-bold text-amber-900 dark:text-amber-200">
-                Action Items Awaiting Admin
-              </span>
-              <span className="text-muted-foreground hidden sm:inline">•</span>
-              <div className="flex flex-wrap gap-1.5 font-mono">
-                {pendingLeaves > 0 && (
-                  <Badge variant="outline" className="bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30">
-                    {pendingLeaves} Leave Requests
-                  </Badge>
-                )}
-                {pendingRegularizations > 0 && (
-                  <Badge variant="outline" className="bg-blue-500/15 text-blue-800 dark:text-blue-300 border-blue-500/30">
-                    {pendingRegularizations} Attendance Regularizations
-                  </Badge>
-                )}
-                {scheduledInterviews > 0 && (
-                  <Badge variant="outline" className="bg-purple-500/15 text-purple-800 dark:text-purple-300 border-purple-500/30">
-                    {scheduledInterviews} Interviews Scheduled
-                  </Badge>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            {pendingLeaves > 0 && (
-              <Link
-                href="/admin/leave"
-                className="h-8 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold flex items-center gap-1 transition-all shadow-2xs"
-              >
-                <span>Review Leaves</span>
-                <ArrowRight className="h-3 w-3" />
-              </Link>
-            )}
-            {scheduledInterviews > 0 && (
-              <Link
-                href="/admin/interviews"
-                className="h-8 px-3 rounded-xl border border-amber-500/30 bg-background hover:bg-muted text-foreground font-semibold flex items-center gap-1 transition-all"
-              >
-                <span>Schedules</span>
-                <ArrowRight className="h-3 w-3" />
-              </Link>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-xs shadow-2xs">
-          <div className="flex items-center gap-2.5 text-emerald-800 dark:text-emerald-300">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span className="font-semibold">All Operations Normal — Operational inboxes cleared</span>
-          </div>
-          <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
-            Real-Time Verified
-          </span>
-        </div>
-      )}
+      {/* ─── Action Center: permission-scoped work waiting for this administrator ─── */}
+      <Suspense fallback={<ActionCenterSkeleton />}>
+        <ActionCenterPanel user={user} portalBase="/admin" />
+      </Suspense>
 
       {/* ─── 5 TOP EXECUTIVE METRIC CARDS ─── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">

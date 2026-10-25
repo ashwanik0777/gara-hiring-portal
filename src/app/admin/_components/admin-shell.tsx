@@ -1,6 +1,7 @@
 import React from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
+import { scheduleAutomationTick } from "@/features/automation/heartbeat";
 import { Role } from "@prisma/client";
 import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import { ADMIN_NAV_ITEMS } from "@/config/dashboard-nav";
@@ -24,6 +25,7 @@ export async function AdminShell({
   if (user.mustChangePassword) {
     redirect("/set-password");
   }
+  scheduleAutomationTick();
 
   const isAdmin = user.roles.includes(Role.ADMIN);
   if (!isAdmin) {

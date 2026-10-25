@@ -32,6 +32,13 @@ import {
   type ChecklistProgressItem,
   type ProfileCompleteness,
 } from "./journey-progress";
+import { INTERVIEW_CLOSED_APPLICATION_STATUSES } from "@/features/recruitment/schemas";
+import type {
+  ConversionOfferState,
+  PeriodEndReason,
+  PeriodStartReason,
+  ReviewOutcome,
+} from "@/features/employees/conversion-rules";
 
 /*
  * Read-only queries behind the self-service dashboards (candidate, evaluation / intern
@@ -114,6 +121,8 @@ export interface UpcomingInterview {
   status: InterviewStatus;
   /** Present only when the stored link is an http(s) URL. */
   meetingLink: string | null;
+  /** iCalendar SEQUENCE, for the "Add to calendar" file. */
+  icsSequence: number;
   application: { id: string; referenceCode: string; openingTitle: string };
 }
 
@@ -144,6 +153,7 @@ export async function getUpcomingInterviews(
       durationMinutes: true,
       status: true,
       meetingLink: true,
+      icsSequence: true,
       application: { select: { id: true, referenceCode: true, opening: { select: { title: true } } } },
     },
     orderBy: { scheduledAt: "asc" },
@@ -158,12 +168,170 @@ export async function getUpcomingInterviews(
     durationMinutes: row.durationMinutes,
     status: row.status as InterviewStatus,
     meetingLink: safeMeetingLink(row.meetingLink),
+    icsSequence: row.icsSequence,
     application: {
       id: row.application.id,
       referenceCode: row.application.referenceCode,
       openingTitle: row.application.opening.title,
     },
   }));
+}
+
+// -----------------------------------------------------------------------------
+// Candidate self-scheduling (interview times offered by the hiring team)
+// -----------------------------------------------------------------------------
+
+export type OwnInterviewBookingStatus = "PENDING" | "BOOKED" | "CANCELLED";
+
+export interface OwnInterviewBooking {
+  id: string;
+  status: OwnInterviewBookingStatus;
+  roundNumber: number;
+  roundName: string;
+  durationMinutes: number;
+  application: { id: string; referenceCode: string; openingTitle: string };
+  /** False once the application is closed (no interview can be booked any more). */
+  applicationActive: boolean;
+  /** Options that are still open and in the future, soonest first. */
+  availableSlots: Array<{ id: string; startsAt: string }>;
+  bookedInterview: {
+    id: string;
+    scheduledAt: string;
+    durationMinutes: number;
+    status: InterviewStatus;
+    /** Present only when the stored link is an http(s) URL. */
+    meetingLink: string | null;
+    icsSequence: number;
+  } | null;
+}
+
+function ownBookingSelect(now: Date) {
+  return {
+    id: true,
+    status: true,
+    roundNumber: true,
+    roundName: true,
+    durationMinutes: true,
+    application: {
+      select: {
+        id: true,
+        referenceCode: true,
+        status: true,
+        isArchived: true,
+        opening: { select: { title: true } },
+      },
+    },
+    slots: {
+      where: { status: "OPEN" as const, startsAt: { gt: now } },
+      select: { id: true, startsAt: true },
+      orderBy: { startsAt: "asc" as const },
+    },
+    bookedSchedule: {
+      select: {
+        id: true,
+        scheduledAt: true,
+        durationMinutes: true,
+        status: true,
+        meetingLink: true,
+        icsSequence: true,
+      },
+    },
+  };
+}
+
+type OwnBookingRow = {
+  id: string;
+  status: string;
+  roundNumber: number;
+  roundName: string;
+  durationMinutes: number;
+  application: {
+    id: string;
+    referenceCode: string;
+    status: string;
+    isArchived: boolean;
+    opening: { title: string };
+  };
+  slots: Array<{ id: string; startsAt: Date }>;
+  bookedSchedule: {
+    id: string;
+    scheduledAt: Date;
+    durationMinutes: number;
+    status: string;
+    meetingLink: string | null;
+    icsSequence: number;
+  } | null;
+};
+
+function toOwnBooking(row: OwnBookingRow): OwnInterviewBooking {
+  const applicationActive =
+    !row.application.isArchived &&
+    !(INTERVIEW_CLOSED_APPLICATION_STATUSES as readonly string[]).includes(row.application.status);
+  return {
+    id: row.id,
+    status: row.status as OwnInterviewBookingStatus,
+    roundNumber: row.roundNumber,
+    roundName: row.roundName,
+    durationMinutes: row.durationMinutes,
+    application: {
+      id: row.application.id,
+      referenceCode: row.application.referenceCode,
+      openingTitle: row.application.opening.title,
+    },
+    applicationActive,
+    availableSlots:
+      row.status === "PENDING" && applicationActive
+        ? row.slots.map((slot) => ({ id: slot.id, startsAt: slot.startsAt.toISOString() }))
+        : [],
+    bookedInterview: row.bookedSchedule
+      ? {
+          id: row.bookedSchedule.id,
+          scheduledAt: row.bookedSchedule.scheduledAt.toISOString(),
+          durationMinutes: row.bookedSchedule.durationMinutes,
+          status: row.bookedSchedule.status as InterviewStatus,
+          meetingLink: safeMeetingLink(row.bookedSchedule.meetingLink),
+          icsSequence: row.bookedSchedule.icsSequence,
+        }
+      : null,
+  };
+}
+
+/**
+ * One of the user's own booking requests, or null when it does not exist or belongs to
+ * someone else (ownership is part of the query).
+ */
+export async function getOwnInterviewBooking(
+  userId: string,
+  requestId: string,
+  now: Date = new Date()
+): Promise<OwnInterviewBooking | null> {
+  const row = await prisma.interviewBookingRequest.findFirst({
+    where: { id: requestId, application: { candidate: { userId } } },
+    select: ownBookingSelect(now),
+  });
+  return row ? toOwnBooking(row) : null;
+}
+
+/** Requests waiting for the user to choose a time, for open applications only. */
+export async function getOwnPendingInterviewBookings(
+  userId: string,
+  now: Date = new Date(),
+  limit = 5
+): Promise<OwnInterviewBooking[]> {
+  const rows = await prisma.interviewBookingRequest.findMany({
+    where: {
+      status: "PENDING",
+      application: {
+        candidate: { userId },
+        isArchived: false,
+        status: { notIn: [...INTERVIEW_CLOSED_APPLICATION_STATUSES] },
+      },
+    },
+    select: ownBookingSelect(now),
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+  return rows.map(toOwnBooking);
 }
 
 export interface PendingOffer {
@@ -653,4 +821,144 @@ export async function getOwnLatestPayrollRecords(userId: string, limit = 3): Pro
     periodStartDate: row.payrollPeriod.startDate.toISOString(),
     periodEndDate: row.payrollPeriod.endDate.toISOString(),
   }));
+}
+
+// -----------------------------------------------------------------------------
+// Employment periods and the intern progress review (decisions of 2026-10-25)
+// -----------------------------------------------------------------------------
+
+export interface OwnEmploymentPeriod {
+  id: string;
+  employmentType: EmploymentType | null;
+  designation: string;
+  department: string;
+  startDate: string;
+  endDate: string | null;
+  startReason: PeriodStartReason;
+  endReason: PeriodEndReason | null;
+}
+
+/** The user's own employment periods (joining, re-joining, conversion), oldest first. */
+export async function getOwnEmploymentPeriods(userId: string): Promise<OwnEmploymentPeriod[]> {
+  const periods = await prisma.employmentPeriod.findMany({
+    where: { employee: { userId } },
+    select: {
+      id: true,
+      employmentType: true,
+      designation: true,
+      department: true,
+      startDate: true,
+      endDate: true,
+      startReason: true,
+      endReason: true,
+    },
+    orderBy: { startDate: "asc" },
+  });
+
+  return periods.map((period) => ({
+    id: period.id,
+    employmentType: (period.employmentType as EmploymentType | null) ?? null,
+    designation: period.designation,
+    department: period.department,
+    startDate: period.startDate.toISOString(),
+    endDate: period.endDate?.toISOString() ?? null,
+    startReason: period.startReason as PeriodStartReason,
+    endReason: (period.endReason as PeriodEndReason | null) ?? null,
+  }));
+}
+
+export interface OwnConversionOffer {
+  reviewId: string;
+  proposedDesignation: string;
+  proposedDepartment: string;
+  effectiveDate: string;
+  initialStatus: EmployeeStatus | null;
+  sharedSummary: string | null;
+}
+
+export interface OwnConversionStatus {
+  /** The next scheduled progress review of the current internship period. */
+  nextReview: { scheduledFor: string; reviewPeriodMonths: number } | null;
+  /** A full-time offer waiting for the intern's answer. */
+  pendingOffer: OwnConversionOffer | null;
+  /** An accepted offer that takes effect on a later date. */
+  acceptedOffer: OwnConversionOffer | null;
+  /** The latest decided review (shared summary only; internal notes never leave staff views). */
+  latestDecision: {
+    outcome: ReviewOutcome;
+    decidedAt: string | null;
+    sharedSummary: string | null;
+    offerStatus: ConversionOfferState | null;
+  } | null;
+}
+
+/**
+ * The intern's own progress review status for the current internship period. Selects only
+ * what the intern may see: never internal notes or the reviewer's identity.
+ */
+export async function getOwnConversionStatus(userId: string): Promise<OwnConversionStatus> {
+  const reviews = await prisma.conversionReview.findMany({
+    where: {
+      employee: { userId },
+      status: { in: ["SCHEDULED", "COMPLETED"] },
+      // Reviews of an earlier internship (before an exit and re-join) are history.
+      OR: [{ periodId: null }, { period: { is: { endDate: null } } }],
+    },
+    select: {
+      id: true,
+      status: true,
+      scheduledFor: true,
+      reviewPeriodMonths: true,
+      outcome: true,
+      decidedAt: true,
+      sharedSummary: true,
+      proposedDesignation: true,
+      proposedDepartment: true,
+      proposedEffectiveDate: true,
+      proposedInitialStatus: true,
+      offerStatus: true,
+      convertedAt: true,
+    },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+  });
+
+  const toOffer = (review: (typeof reviews)[number]): OwnConversionOffer | null =>
+    review.proposedDesignation && review.proposedDepartment && review.proposedEffectiveDate
+      ? {
+          reviewId: review.id,
+          proposedDesignation: review.proposedDesignation,
+          proposedDepartment: review.proposedDepartment,
+          effectiveDate: review.proposedEffectiveDate.toISOString(),
+          initialStatus: (review.proposedInitialStatus as EmployeeStatus | null) ?? null,
+          sharedSummary: review.sharedSummary,
+        }
+      : null;
+
+  const scheduled = reviews
+    .filter((review) => review.status === "SCHEDULED")
+    .sort((a, b) => a.scheduledFor.getTime() - b.scheduledFor.getTime())[0];
+  const decided = reviews.filter((review) => review.status === "COMPLETED");
+  const pending = decided.find((review) => review.outcome === "CONVERT" && review.offerStatus === "PENDING");
+  const accepted = decided.find(
+    (review) => review.outcome === "CONVERT" && review.offerStatus === "ACCEPTED" && !review.convertedAt
+  );
+  const latest = decided[0];
+
+  return {
+    nextReview: scheduled
+      ? { scheduledFor: scheduled.scheduledFor.toISOString(), reviewPeriodMonths: scheduled.reviewPeriodMonths }
+      : null,
+    pendingOffer: pending ? toOffer(pending) : null,
+    acceptedOffer: accepted ? toOffer(accepted) : null,
+    latestDecision:
+      latest && latest.outcome
+        ? {
+            outcome: latest.outcome as ReviewOutcome,
+            decidedAt: latest.decidedAt?.toISOString() ?? null,
+            sharedSummary: latest.sharedSummary,
+            offerStatus: (latest.offerStatus as ConversionOfferState | null) ?? null,
+          }
+        : null,
+  };
 }

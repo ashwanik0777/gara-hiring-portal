@@ -4,13 +4,52 @@ import { CertificatePdfPayload } from "./types";
 /**
  * Escapes characters for PDF literal text strings: ( ) \
  */
-function escapePdfString(str: string): string {
+export function escapePdfString(str: string): string {
   return str
     .replace(/\\/g, "\\\\")
     .replace(/\(/g, "\\(")
     .replace(/\)/g, "\\)")
     .replace(/\r/g, "\\r")
     .replace(/\n/g, "\\n");
+}
+
+export interface PdfAssemblyOptions {
+  /**
+   * How the document text is serialized. "latin1" writes one byte per character and is
+   * required for content that contains WinAnsi bytes; "utf-8" is kept for the certificate.
+   */
+  encoding?: "latin1" | "utf-8";
+  /** Object number of an /Info dictionary to reference from the trailer. */
+  infoObjectNumber?: number;
+}
+
+/**
+ * Serializes numbered PDF objects (object 1 must be the catalog) into a complete PDF 1.4
+ * file with a cross-reference table. Output depends only on the inputs, so the same objects
+ * always produce the same bytes.
+ */
+export function assemblePdfDocument(objects: readonly string[], options: PdfAssemblyOptions = {}): Buffer {
+  const encoding = options.encoding ?? "latin1";
+  let output = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+  const offsets: number[] = [];
+
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.byteLength(output, encoding));
+    output += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+
+  const xrefOffset = Buffer.byteLength(output, encoding);
+  output += `xref\n0 ${objects.length + 1}\n`;
+  output += "0000000000 65535 f \n";
+
+  for (const offset of offsets) {
+    output += `${offset.toString().padStart(10, "0")} 00000 n \n`;
+  }
+
+  const info = options.infoObjectNumber ? ` /Info ${options.infoObjectNumber} 0 R` : "";
+  output += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R${info} >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+
+  return Buffer.from(output, encoding);
 }
 
 export class VectorPdfBuilder {
@@ -231,25 +270,7 @@ export class VectorPdfBuilder {
     // Object 7: Font F3 (Times-Bold)
     objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>");
 
-    // Assemble Document
-    let output = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
-    const offsets: number[] = [];
-
-    for (let i = 0; i < objects.length; i++) {
-      offsets.push(Buffer.byteLength(output, "utf-8"));
-      output += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
-    }
-
-    const xrefOffset = Buffer.byteLength(output, "utf-8");
-    output += `xref\n0 ${objects.length + 1}\n`;
-    output += "0000000000 65535 f \n";
-
-    for (const offset of offsets) {
-      output += `${offset.toString().padStart(10, "0")} 00000 n \n`;
-    }
-
-    output += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
-
-    return Buffer.from(output, "utf-8");
+    // The certificate keeps its historical UTF-8 serialization so its bytes do not change.
+    return assemblePdfDocument(objects, { encoding: "utf-8" });
   }
 }

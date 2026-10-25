@@ -9,12 +9,14 @@ import { EmployeeDetailView } from "@/features/employees/components/employee-det
 
 interface SubAdminEmployeeDetailPageProps {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string | string[] }>;
 }
 
 export const instant = false;
 
 export default async function SubAdminEmployeeDetailPage({
   params,
+  searchParams,
 }: SubAdminEmployeeDetailPageProps) {
   const user = await getCurrentUser();
   if (!user) {
@@ -36,6 +38,7 @@ export default async function SubAdminEmployeeDetailPage({
   }
 
   const { id } = await params;
+  const { tab } = await searchParams;
   let employee;
   try {
     employee = await employeeService.getEmployeeDetail(user, id);
@@ -64,6 +67,7 @@ export default async function SubAdminEmployeeDetailPage({
       isStaffAdmin={isStaffAdmin}
       isSelf={isSelf}
       allStaff={allStaff.map((s) => ({ id: s.id, employeeCode: s.employeeCode, name: s.name }))}
+      openExitTab={tab === "exit"}
       applicationHrefBase={canOpenApplications ? "/subadmin/applications" : null}
     />
   );

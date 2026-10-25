@@ -1,7 +1,7 @@
 import React from "react";
 import Link from "next/link";
 import { ArrowRight, UserCheck } from "lucide-react";
-import { ApplicationStatus, EvaluationStatus } from "@prisma/client";
+import { ApplicationStatus, EmployeeStatus, EvaluationStatus } from "@prisma/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MarkInternJoinedDialog } from "@/features/employees/components/mark-intern-joined-dialog";
@@ -76,12 +76,12 @@ export function InternJoiningPanel({
         )}
       </div>
     );
-  } else if (employment) {
+  } else if (employment && employment.status !== EmployeeStatus.EXITED) {
     body = (
       <p className="text-muted-foreground">
-        {enrollment.candidateName} already has an employee record ({employment.employeeCode},{" "}
-        {employment.status}) that was not created from this application, so joining cannot be
-        recorded again here.
+        {enrollment.candidateName} already has a current employee record ({employment.employeeCode},{" "}
+        {employment.status}), so a new joining cannot be recorded. Record their exit on the employee
+        record first.
       </p>
     );
   } else if (enrollment.applicationStatus !== ApplicationStatus.EVALUATION_SELECTED) {
@@ -96,11 +96,23 @@ export function InternJoiningPanel({
       </p>
     );
   } else if (canMarkJoined) {
+    // An exited record (if any) is reused: same employee code, new employment period.
+    const returningCode = employment?.employeeCode ?? null;
     body = (
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-muted-foreground">
-          When {enrollment.candidateName} has started, record the joining. This grants the INTERN role
-          and opens the intern workspace, attendance, leave, payslips, ID card &amp; certificate.
+          {returningCode ? (
+            <>
+              {enrollment.candidateName} worked here before (employee code{" "}
+              <span className="font-mono text-foreground">{returningCode}</span>). When they have started,
+              record the re-joining: the same record and code are reused and a new employment period starts.
+            </>
+          ) : (
+            <>
+              When {enrollment.candidateName} has started, record the joining. This grants the INTERN role
+              and opens the intern workspace, attendance, leave, payslips, ID card &amp; certificate.
+            </>
+          )}
         </p>
         <MarkInternJoinedDialog
           enrollmentId={enrollment.id}
@@ -108,6 +120,7 @@ export function InternJoiningPanel({
           defaultDepartment={enrollment.openingDepartment}
           defaultDesignation={enrollment.openingTitle}
           managerOptions={managerOptions}
+          existingEmployeeCode={returningCode}
         />
       </div>
     );

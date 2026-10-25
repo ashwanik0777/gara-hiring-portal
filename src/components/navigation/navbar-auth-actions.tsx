@@ -155,7 +155,7 @@ export function NavbarAuthActions({
       .toUpperCase() || "U";
 
   return (
-    <div className="flex items-center gap-2 sm:gap-3">
+    <div className="flex shrink-0 items-center gap-2 sm:gap-3">
       <ThemeToggle />
 
       {user ? (
@@ -329,8 +329,8 @@ export function NavbarAuthActions({
         // ─── GUEST USER CTA (SIGN IN / CREATE ACCOUNT) ───
         <div className="flex items-center gap-2 sm:gap-3">
           <Link href="/login">
-            <Button variant="ghost" size="sm" className="gap-1.5">
-              <Lock className="h-3.5 w-3.5" />
+            <Button variant="ghost" size="sm" className="gap-1.5 px-2 sm:px-3">
+              <Lock className="hidden sm:block h-3.5 w-3.5" aria-hidden="true" />
               Sign In
             </Button>
           </Link>

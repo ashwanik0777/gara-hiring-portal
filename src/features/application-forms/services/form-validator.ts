@@ -1,9 +1,23 @@
-import { FormSchemaDefinition, FormFieldDefinition } from "../types";
+import { FormSchemaDefinition, FormFieldDefinition, DocumentStorageMode } from "../types";
+import { documentLinkSchema, DOCUMENT_LINK_INVALID_MESSAGE, DOCUMENT_LINK_REQUIRED_MESSAGE } from "../schemas";
 
 export interface ValidationResult {
   isValid: boolean;
   errors: Record<string, string>;
   sanitizedResponses: Record<string, unknown>;
+  /**
+   * Link mode only: the validated https share link given for the primary document field
+   * (stored in `Application.resumeUrl`, never in the responses). Null otherwise.
+   */
+  documentLink: string | null;
+}
+
+export interface ValidateFormOptions {
+  /**
+   * "local" (default): document fields accept server-received uploads only.
+   * "link": the primary document field takes an https share link from the responses.
+   */
+  documentMode?: DocumentStorageMode;
 }
 
 export interface FileMetadataInput {
@@ -82,15 +96,44 @@ function isValidPhone(value: string): boolean {
 export function validateFormResponses(
   schema: FormSchemaDefinition,
   responses: Record<string, unknown>,
-  files?: Record<string, FileMetadataInput>
+  files?: Record<string, FileMetadataInput>,
+  options: ValidateFormOptions = {}
 ): ValidationResult {
   const errors: Record<string, string> = {};
   const sanitizedResponses: Record<string, unknown> = {};
+  let documentLink: string | null = null;
+  const linkFieldId =
+    options.documentMode === "link" ? getPrimaryFileField(schema)?.id ?? null : null;
 
   for (const field of flattenFields(schema)) {
     const rawValue = responses[field.name];
 
-    // 1. File fields: only real uploads count. Client JSON for a file field is ignored.
+    // 1a. Link mode: the primary document field collects an https share link (no file).
+    if (field.type === "file" && field.id === linkFieldId) {
+      const isBlank =
+        rawValue === undefined ||
+        rawValue === null ||
+        (typeof rawValue === "string" && rawValue.trim() === "");
+      if (isBlank) {
+        if (field.required) {
+          errors[field.name] = DOCUMENT_LINK_REQUIRED_MESSAGE;
+        }
+        continue;
+      }
+      if (typeof rawValue !== "string") {
+        errors[field.name] = DOCUMENT_LINK_INVALID_MESSAGE;
+        continue;
+      }
+      const parsedLink = documentLinkSchema.safeParse(rawValue);
+      if (!parsedLink.success) {
+        errors[field.name] = parsedLink.error.issues[0]?.message ?? DOCUMENT_LINK_INVALID_MESSAGE;
+        continue;
+      }
+      documentLink = parsedLink.data;
+      continue;
+    }
+
+    // 1b. File fields: only real uploads count. Client JSON for a file field is ignored.
     if (field.type === "file") {
       const fileValue = files?.[field.name];
       if (!fileValue) {
@@ -115,7 +158,9 @@ export function validateFormResponses(
       const allowedTypes =
         configuredTypes && configuredTypes.length > 0 ? configuredTypes : DEFAULT_ALLOWED_FILE_TYPES;
       if (!allowedTypes.includes(fileValue.type)) {
-        errors[field.name] = `Invalid file type. Allowed: ${allowedTypes.join(", ")}`;
+        errors[field.name] = allowedTypes.every((type) => type === "application/pdf")
+          ? "Invalid file type. Please upload a PDF document."
+          : "Invalid file type. Please upload a supported document.";
         continue;
       }
 
@@ -278,5 +323,6 @@ export function validateFormResponses(
     isValid: Object.keys(errors).length === 0,
     errors,
     sanitizedResponses,
+    documentLink,
   };
 }

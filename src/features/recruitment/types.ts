@@ -138,3 +138,47 @@ export interface QueueFilters {
   assignedRecruiterId?: string;
   search?: string;
 }
+
+// -----------------------------------------------------------------------------
+// Candidate self-scheduling (booking requests)
+// -----------------------------------------------------------------------------
+
+export type BookingRequestStatus = "PENDING" | "BOOKED" | "CANCELLED";
+export type BookingSlotStatus = "OPEN" | "BOOKED" | "RELEASED";
+
+export interface BookingSlotView {
+  id: string;
+  /** ISO start time. */
+  startsAt: string;
+  status: BookingSlotStatus;
+  /** True when the start time has already passed. */
+  isPast: boolean;
+}
+
+/** Staff projection of a booking request (application detail page). */
+export interface StaffBookingRequestView {
+  id: string;
+  applicationId: string;
+  roundNumber: number;
+  roundName: string;
+  durationMinutes: number;
+  meetingLink: string | null;
+  status: BookingRequestStatus;
+  interviewerName: string | null;
+  createdAt: string;
+  slots: BookingSlotView[];
+  /** OPEN options whose start time is still in the future. */
+  openSlotCount: number;
+  /** Pending, but every offered time has passed without a booking. */
+  noTimesLeft: boolean;
+  bookedInterview: { id: string; scheduledAt: string; status: InterviewStatus } | null;
+  /** The viewer may cancel this request (pending and within their scope). */
+  canCancel: boolean;
+}
+
+/** Pending booking request shown on the staff interview board. */
+export interface StaffBookingBoardItem extends StaffBookingRequestView {
+  candidateName: string;
+  openingTitle: string;
+  openingDepartment: string;
+}

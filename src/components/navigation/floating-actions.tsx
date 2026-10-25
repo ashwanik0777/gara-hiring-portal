@@ -138,18 +138,21 @@ export function FloatingActions() {
               <form onSubmit={handleFeedbackSubmit} className="space-y-4 pt-1">
                 {/* Star rating */}
                 <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+                  <p id="feedback-rating-label" className="block text-xs font-medium text-muted-foreground mb-1.5">
                     How was your experience?
-                  </label>
-                  <div className="flex items-center gap-1.5">
+                  </p>
+                  <div role="group" aria-labelledby="feedback-rating-label" className="flex items-center gap-1.5">
                     {[1, 2, 3, 4, 5].map((star) => (
                       <button
                         key={star}
                         type="button"
                         onClick={() => setRating(star)}
+                        aria-label={`${star} out of 5`}
+                        aria-pressed={rating === star}
                         className="p-1 text-muted-foreground hover:scale-115 transition-transform cursor-pointer"
                       >
                         <Star
+                          aria-hidden="true"
                           className={`h-6 w-6 ${
                             star <= rating
                               ? "fill-amber-400 text-amber-400"
@@ -163,10 +166,11 @@ export function FloatingActions() {
 
                 {/* Feedback textarea */}
                 <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+                  <label htmlFor="floating-actions-feedback-your-comments-or-suggestions" className="block text-xs font-medium text-muted-foreground mb-1.5">
                     Your comments or suggestions
                   </label>
                   <textarea
+                    id="floating-actions-feedback-your-comments-or-suggestions"
                     rows={4}
                     value={feedbackText}
                     onChange={(e) => setFeedbackText(e.target.value)}

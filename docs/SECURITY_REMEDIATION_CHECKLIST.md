@@ -62,7 +62,7 @@
 ## 4. Correctness and data integrity
 
 - [x] **BUG-02** Server Action body limit (1 MB default) blocked the advertised 5 MB resume upload. → `bodySizeLimit` raised to fit 5 MB plus multipart overhead.
-- [~] **BUG-03** `LocalStorageService` throws in production, so resume upload cannot work on Vercel. Needs the OD-013 storage provider decision (Cloudinary credentials exist but no adapter).
+- [x] **BUG-03** `LocalStorageService` throws in production, so resume upload cannot work on Vercel. → Interim product decision (2026-10-25): candidates share an https resume link (`DOCUMENT_STORAGE_MODE=link`, default); uploads return with `DOCUMENT_STORAGE_MODE=local` on the organisation's own server.
 - [x] **BUG-04** Interview lifecycle has no status checks (schedule on closed applications, reschedule/cancel completed interviews, feedback on cancelled interviews).
 - [x] **BUG-05** Evaluation start/finalize accept any status (PASSED can be reset or flipped).
 - [x] **BUG-06** Checkpoint review/submit accept invalid states.
@@ -127,7 +127,7 @@
 - [x] **ENG-04** README / release report claim Playwright and outdated results → corrected.
 - [x] **ENG-05** Missing index on `verifications.identifier`; Better Auth rate-limit table → added.
 - [x] **ENG-06** `User → Employee` and `User → InternshipEnrollment` cascade deletes → `Restrict`.
-- [~] **ENG-07** No integration or end-to-end tests (only mocked unit tests).
+- [~] **ENG-07** No integration or end-to-end tests (only mocked unit tests). → Playwright suite added (2026-10-25, `tests/e2e`, `docs/RUNBOOK.md` §3.1): public pages, 375 px layout, auth validation and security headers run without a database; the two hiring journeys run against a dedicated test database. Still open: database-level integration tests (locks, conditional updates) and running the journeys regularly.
 - [~] **ENG-08** Nonce-based CSP to remove `'unsafe-inline'` (requires dynamic rendering for every page).
 - [x] **ENG-09** Remove the unreachable `/recruitment/*` route tree once HR/sub-admin screens fully replace it. → Removed (13 files) together with the unreachable `src/app/candidate/page.tsx`; the `next.config.ts` redirects keep old links working.
 - [x] **ENG-10** Unused code and assets (2026-10-24, verified with `knip@5.88.1` plus manual checks against `src/` and the local tests): 16 dead symbols (9 Server Actions without callers, 3 schemas, `requireOwnership`, `hasSubAdminAccess`, `isSubAdminRole`, `CardDescription`), `src/features/openings/types.ts`, five Next.js template SVGs, two duplicate root logo files, and the unused devDependencies `@tailwindcss/turbopack` and `@testing-library/jest-dom`. Kept on purpose: `prisma7.config.ts` (loaded by the Prisma CLI), `@testing-library/react` (local tests), symbols used inside their own module or by local tests, and unused official brand variants in `public/brand/`.
@@ -146,10 +146,12 @@ Commands run against the working tree after all fixes (no database was touched; 
 | Dependencies | `npm audit` | 0 vulnerabilities (was 1 critical: `next@16.4.0`) |
 | Production build | `npm run build` | Pass — 79 routes |
 
+Re-run on 2026-10-25 after rounds 3–4: TypeScript 0 errors, ESLint 0 errors, Vitest 27 files / 887 tests passed, `npm audit --omit=dev` 0 vulnerabilities, production build passed (74 routes). Migrations `20261026000000_employment_periods_jobs` and `20261027000000_scheduling_esign_sources` were applied to Neon after a schema-drift check and a data backup; the post-deploy diff is empty.
+
 What this does **not** prove:
-- No integration or end-to-end tests exist (ENG-07); database behaviour (row locks, advisory locks, conditional updates) is verified only against mocks.
+- End-to-end tests exist since 2026-10-25, but database behaviour (row locks, advisory locks, conditional updates) is still verified only against mocks (ENG-07).
 - Migrations were applied to the Neon database and verified with a schema diff (OPS-05); application behaviour against it has not been exercised yet.
-- Email delivery, Google OAuth and Vercel Cron have not been exercised against live providers.
+- Email delivery (including calendar invites), Google OAuth and the job-runner trigger (`/api/jobs/run`) have not been exercised against live providers.
 - Production readiness still depends on the owner actions in section 0 and the product decisions in `docs/OPEN_DECISIONS.md`.
 
 Summary: 89 items fixed or verified, 7 deferred pending product decisions (`[~]`), 3 owner actions outstanding (`[!]`).

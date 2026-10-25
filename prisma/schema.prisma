@@ -52,6 +52,8 @@ model User {
   reviewedLeaveRequests        LeaveRequest[]             @relation("LeaveApprovers")
   finalizedPayrollRecords      PayrollRecord[]            @relation("PayrollFinalizers")
   subAdminPermission           SubAdminPermission?
+  conversionReviewsConducted   ConversionReview[]         @relation("ConversionReviewers")
+  interviewBookingRequests     InterviewBookingRequest[]  @relation("InterviewBookingInterviewer")
 
   @@map("users")
 }
@@ -67,6 +69,7 @@ model Session {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([userId])
   @@map("sessions")
 }
 
@@ -87,6 +90,7 @@ model Account {
   updatedAt             DateTime  @updatedAt
 
   @@unique([providerId, accountId])
+  @@index([userId])
   @@map("accounts")
 }
 
@@ -236,7 +240,9 @@ model Employee {
   employmentHistories EmploymentHistory[]
   secureDocuments     EmployeeDocument[]
   performanceReviews  EmployeePerformanceReview[]
-  exitRecord          EmployeeExitRecord?
+  exitRecords         EmployeeExitRecord[]
+  employmentPeriods   EmploymentPeriod[]
+  conversionReviews   ConversionReview[]
 
   // HRMS Core Relations (Prompt 8 - Structural records, policy-gated operations)
   attendanceRecords    AttendanceRecord[]
@@ -269,6 +275,8 @@ model AuditLog {
   ipAddress    String?
   createdAt    DateTime @default(now())
 
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
   @@map("audit_logs")
 }
 
@@ -282,6 +290,8 @@ model NotificationOutbox {
   maxAttempts    Int       @default(5)
   lastError      String?
   claimedAt      DateTime? // Set when a worker claims the row; stale claims are recovered
+  // Idempotency key for automated emails (one row per recipient and occurrence)
+  dedupeKey      String?   @unique
   sentAt         DateTime?
   createdAt      DateTime  @default(now())
 
@@ -384,7 +394,12 @@ model Application {
   formVersion        OpeningFormVersion @relation(fields: [formVersionId], references: [id], onDelete: Restrict)
   status             ApplicationStatus  @default(SUBMITTED)
   submittedResponses Json               // Immutable snapshot of form responses
-  resumeStorageKey   String             // Private storage key (not a public URL)
+  resumeStorageKey   String             // Private storage key (not a public URL); "" when none
+  resumeUrl          String?            // Candidate-provided external link (e.g. Google Drive) while no storage server exists
+  // Where the candidate came from (normalized code, e.g. CAREERS_PAGE, LINKEDIN, REFERRAL, GOOGLE_JOBS)
+  source             String?
+  // Optional detail (utm_source / utm_campaign / referrer host), max 200 chars
+  sourceDetail       String?
   assignedRecruiterId String?
   assignedRecruiter  User?              @relation("AssignedRecruiter", fields: [assignedRecruiterId], references: [id], onDelete: SetNull)
   isArchived         Boolean            @default(false)
@@ -397,9 +412,14 @@ model Application {
   enrollment         InternshipEnrollment?
   jobOffer           JobOffer?                  @relation("ApplicationOffer")
   hiredEmployee      Employee?                  @relation("HiredApplication")
+  employmentPeriods  EmploymentPeriod[]         @relation("PeriodApplication")
+  interviewBookingRequests InterviewBookingRequest[]
 
   @@index([openingId, candidateId])
+  @@index([source])
+  @@index([candidateId])
   @@index([status])
+  @@index([createdAt])
   @@index([assignedRecruiterId])
   @@map("applications")
 }
@@ -454,13 +474,17 @@ model InterviewSchedule {
   scheduledBy        User               @relation("SchedulerSchedules", fields: [scheduledById], references: [id])
   rescheduleReason   String?
   cancellationReason String?
+  // iCalendar SEQUENCE: incremented on every reschedule/cancel so calendar apps update the same event
+  icsSequence        Int                @default(0)
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
   feedback           InterviewFeedback?
+  bookingRequest     InterviewBookingRequest?
 
   @@index([applicationId])
   @@index([interviewerId])
+  @@index([status, scheduledAt])
   @@map("interview_schedules")
 }
 
@@ -562,6 +586,7 @@ model EvaluationCheckpoint {
   updatedAt          DateTime             @updatedAt
 
   @@unique([enrollmentId, dayNumber])
+  @@index([status])
   @@map("evaluation_checkpoints")
 }
 
@@ -805,11 +830,18 @@ model JobOffer {
   extendedAt          DateTime?
   decisionAt          DateTime?
   declineReason       String?
+  // Electronic acceptance (typed signature) evidence
+  signedName          String?
+  signedAt            DateTime?
+  signatureIpHash     String?     // Keyed hash of the signer's IP, never the raw address
+  signatureUserAgent  String?
+  signedDocumentHash  String?     // SHA-256 of the offer letter PDF the candidate accepted
   notes               String?     // Internal notes for staff
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
 
   @@index([applicationId])
+  @@index([status])
   @@map("job_offers")
 }
 
@@ -867,8 +899,11 @@ model EmployeePerformanceReview {
 
 model EmployeeExitRecord {
   id                  String    @id @default(uuid())
-  employeeId          String    @unique
+  employeeId          String
   employee            Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  // One exit per employment period, so a person who re-joins can exit again later
+  periodId            String?   @unique
+  period              EmploymentPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
   resignationDate     DateTime?
   lastWorkingDate     DateTime
   reason              String?
@@ -880,7 +915,98 @@ model EmployeeExitRecord {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
+  @@index([employeeId])
   @@map("employee_exit_records")
+}
+
+enum EmploymentPeriodStartReason {
+  JOINED
+  REJOINED
+  CONVERTED
+}
+
+enum EmploymentPeriodEndReason {
+  EXITED
+  CONVERTED
+}
+
+// Each joining (first join, re-join after exit, intern-to-full-time conversion) is one period.
+// The Employee row (same account, same employee code) is reused; past periods are history.
+model EmploymentPeriod {
+  id             String                      @id @default(uuid())
+  employeeId     String
+  employee       Employee                    @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  employmentType EmploymentType?
+  designation    String
+  department     String
+  startDate      DateTime
+  endDate        DateTime?                   // null = current period
+  startReason    EmploymentPeriodStartReason
+  endReason      EmploymentPeriodEndReason?
+  applicationId  String?
+  application    Application?                @relation("PeriodApplication", fields: [applicationId], references: [id], onDelete: SetNull)
+  createdById    String?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  exitRecord        EmployeeExitRecord?
+  conversionReviews ConversionReview[]
+
+  @@index([employeeId, startDate])
+  @@map("employment_periods")
+}
+
+enum ConversionReviewStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum ConversionReviewOutcome {
+  CONVERT
+  EXTEND
+  END_INTERNSHIP
+}
+
+enum ConversionOfferStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+}
+
+// Intern progress review held 3 or 6 months after joining (product-owner decision 2026-10-25).
+// A CONVERT outcome creates a full-time offer the intern accepts in the portal; the conversion
+// takes effect automatically on the effective date.
+model ConversionReview {
+  id                    String                   @id @default(uuid())
+  employeeId            String
+  employee              Employee                 @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  periodId              String?
+  period                EmploymentPeriod?        @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  reviewPeriodMonths    Int                      // 3 or 6
+  scheduledFor          DateTime
+  status                ConversionReviewStatus   @default(SCHEDULED)
+  outcome               ConversionReviewOutcome?
+  reviewerId            String?
+  reviewer              User?                    @relation("ConversionReviewers", fields: [reviewerId], references: [id], onDelete: SetNull)
+  internalNotes         String?                  // Staff only
+  sharedSummary         String?                  // Shown to the intern
+  decidedAt             DateTime?
+  proposedDesignation   String?
+  proposedDepartment    String?
+  proposedEffectiveDate DateTime?
+  proposedInitialStatus EmployeeStatus?
+  offerStatus           ConversionOfferStatus?
+  offerRespondedAt      DateTime?
+  convertedAt           DateTime?
+  createdById           String?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  @@index([status, scheduledFor])
+  @@index([employeeId])
+  @@map("conversion_reviews")
 }
 
 // -----------------------------------------------------------------------------
@@ -948,6 +1074,7 @@ model AttendanceRegularization {
 
   @@index([employeeId])
   @@index([attendanceRecordId])
+  @@index([status])
   @@map("attendance_regularizations")
 }
 
@@ -994,6 +1121,7 @@ model LeaveRequest {
 
   @@index([employeeId])
   @@index([leaveTypeId])
+  @@index([status, startDate])
   @@map("leave_requests")
 }
 
@@ -1060,5 +1188,81 @@ model SiteVisitor {
   @@map("site_visitors")
 }
 
+enum ScheduledJobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  CANCELLED
+}
 
+// Durable background jobs (reminders, digests, scheduled conversions). Run by the job runner
+// (src/infrastructure/jobs) from any trigger: in-app traffic, the secured /api/jobs/run endpoint
+// called by an external scheduler, or `npm run worker` on a long-running server.
+model ScheduledJob {
+  id          String             @id @default(uuid())
+  type        String
+  runAt       DateTime
+  payload     Json?
+  // Idempotency: re-enqueueing with the same key updates the pending job instead of duplicating it
+  dedupeKey   String?            @unique
+  status      ScheduledJobStatus @default(PENDING)
+  attempts    Int                @default(0)
+  maxAttempts Int                @default(5)
+  lastError   String?
+  lockedAt    DateTime?
+  completedAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
 
+  @@index([status, runAt])
+  @@map("scheduled_jobs")
+}
+
+enum InterviewBookingStatus {
+  PENDING
+  BOOKED
+  CANCELLED
+}
+
+enum InterviewSlotStatus {
+  OPEN
+  BOOKED
+  RELEASED
+}
+
+// Candidate self-scheduling: staff offer a few time options for an interview round and the
+// candidate books one from their portal, which creates the InterviewSchedule.
+model InterviewBookingRequest {
+  id               String                 @id @default(uuid())
+  applicationId    String
+  application      Application            @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  roundNumber      Int
+  roundName        String
+  durationMinutes  Int
+  interviewerId    String?
+  interviewer      User?                  @relation("InterviewBookingInterviewer", fields: [interviewerId], references: [id], onDelete: SetNull)
+  meetingLink      String?
+  status           InterviewBookingStatus @default(PENDING)
+  bookedScheduleId String?                @unique
+  bookedSchedule   InterviewSchedule?     @relation(fields: [bookedScheduleId], references: [id], onDelete: SetNull)
+  createdById      String
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  slots            InterviewSlotOption[]
+
+  @@index([applicationId, status])
+  @@map("interview_booking_requests")
+}
+
+model InterviewSlotOption {
+  id        String                  @id @default(uuid())
+  requestId String
+  request   InterviewBookingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  startsAt  DateTime
+  status    InterviewSlotStatus     @default(OPEN)
+
+  @@index([requestId, status])
+  @@map("interview_slot_options")
+}

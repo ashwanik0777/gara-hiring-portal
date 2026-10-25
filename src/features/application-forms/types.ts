@@ -11,6 +11,13 @@ export type FormFieldType =
   | "file"
   | "date";
 
+/**
+ * How candidates provide the application document (mirrors `env.DOCUMENT_STORAGE_MODE`).
+ * "link": an external https share link (Google Drive, OneDrive, Dropbox); no file is stored.
+ * "local": a PDF upload kept in the server's private storage.
+ */
+export type DocumentStorageMode = "link" | "local";
+
 export interface FormFieldValidation {
   min?: number;
   max?: number;

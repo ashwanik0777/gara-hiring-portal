@@ -28,7 +28,10 @@ export const ACTIVE_EVALUATION_STATUSES: readonly EvaluationStatus[] = [
 
 export interface LifecycleFacts {
   roles: readonly string[];
-  /** Status of the user's most recent internship enrollment, if any. */
+  /**
+   * Status of the user's most recent internship enrollment that has not yet led to joining
+   * (an enrollment whose application is HIRED is history, not an active evaluation).
+   */
   enrollmentStatus: EvaluationStatus | null;
   /** Status of the user's employment record, if any. */
   employeeStatus: EmployeeStatus | null;
@@ -42,11 +45,12 @@ export function determineLifecycleStage(facts: LifecycleFacts): LifecycleStage {
   if (facts.roles.includes(Role.INTERN) && !exited) {
     return "INTERN";
   }
-  if (exited) {
-    return "ALUMNI";
-  }
+  // A former intern/employee who re-applies and is selected again is in evaluation.
   if (facts.enrollmentStatus && ACTIVE_EVALUATION_STATUSES.includes(facts.enrollmentStatus)) {
     return "EVALUATION";
+  }
+  if (exited) {
+    return "ALUMNI";
   }
   return "CANDIDATE";
 }
@@ -78,7 +82,9 @@ export const STAGE_CAPABILITIES: Record<LifecycleStage, readonly PortalCapabilit
     "help",
   ],
   EMPLOYEE: ["employeeHome", "attendance", "leave", "payslips", "journey", "profile", "help"],
-  ALUMNI: ["journey", "certificate", "profile", "verifyCertificate", "help"],
+  // Product-owner decision (2026-10-25): people who exited re-join through normal hiring with
+  // the same account, so candidate features return alongside their past history.
+  ALUMNI: [...CANDIDATE_CAPABILITIES, "certificate"],
 };
 
 export function capabilitiesForStage(stage: LifecycleStage): PortalCapability[] {
@@ -102,7 +108,7 @@ export const STAGE_HOME_PATHS: Record<LifecycleStage, string> = {
   EVALUATION: "/candidate/dashboard",
   INTERN: "/intern/dashboard",
   EMPLOYEE: "/hrms",
-  ALUMNI: "/candidate/applications",
+  ALUMNI: "/candidate/dashboard",
 };
 
 export const STAGE_PORTAL_BADGES: Record<LifecycleStage, string> = {
@@ -110,7 +116,7 @@ export const STAGE_PORTAL_BADGES: Record<LifecycleStage, string> = {
   EVALUATION: "EVALUATION STAGE",
   INTERN: "INTERN WORKSPACE",
   EMPLOYEE: "EMPLOYEE PORTAL",
-  ALUMNI: "ALUMNI",
+  ALUMNI: "ALUMNI · WELCOME BACK",
 };
 
 export const STAGE_LABELS: Record<LifecycleStage, string> = {

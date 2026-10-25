@@ -37,6 +37,11 @@ export const ADMIN_NAV_ITEMS: DashboardNavItem[] = [
     iconName: "UserCheck",
   },
   {
+    label: "Intern Reviews",
+    href: "/admin/intern-reviews",
+    iconName: "CheckCircle2",
+  },
+  {
     label: "Attendance",
     href: "/admin/attendance",
     iconName: "Clock",

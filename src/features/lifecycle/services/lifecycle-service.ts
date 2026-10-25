@@ -42,7 +42,7 @@ export const getLifecycleState = cache(async (userId: string, roleKey: string): 
         startDate: true,
         endDate: true,
         createdAt: true,
-        application: { select: { opening: { select: { title: true } } } },
+        application: { select: { status: true, opening: { select: { title: true } } } },
       },
     }),
     prisma.employee.findUnique({
@@ -63,9 +63,11 @@ export const getLifecycleState = cache(async (userId: string, roleKey: string): 
     }),
   ]);
 
+  // An enrollment whose application already led to joining (HIRED) is history.
+  const activeEnrollment = enrollment && enrollment.application.status !== "HIRED" ? enrollment : null;
   const stage = determineLifecycleStage({
     roles,
-    enrollmentStatus: (enrollment?.status as EvaluationStatus | undefined) ?? null,
+    enrollmentStatus: (activeEnrollment?.status as EvaluationStatus | undefined) ?? null,
     employeeStatus: (employee?.status as EmployeeStatus | undefined) ?? null,
   });
 

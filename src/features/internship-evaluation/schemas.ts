@@ -63,3 +63,13 @@ export const IssueIdCardSchema = z.object({
     z.string().trim().min(10, "Please provide a justification of at least 10 characters").max(1000)
   ),
 });
+
+/** Supervisor change from the evaluation cockpit (product-owner decision 2026-10-25). */
+export const ChangeSupervisorSchema = z.object({
+  enrollmentId: recordId("enrollment ID"),
+  supervisorId: z
+    .string({ error: "Please choose the new supervisor" })
+    .trim()
+    .min(1, "Please choose the new supervisor")
+    .uuid("Invalid supervisor ID"),
+});

@@ -74,7 +74,7 @@ function CheckpointSubmitForm({ checkpoint }: { checkpoint: InternCheckpointView
         setSaved(true);
       }
     } catch {
-      setError("Failed to submit checkpoint notes.");
+      setError("We couldn't save your notes. Please check your connection and try again.");
     } finally {
       setIsSubmitting(false);
     }

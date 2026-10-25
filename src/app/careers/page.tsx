@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { Navbar } from "@/components/navigation/navbar";
 import { Footer } from "@/components/navigation/footer";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -9,17 +10,31 @@ import { EmptyState } from "@/components/feedback/empty-state";
 import { getPublicOpenings } from "@/features/openings/services/opening-service";
 import { Briefcase, Building, ArrowRight } from "lucide-react";
 import { CardGridSkeleton } from "@/components/feedback/page-skeletons";
+import { getSiteUrl } from "@/lib/site-url";
+import {
+  externalReferrerHost,
+  pickAttributionParams,
+  toAttributionQuery,
+} from "@/features/applications/source-tracking";
+import { buildCareersIndexMetadata } from "./_lib/seo";
 
-export const metadata = {
-  title: "Careers & Openings",
-  description: "Explore structured internship programs and full-time career opportunities at GARA Innovation.",
-};
+export const metadata = buildCareersIndexMetadata();
+
+type CareersSearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 // Next.js 16 Cache Components: Allow streaming/blocking data access
 export const instant = false;
 
-async function OpeningsList() {
+async function OpeningsList({ searchParams }: { searchParams: CareersSearchParams }) {
   const openings = await getPublicOpenings();
+
+  // Campaign parameters (and an external referrer host) are carried to the opening pages.
+  const attribution = pickAttributionParams(await searchParams);
+  if (!attribution.ref) {
+    const referrerHost = externalReferrerHost((await headers()).get("referer"), getSiteUrl());
+    if (referrerHost) attribution.ref = referrerHost;
+  }
+  const attributionQuery = toAttributionQuery(attribution);
 
   if (openings.length === 0) {
     return (
@@ -60,7 +75,7 @@ async function OpeningsList() {
           </CardContent>
 
           <CardFooter className="pt-3 border-t border-border/50">
-            <Link href={`/careers/${opening.slug}`} className="w-full">
+            <Link href={`/careers/${opening.slug}${attributionQuery}`} className="w-full">
               <Button variant="outline" size="sm" className="w-full justify-between gap-2">
                 <span>View Role & Requirements</span>
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -73,7 +88,7 @@ async function OpeningsList() {
   );
 }
 
-export default function CareersPage() {
+export default function CareersPage({ searchParams }: { searchParams: CareersSearchParams }) {
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <Navbar />
@@ -90,7 +105,7 @@ export default function CareersPage() {
 
           {/* Openings Grid streamed inside Suspense */}
           <Suspense fallback={<CardGridSkeleton />}>
-            <OpeningsList />
+            <OpeningsList searchParams={searchParams} />
           </Suspense>
         </div>
       </main>

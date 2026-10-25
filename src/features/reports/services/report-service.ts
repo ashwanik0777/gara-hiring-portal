@@ -462,14 +462,16 @@ export class ReportService {
     const byStatus = opsReport.recruitment.byStatus;
     const totalApps = opsReport.recruitment.totalApplications;
 
-    const underReview = (byStatus["SUBMITTED"] || 0) + (byStatus["SCREENING_PASSED"] || 0);
+    // Current-stage snapshot grouped from the real ApplicationStatus values (the stage
+    // history funnel is the "Hiring funnel" section).
+    const underReview = (byStatus["SUBMITTED"] || 0) + (byStatus["SCREENING"] || 0);
     const inEvaluation =
-      (byStatus["EVALUATION_SELECTED"] || 0) +
-      (byStatus["EVALUATION_SUBMITTED"] || 0) +
+      (byStatus["SHORTLISTED"] || 0) +
       (byStatus["INTERVIEW_SCHEDULED"] || 0) +
-      (byStatus["INTERVIEW_COMPLETED"] || 0);
-    const offered = byStatus["OFFER_EXTENDED"] || 0;
-    const hired = (byStatus["HIRED"] || 0) + (byStatus["ONBOARDING_COMPLETED"] || 0);
+      (byStatus["INTERVIEWED"] || 0) +
+      (byStatus["EVALUATION_SELECTED"] || 0);
+    const offered = (byStatus["OFFERED"] || 0) + (byStatus["OFFER_ACCEPTED"] || 0);
+    const hired = byStatus["HIRED"] || 0;
     const rejected = byStatus["REJECTED"] || 0;
 
     const funnelStages: FunnelStage[] = [
@@ -662,14 +664,10 @@ export class ReportService {
         const appDate = new Date(app.createdAt);
         if (appDate.getFullYear() === m.year && appDate.getMonth() === m.monthIdx) {
           apps++;
-          if (
-            app.status.includes("INTERVIEW") ||
-            app.status.includes("EVALUATION") ||
-            app.status.includes("REVIEW")
-          ) {
+          if (app.status.includes("INTERVIEW") || app.status === "EVALUATION_SELECTED") {
             interviews++;
           }
-          if (app.status === "HIRED" || app.status === "OFFER_ACCEPTED") {
+          if (app.status === "HIRED") {
             hiredCount++;
           }
         }

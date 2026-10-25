@@ -10,6 +10,8 @@
  * 6. Responsive layout (max-width 580px) tested across web, desktop, and mobile email clients.
  */
 
+import { BUSINESS_TIME_ZONE } from "@/lib/time/business-time";
+
 /**
  * Escapes a value for safe interpolation into HTML text or a quoted attribute.
  */
@@ -49,6 +51,17 @@ function getAppBaseUrl(): string {
     return `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
   }
   return "https://gara-hiring-portal.vercel.app";
+}
+
+/**
+ * Absolute portal URL for an app-relative path (e.g. "/admin/leave"). Anything that is not a
+ * plain app path (absolute URLs, protocol-relative "//host" links) falls back to the given
+ * path, so payload data can never point an email link at another site.
+ */
+export function buildAppUrl(path: unknown, fallbackPath = "/dashboard"): string {
+  const isAppPath =
+    typeof path === "string" && path.startsWith("/") && !path.startsWith("//") && !path.includes("\\");
+  return `${getAppBaseUrl()}${isAppPath ? path : fallbackPath}`;
 }
 
 export interface EmailShellOptions {
@@ -377,8 +390,13 @@ export function buildApplicationConfirmationEmail(params: {
   return { subject, text, html };
 }
 
+/** Who an interview email is addressed to. */
+export type InterviewRecipientRole = "CANDIDATE" | "INTERVIEWER";
+
+const CALENDAR_INVITE_NOTE = "A calendar invitation is attached so you can add it to your calendar.";
+
 /**
- * 4. Interview Invitation
+ * 4. Interview Invitation (candidate), or interview assignment (interviewer)
  */
 export function buildInterviewInvitationEmail(params: {
   candidateName: string;
@@ -389,20 +407,50 @@ export function buildInterviewInvitationEmail(params: {
   meetingLink?: string | null;
   referenceCode?: string;
   portalUrl?: string;
+  /** Defaults to the candidate. */
+  recipientRole?: InterviewRecipientRole;
+  /** Interviewer's name (interviewer emails); the candidate's name is used otherwise. */
+  recipientName?: string;
+  /** App-relative page for the recipient (e.g. the application or the interview board). */
+  href?: string;
+  /** Mentions the attached .ics invite. */
+  hasCalendarInvite?: boolean;
 }): { subject: string; text: string; html: string } {
-  const portalUrl = params.portalUrl || `${getAppBaseUrl()}/candidate/dashboard`;
-  const formattedDate = new Date(params.scheduledAt).toLocaleString(undefined, {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
+  const isInterviewer = params.recipientRole === "INTERVIEWER";
+  const portalUrl =
+    params.portalUrl || buildAppUrl(params.href, isInterviewer ? "/dashboard" : "/candidate/dashboard");
+  const formattedDate = formatBusinessDateTime(params.scheduledAt);
   const meetingLink = safeHttpUrl(params.meetingLink);
+  const calendarNote = params.hasCalendarInvite ? `${CALENDAR_INVITE_NOTE}\n\n` : "";
+
+  if (isInterviewer) {
+    const recipientName = params.recipientName || "there";
+    const rows: Array<[string, string]> = [
+      ["Candidate", params.candidateName],
+      ["Position", params.openingTitle],
+      ["Interview Round", params.roundName],
+      ["Date & Time", formattedDate],
+      ["Duration", `${params.durationMinutes} minutes`],
+    ];
+    if (meetingLink) rows.push(["Meeting Link", meetingLink]);
+    const lead = `You have been assigned to interview ${params.candidateName} (${params.roundName}, ${params.openingTitle}).`;
+
+    const subject = `[GARA Innovation] Interview assigned: ${params.candidateName} (${params.roundName})`;
+    const text = `Hello ${recipientName},\n\n${lead}\n\n${detailLines(rows)}\n\n${calendarNote}Interview details: ${portalUrl}\n\n— GARA Innovation`;
+    const html = renderEmailShell({
+      categoryBadge: { text: "Interview Assigned", bgColor: "#eff6ff", textColor: "#1d4ed8", borderColor: "#bfdbfe" },
+      title: "You have an interview to conduct",
+      salutation: `Hello ${recipientName},`,
+      leadParagraph: escapeHtml(lead),
+      contentHtml: renderDetailCard(rows),
+      ctaButton: { text: "View Interview Details", url: portalUrl },
+      ...(params.hasCalendarInvite ? { secondaryNote: { text: CALENDAR_INVITE_NOTE } } : {}),
+    });
+    return { subject, text, html };
+  }
+
   const subject = `[GARA Innovation] Interview Scheduled: ${params.roundName} (${params.openingTitle})`;
-  const text = `Hello ${params.candidateName},\n\nYou have been shortlisted for an interview round for the position of ${params.openingTitle}.\n\nInterview Round: ${params.roundName}\nDate & Time: ${formattedDate}\nDuration: ${params.durationMinutes} minutes\n${meetingLink ? `Meeting Link: ${meetingLink}\n` : ""}Candidate Portal: ${portalUrl}\n\nPlease be prepared 5 minutes prior to the scheduled time.\n\n— GARA Innovation Talent Acquisition`;
+  const text = `Hello ${params.candidateName},\n\nYou have been shortlisted for an interview round for the position of ${params.openingTitle}.\n\nInterview Round: ${params.roundName}\nDate & Time: ${formattedDate}\nDuration: ${params.durationMinutes} minutes\n${meetingLink ? `Meeting Link: ${meetingLink}\n` : ""}Candidate Portal: ${portalUrl}\n\n${calendarNote}Please be prepared 5 minutes prior to the scheduled time.\n\n— GARA Innovation Talent Acquisition`;
 
   const contentHtml = `
     <div style="margin: 20px 0; padding: 20px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
@@ -458,7 +506,7 @@ export function buildInterviewInvitationEmail(params: {
     },
     secondaryNote: {
       title: "Preparation Guidelines",
-      text: "Please ensure a stable internet connection, a quiet environment, and have your camera enabled. Please join 5 minutes ahead of schedule.",
+      text: `Please ensure a stable internet connection, a quiet environment, and have your camera enabled. Please join 5 minutes ahead of schedule.${params.hasCalendarInvite ? ` ${CALENDAR_INVITE_NOTE}` : ""}`,
       bgColor: "#eff6ff",
       borderColor: "#2563eb",
       textColor: "#1e3a8a",
@@ -687,6 +735,8 @@ interface JoinedEmailParams {
   designation?: string;
   joiningDate?: string;
   portalUrl?: string;
+  /** The person exited earlier and re-joined with the same account ("Welcome back"). */
+  isRejoin?: boolean;
 }
 
 /** Shared escaped detail card and feature list for the joining welcome emails. */
@@ -766,11 +816,16 @@ export function buildInternJoinedEmail(
 ): { subject: string; text: string; html: string } {
   const portalUrl = params.portalUrl || `${getAppBaseUrl()}/intern/dashboard`;
   const programme = params.openingTitle ? ` for ${params.openingTitle}` : "";
+  const rejoin = params.isRejoin === true;
+  const greeting = rejoin ? `Welcome back ${params.recipientName}!` : `Welcome ${params.recipientName}!`;
+  const joinedVerb = rejoin ? "re-joined" : "officially joined";
 
-  const subject = "[GARA Innovation] Welcome aboard: you have joined as an intern";
+  const subject = rejoin
+    ? "[GARA Innovation] Welcome back: you have re-joined as an intern"
+    : "[GARA Innovation] Welcome aboard: you have joined as an intern";
   const text = joinedEmailText(
-    `Welcome ${params.recipientName}!`,
-    `You have officially joined GARA Innovation as an intern${programme}.`,
+    greeting,
+    `You have ${joinedVerb} GARA Innovation as an intern${programme}.`,
     params,
     INTERN_JOINED_FEATURES,
     portalUrl
@@ -778,14 +833,14 @@ export function buildInternJoinedEmail(
 
   const html = renderEmailShell({
     categoryBadge: {
-      text: "Joined as Intern",
+      text: rejoin ? "Re-joined as Intern" : "Joined as Intern",
       bgColor: "#f0fdf4",
       textColor: "#166534",
       borderColor: "#bbf7d0",
     },
-    title: "Welcome to GARA Innovation",
-    salutation: `Welcome ${params.recipientName}!`,
-    leadParagraph: `You have officially joined GARA Innovation as an intern${
+    title: rejoin ? "Welcome back to GARA Innovation" : "Welcome to GARA Innovation",
+    salutation: greeting,
+    leadParagraph: `You have ${joinedVerb} GARA Innovation as an intern${
       params.openingTitle ? ` for <strong>${escapeHtml(params.openingTitle)}</strong>` : ""
     }. Your intern workspace is ready.`,
     contentHtml: renderJoinedEmailContent(params, INTERN_JOINED_FEATURES),
@@ -805,11 +860,16 @@ export function buildEmployeeJoinedEmail(
   params: JoinedEmailParams
 ): { subject: string; text: string; html: string } {
   const portalUrl = params.portalUrl || `${getAppBaseUrl()}/hrms`;
+  const rejoin = params.isRejoin === true;
+  const greeting = rejoin ? `Welcome back ${params.recipientName}!` : `Welcome ${params.recipientName}!`;
+  const joinedVerb = rejoin ? "re-joined" : "officially joined";
 
-  const subject = "[GARA Innovation] Welcome aboard: you have joined the team";
+  const subject = rejoin
+    ? "[GARA Innovation] Welcome back: you have re-joined the team"
+    : "[GARA Innovation] Welcome aboard: you have joined the team";
   const text = joinedEmailText(
-    `Welcome ${params.recipientName}!`,
-    "You have officially joined GARA Innovation as an employee.",
+    greeting,
+    `You have ${joinedVerb} GARA Innovation as an employee.`,
     params,
     EMPLOYEE_JOINED_FEATURES,
     portalUrl
@@ -817,14 +877,14 @@ export function buildEmployeeJoinedEmail(
 
   const html = renderEmailShell({
     categoryBadge: {
-      text: "Joined as Employee",
+      text: rejoin ? "Re-joined as Employee" : "Joined as Employee",
       bgColor: "#eff6ff",
       textColor: "#1d4ed8",
       borderColor: "#bfdbfe",
     },
-    title: "Welcome to GARA Innovation",
-    salutation: `Welcome ${params.recipientName}!`,
-    leadParagraph: `You have officially joined GARA Innovation${
+    title: rejoin ? "Welcome back to GARA Innovation" : "Welcome to GARA Innovation",
+    salutation: greeting,
+    leadParagraph: `You have ${joinedVerb} GARA Innovation${
       params.designation ? ` as <strong>${escapeHtml(params.designation)}</strong>` : ""
     }. Your employee home is ready.`,
     contentHtml: renderJoinedEmailContent(params, EMPLOYEE_JOINED_FEATURES),
@@ -837,8 +897,647 @@ export function buildEmployeeJoinedEmail(
   return { subject, text, html };
 }
 
+// -----------------------------------------------------------------------------
+// Round 3: conversion, re-joining, reminders and the staff daily digest
+// -----------------------------------------------------------------------------
+
+type EmailContent = { subject: string; text: string; html: string };
+
+const LABEL_CELL_STYLE =
+  "color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em;";
+
+/** Escaped key-value detail card shared by the templates below. */
+function renderDetailCard(rows: ReadonlyArray<readonly [string, string]>): string {
+  if (rows.length === 0) return "";
+  const rowsHtml = rows
+    .map(
+      ([label, value]) => `
+        <tr>
+          <td width="35%" style="${LABEL_CELL_STYLE}">${escapeHtml(label)}</td>
+          <td style="color: #0f172a; font-weight: 600;">${escapeHtml(value)}</td>
+        </tr>`
+    )
+    .join("");
+  return `
+    <div style="margin: 20px 0; padding: 20px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+      <table width="100%" cellpadding="6" cellspacing="0" border="0" style="font-size: 13px;">${rowsHtml}
+      </table>
+    </div>`;
+}
+
+/** Escaped "message from HR" block for a review summary that staff chose to share. */
+function renderSharedSummary(summary: string | undefined): string {
+  if (!summary) return "";
+  return `
+    <div style="margin: 16px 0; padding: 14px 18px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
+      <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 6px;">Summary from your review</div>
+      <div style="font-size: 13px; color: #334155; line-height: 1.5; white-space: pre-line;">${escapeHtml(summary)}</div>
+    </div>`;
+}
+
+/** Plain-text detail lines, skipping empty values. */
+function detailLines(rows: ReadonlyArray<readonly [string, string]>): string {
+  return rows.map(([label, value]) => `${label}: ${value}`).join("\n");
+}
+
+/** Formats a calendar day stored at UTC midnight (e.g. an effective date) without shifting it. */
+export function formatCalendarDate(value: string | undefined): string | null {
+  return formatJoiningDate(value);
+}
+
+/** Formats an instant (e.g. an interview start) in the business time zone, with the zone shown. */
+export function formatBusinessDateTime(value: string, timeZone = BUSINESS_TIME_ZONE): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "To be confirmed";
+  return parsed.toLocaleString("en-GB", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone,
+    timeZoneName: "short",
+  });
+}
+
+/** Shows at most `limit` list entries in an email and says how many more there are. */
+const EMAIL_LIST_LIMIT = 20;
+
+function renderItemList(lines: readonly string[]): string {
+  const shown = lines.slice(0, EMAIL_LIST_LIMIT);
+  const more = lines.length - shown.length;
+  return `
+    <ul style="margin: 0 0 8px 0; padding-left: 20px;">${shown
+      .map((line) => `<li style="margin: 0 0 6px 0; font-size: 13px; color: #334155;">${escapeHtml(line)}</li>`)
+      .join("")}</ul>
+    ${more > 0 ? `<p style="margin: 0; font-size: 12px; color: #64748b;">and ${escapeHtml(more)} more</p>` : ""}`;
+}
+
+function textItemList(lines: readonly string[]): string {
+  const shown = lines.slice(0, EMAIL_LIST_LIMIT);
+  const more = lines.length - shown.length;
+  return `${shown.map((line) => `- ${line}`).join("\n")}${more > 0 ? `\nand ${more} more` : ""}`;
+}
+
 /**
- * 10. Fallback / Generic Outbox Notification Builder
+ * 10. Intern → full-time offer after a CONVERT progress-review outcome
+ */
+export function buildConversionOfferExtendedEmail(params: {
+  recipientName: string;
+  proposedDesignation: string;
+  proposedDepartment: string;
+  effectiveDate?: string;
+  sharedSummary?: string;
+}): EmailContent {
+  const portalUrl = buildAppUrl("/intern/dashboard");
+  const effectiveDate = formatCalendarDate(params.effectiveDate);
+  const rows: Array<[string, string]> = [
+    ["Offered Role", params.proposedDesignation],
+    ["Department", params.proposedDepartment],
+  ];
+  if (effectiveDate) rows.push(["Effective Date", effectiveDate]);
+
+  const subject = `[GARA Innovation] Full-time offer: ${params.proposedDesignation}`;
+  const text = `Hello ${params.recipientName},\n\nFollowing your internship progress review, GARA Innovation is offering you a full-time position.\n\n${detailLines(rows)}\n${params.sharedSummary ? `\nSummary from your review:\n${params.sharedSummary}\n` : ""}\nPlease accept or decline the offer in your intern workspace: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Full-time Offer", bgColor: "#ecfdf5", textColor: "#047857", borderColor: "#a7f3d0" },
+    title: "You have a full-time offer",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: `Following your internship progress review, GARA Innovation is offering you the full-time position of <strong>${escapeHtml(params.proposedDesignation)}</strong>.`,
+    contentHtml: `${renderDetailCard(rows)}${renderSharedSummary(params.sharedSummary)}`,
+    ctaButton: { text: "Review the offer", url: portalUrl },
+    secondaryNote: {
+      title: "Action required",
+      text: "Please accept or decline the offer in your intern workspace. Once accepted, the change takes effect on the effective date.",
+      bgColor: "#ecfdf5",
+      borderColor: "#10b981",
+      textColor: "#065f46",
+    },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 11. Intern → full-time conversion took effect
+ */
+export function buildConversionCompletedEmail(params: {
+  recipientName: string;
+  designation: string;
+  department: string;
+  effectiveDate?: string;
+}): EmailContent {
+  const portalUrl = buildAppUrl("/hrms");
+  const effectiveDate = formatCalendarDate(params.effectiveDate);
+  const rows: Array<[string, string]> = [
+    ["Designation", params.designation],
+    ["Department", params.department],
+  ];
+  if (effectiveDate) rows.push(["Effective Date", effectiveDate]);
+
+  const subject = "[GARA Innovation] You are now a full-time employee";
+  const text = `Congratulations ${params.recipientName}!\n\nYour move from intern to full-time employee has taken effect.\n\n${detailLines(rows)}\n\nNow available in your portal:\n${textItemList(EMPLOYEE_JOINED_FEATURES)}\n\nOpen your employee home: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Now Full-time", bgColor: "#eff6ff", textColor: "#1d4ed8", borderColor: "#bfdbfe" },
+    title: "Welcome to the full-time team",
+    salutation: `Congratulations ${params.recipientName}!`,
+    leadParagraph: `Your move from intern to full-time employee as <strong>${escapeHtml(params.designation)}</strong> has taken effect.`,
+    contentHtml: `${renderDetailCard(rows)}
+      <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #0f172a;">Now available in your portal</p>
+      ${renderItemList(EMPLOYEE_JOINED_FEATURES)}`,
+    ctaButton: { text: "Open Employee Home", url: portalUrl },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 12. Internship continues after an EXTEND progress-review outcome
+ */
+export function buildInternshipReviewExtendedEmail(params: {
+  recipientName: string;
+  nextReviewDate?: string;
+  sharedSummary?: string;
+}): EmailContent {
+  const portalUrl = buildAppUrl("/intern/dashboard");
+  const nextReview = formatCalendarDate(params.nextReviewDate);
+  const rows: Array<[string, string]> = nextReview ? [["Next Progress Review", nextReview]] : [];
+
+  const subject = "[GARA Innovation] Your internship continues";
+  const text = `Hello ${params.recipientName},\n\nYour internship progress review is complete and your internship continues.\n${rows.length > 0 ? `\n${detailLines(rows)}\n` : ""}${params.sharedSummary ? `\nSummary from your review:\n${params.sharedSummary}\n` : ""}\nOpen your intern workspace: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Progress Review", bgColor: "#eff6ff", textColor: "#1d4ed8", borderColor: "#bfdbfe" },
+    title: "Your internship continues",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: "Your internship progress review is complete and your internship continues.",
+    contentHtml: `${renderDetailCard(rows)}${renderSharedSummary(params.sharedSummary)}`,
+    ctaButton: { text: "Open Intern Workspace", url: portalUrl },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 13. Internship ends after an END_INTERNSHIP progress-review outcome
+ */
+export function buildInternshipEndingEmail(params: {
+  recipientName: string;
+  sharedSummary?: string;
+}): EmailContent {
+  const portalUrl = buildAppUrl("/dashboard");
+
+  const subject = "[GARA Innovation] Outcome of your internship progress review";
+  const text = `Hello ${params.recipientName},\n\nYour internship progress review is complete. The outcome is that your internship with GARA Innovation will end.\n${params.sharedSummary ? `\nSummary from your review:\n${params.sharedSummary}\n` : ""}\nIf you have any questions, please contact the HR team.\n\nOpen your portal: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Progress Review", bgColor: "#f1f5f9", textColor: "#334155", borderColor: "#cbd5e1" },
+    title: "Outcome of your progress review",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph:
+      "Your internship progress review is complete. The outcome is that your internship with GARA Innovation will end. Thank you for your contributions.",
+    contentHtml: renderSharedSummary(params.sharedSummary),
+    ctaButton: { text: "Open Your Portal", url: portalUrl },
+    secondaryNote: { text: "If you have any questions about this outcome, please contact the HR team." },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 14. Evaluation supervisor changed (sent to the intern and to supervisors)
+ */
+export function buildEvaluationSupervisorChangedEmail(params: {
+  recipientName: string;
+  recipientRole: "INTERN" | "SUPERVISOR";
+  internName: string;
+  openingTitle: string;
+  newSupervisorName: string;
+}): EmailContent {
+  const isIntern = params.recipientRole === "INTERN";
+  const portalUrl = buildAppUrl(isIntern ? "/intern/dashboard" : "/dashboard");
+  const rows: Array<[string, string]> = [
+    ["Intern", params.internName],
+    ["Programme", params.openingTitle],
+    ["Supervisor", params.newSupervisorName],
+  ];
+  const lead = isIntern
+    ? `Your evaluation for ${params.openingTitle} now has a new supervisor: ${params.newSupervisorName}.`
+    : `The supervisor for ${params.internName}'s evaluation (${params.openingTitle}) is now ${params.newSupervisorName}.`;
+
+  const subject = "[GARA Innovation] Evaluation supervisor updated";
+  const text = `Hello ${params.recipientName},\n\n${lead}\n\n${detailLines(rows)}\n\nOpen your portal: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Evaluation", bgColor: "#f0fdf4", textColor: "#166534", borderColor: "#bbf7d0" },
+    title: "Evaluation supervisor updated",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: escapeHtml(lead),
+    contentHtml: renderDetailCard(rows),
+    ctaButton: { text: isIntern ? "Open Evaluation Workspace" : "Open Your Portal", url: portalUrl },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 15. Interview reminder (24 hours and 1 hour before; candidate and interviewer)
+ */
+export function buildInterviewReminderEmail(params: {
+  recipientName: string;
+  recipientRole: "CANDIDATE" | "INTERVIEWER";
+  candidateName: string;
+  openingTitle: string;
+  roundName: string;
+  scheduledAt: string;
+  durationMinutes: number;
+  meetingLink?: string | null;
+  leadTime: "24h" | "1h";
+  /** App-relative page for the recipient (defaults to the candidate dashboard / staff home). */
+  href?: string;
+}): EmailContent {
+  const isCandidate = params.recipientRole === "CANDIDATE";
+  const portalUrl = buildAppUrl(params.href, isCandidate ? "/candidate/dashboard" : "/dashboard");
+  const meetingLink = safeHttpUrl(params.meetingLink);
+  const when = formatBusinessDateTime(params.scheduledAt);
+  const inWords = params.leadTime === "1h" ? "in 1 hour" : "in 24 hours";
+  const rows: Array<[string, string]> = [
+    ...(isCandidate ? [] : ([["Candidate", params.candidateName]] as Array<[string, string]>)),
+    ["Position", params.openingTitle],
+    ["Interview Round", params.roundName],
+    ["Date & Time", when],
+    ["Duration", `${params.durationMinutes} minutes`],
+  ];
+  if (meetingLink) rows.push(["Meeting Link", meetingLink]);
+
+  const subject = isCandidate
+    ? `[GARA Innovation] Reminder: your ${params.roundName} interview starts ${inWords}`
+    : `[GARA Innovation] Reminder: you are interviewing ${params.candidateName} ${inWords}`;
+  const lead = isCandidate
+    ? `This is a reminder that your ${params.roundName} interview for ${params.openingTitle} starts ${inWords}.`
+    : `This is a reminder that you are interviewing ${params.candidateName} (${params.roundName}, ${params.openingTitle}) ${inWords}.`;
+  const text = `Hello ${params.recipientName},\n\n${lead}\n\n${detailLines(rows)}\n\nDetails: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Interview Reminder", bgColor: "#eff6ff", textColor: "#1d4ed8", borderColor: "#bfdbfe" },
+    title: isCandidate ? "Your interview is coming up" : "Upcoming interview",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: escapeHtml(lead),
+    contentHtml: renderDetailCard(rows),
+    ctaButton: {
+      text: meetingLink ? "Join Meeting" : "View Interview Details",
+      url: meetingLink || portalUrl,
+    },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 16. Intern reminder: today's evaluation checkpoint is still open
+ */
+export function buildCheckpointReminderEmail(params: {
+  recipientName: string;
+  openingTitle: string;
+  dayNumber: number;
+  checkpointTitle: string;
+}): EmailContent {
+  const portalUrl = buildAppUrl("/intern/dashboard");
+  const rows: Array<[string, string]> = [
+    ["Programme", params.openingTitle],
+    ["Checkpoint", `Day ${params.dayNumber}: ${params.checkpointTitle}`],
+  ];
+
+  const subject = `[GARA Innovation] Reminder: Day ${params.dayNumber} evaluation checkpoint`;
+  const text = `Hello ${params.recipientName},\n\nToday's evaluation checkpoint is still open. Please add your notes in your evaluation workspace.\n\n${detailLines(rows)}\n\nOpen your evaluation workspace: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Evaluation", bgColor: "#f0fdf4", textColor: "#166534", borderColor: "#bbf7d0" },
+    title: "Today's checkpoint is open",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: "Today's evaluation checkpoint is still open. Please add your notes in your evaluation workspace.",
+    contentHtml: renderDetailCard(rows),
+    ctaButton: { text: "Open Evaluation Workspace", url: portalUrl },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 17. Supervisor reminder: submitted checkpoints are waiting for review
+ */
+export function buildCheckpointReviewReminderEmail(params: {
+  recipientName: string;
+  pendingCount: number;
+  items: ReadonlyArray<{ internName: string; dayNumber: number }>;
+  href?: string;
+}): EmailContent {
+  const portalUrl = buildAppUrl(params.href);
+  const lines = params.items.map((item) => `${item.internName}: Day ${item.dayNumber}`);
+  const noun = params.pendingCount === 1 ? "checkpoint is" : "checkpoints are";
+
+  const subject = `[GARA Innovation] ${params.pendingCount} evaluation ${params.pendingCount === 1 ? "checkpoint" : "checkpoints"} to review`;
+  const text = `Hello ${params.recipientName},\n\n${params.pendingCount} submitted evaluation ${noun} waiting for your review:\n${textItemList(lines)}\n\nReview them here: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Evaluation Review", bgColor: "#f0fdf4", textColor: "#166534", borderColor: "#bbf7d0" },
+    title: "Checkpoints waiting for your review",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: `<strong>${escapeHtml(params.pendingCount)}</strong> submitted evaluation ${noun} waiting for your review.`,
+    contentHtml: renderItemList(lines),
+    ctaButton: { text: "Review Checkpoints", url: portalUrl },
+  });
+
+  return { subject, text, html };
+}
+
+const REVIEW_STATE_LABELS: Record<"UPCOMING" | "DUE" | "OVERDUE", string> = {
+  UPCOMING: "coming up",
+  DUE: "due today",
+  OVERDUE: "overdue",
+};
+
+/**
+ * 18. Staff reminder: intern progress reviews coming up, due today or overdue
+ */
+export function buildConversionReviewReminderEmail(params: {
+  recipientName: string;
+  items: ReadonlyArray<{ internName: string; scheduledFor: string; state: "UPCOMING" | "DUE" | "OVERDUE" }>;
+  href?: string;
+}): EmailContent {
+  const portalUrl = buildAppUrl(params.href);
+  const lines = params.items.map(
+    (item) =>
+      `${item.internName}: ${formatCalendarDate(item.scheduledFor) ?? "date not set"} (${REVIEW_STATE_LABELS[item.state]})`
+  );
+  const count = params.items.length;
+
+  const subject = `[GARA Innovation] ${count} intern progress ${count === 1 ? "review needs" : "reviews need"} attention`;
+  const text = `Hello ${params.recipientName},\n\nThese intern progress reviews are coming up within 7 days, due today or overdue:\n${textItemList(lines)}\n\nOpen intern reviews: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Intern Reviews", bgColor: "#fffbeb", textColor: "#92400e", borderColor: "#fde68a" },
+    title: "Intern progress reviews",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: "These intern progress reviews are coming up within 7 days, due today or overdue.",
+    contentHtml: renderItemList(lines),
+    ctaButton: { text: "Open Intern Reviews", url: portalUrl },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 19. Staff daily digest of the actions waiting for the recipient
+ */
+export function buildStaffDailyDigestEmail(params: {
+  recipientName: string;
+  dateLabel: string;
+  sections: ReadonlyArray<{ title: string; count: number; href: string }>;
+}): EmailContent {
+  const total = params.sections.reduce((sum, section) => sum + section.count, 0);
+  const homeUrl = buildAppUrl("/dashboard");
+
+  const rowsHtml = params.sections
+    .map(
+      (section) => `
+        <tr>
+          <td style="padding: 10px 0; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #0f172a;">
+            <a href="${escapeHtml(buildAppUrl(section.href))}" target="_blank" rel="noopener noreferrer" style="color: #1d4ed8; text-decoration: underline; font-weight: 600;">${escapeHtml(section.title)}</a>
+          </td>
+          <td align="right" style="padding: 10px 0; border-bottom: 1px solid #e2e8f0; font-size: 15px; font-weight: 700; color: #0f172a;">${escapeHtml(section.count)}</td>
+        </tr>`
+    )
+    .join("");
+
+  const subject = `[GARA Innovation] Your daily summary: ${total} ${total === 1 ? "item needs" : "items need"} your attention`;
+  const text = `Hello ${params.recipientName},\n\nHere is what needs your attention (${params.dateLabel}):\n${params.sections
+    .map((section) => `- ${section.title}: ${section.count} (${buildAppUrl(section.href)})`)
+    .join("\n")}\n\nOpen your portal: ${homeUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Daily Summary", bgColor: "#eff6ff", textColor: "#1d4ed8", borderColor: "#bfdbfe" },
+    title: "Needs your attention",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: `Here is what needs your attention today, ${escapeHtml(params.dateLabel)}.`,
+    contentHtml: `
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 8px 0 4px 0;">${rowsHtml}
+      </table>`,
+    ctaButton: { text: "Open Your Portal", url: homeUrl },
+    footerNotice:
+      "You receive this summary because you are a staff member with pending items. It only lists items your permissions allow you to act on.",
+  });
+
+  return { subject, text, html };
+}
+
+// -----------------------------------------------------------------------------
+// Round 4: interview changes and candidate self-scheduling
+// -----------------------------------------------------------------------------
+
+interface InterviewChangeEmailParams {
+  recipientName: string;
+  recipientRole: InterviewRecipientRole;
+  candidateName: string;
+  openingTitle: string;
+  roundName: string;
+  /** App-relative page for the recipient. */
+  href?: string;
+  /** Plain-text reason entered by staff (shown to the recipient). */
+  reason?: string;
+  hasCalendarInvite?: boolean;
+}
+
+function interviewPortalUrl(role: InterviewRecipientRole, href: string | undefined): string {
+  return buildAppUrl(href, role === "INTERVIEWER" ? "/dashboard" : "/candidate/dashboard");
+}
+
+/** Escaped, labelled block for a staff-entered reason. */
+function renderReason(label: string, reason: string | undefined): string {
+  if (!reason) return "";
+  return `
+    <div style="margin: 16px 0; padding: 14px 18px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
+      <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 6px;">${escapeHtml(label)}</div>
+      <div style="font-size: 13px; color: #334155; line-height: 1.5; white-space: pre-line;">${escapeHtml(reason)}</div>
+    </div>`;
+}
+
+/**
+ * 21. Interview rescheduled (candidate and interviewer; carries an updated calendar invite)
+ */
+export function buildInterviewRescheduledEmail(
+  params: InterviewChangeEmailParams & {
+    scheduledAt: string;
+    previousScheduledAt?: string;
+    durationMinutes: number;
+    meetingLink?: string | null;
+  }
+): EmailContent {
+  const isInterviewer = params.recipientRole === "INTERVIEWER";
+  const portalUrl = interviewPortalUrl(params.recipientRole, params.href);
+  const meetingLink = safeHttpUrl(params.meetingLink);
+  const rows: Array<[string, string]> = [
+    ...(isInterviewer ? ([["Candidate", params.candidateName]] as Array<[string, string]>) : []),
+    ["Position", params.openingTitle],
+    ["Interview Round", params.roundName],
+    ["New Date & Time", formatBusinessDateTime(params.scheduledAt)],
+  ];
+  if (params.previousScheduledAt) {
+    rows.push(["Previously", formatBusinessDateTime(params.previousScheduledAt)]);
+  }
+  rows.push(["Duration", `${params.durationMinutes} minutes`]);
+  if (meetingLink) rows.push(["Meeting Link", meetingLink]);
+
+  const lead = isInterviewer
+    ? `Your interview with ${params.candidateName} (${params.roundName}, ${params.openingTitle}) has moved to a new time.`
+    : `Your ${params.roundName} interview for ${params.openingTitle} has moved to a new time.`;
+  const calendarNote = params.hasCalendarInvite ? `\n${CALENDAR_INVITE_NOTE}\n` : "";
+
+  const subject = isInterviewer
+    ? `[GARA Innovation] Interview rescheduled: ${params.candidateName} (${params.roundName})`
+    : `[GARA Innovation] Interview rescheduled: ${params.roundName} (${params.openingTitle})`;
+  const text = `Hello ${params.recipientName},\n\n${lead}\n\n${detailLines(rows)}\n${params.reason ? `\nReason: ${params.reason}\n` : ""}${calendarNote}\nDetails: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Interview Rescheduled", bgColor: "#fffbeb", textColor: "#92400e", borderColor: "#fde68a" },
+    title: "Interview time changed",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: escapeHtml(lead),
+    contentHtml: `${renderDetailCard(rows)}${renderReason("Reason", params.reason)}`,
+    ctaButton: { text: meetingLink ? "Join Meeting" : "View Interview Details", url: meetingLink || portalUrl },
+    ...(params.hasCalendarInvite
+      ? { secondaryNote: { text: `${CALENDAR_INVITE_NOTE} It replaces the earlier calendar entry.` } }
+      : {}),
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 22. Interview cancelled (candidate and interviewer; carries a calendar cancellation)
+ */
+export function buildInterviewCancelledEmail(
+  params: InterviewChangeEmailParams & { scheduledAt?: string }
+): EmailContent {
+  const isInterviewer = params.recipientRole === "INTERVIEWER";
+  const portalUrl = interviewPortalUrl(params.recipientRole, params.href);
+  const rows: Array<[string, string]> = [
+    ...(isInterviewer ? ([["Candidate", params.candidateName]] as Array<[string, string]>) : []),
+    ["Position", params.openingTitle],
+    ["Interview Round", params.roundName],
+  ];
+  if (params.scheduledAt) rows.push(["Was Scheduled For", formatBusinessDateTime(params.scheduledAt)]);
+
+  const lead = isInterviewer
+    ? `The interview with ${params.candidateName} (${params.roundName}, ${params.openingTitle}) has been cancelled.`
+    : `Your ${params.roundName} interview for ${params.openingTitle} has been cancelled. The hiring team will contact you about next steps.`;
+  const calendarNote = params.hasCalendarInvite
+    ? "\nYour calendar app can remove the event using the attached cancellation.\n"
+    : "";
+
+  const subject = isInterviewer
+    ? `[GARA Innovation] Interview cancelled: ${params.candidateName} (${params.roundName})`
+    : `[GARA Innovation] Interview cancelled: ${params.roundName} (${params.openingTitle})`;
+  const text = `Hello ${params.recipientName},\n\n${lead}\n\n${detailLines(rows)}\n${params.reason ? `\nReason: ${params.reason}\n` : ""}${calendarNote}\nDetails: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Interview Cancelled", bgColor: "#f1f5f9", textColor: "#334155", borderColor: "#cbd5e1" },
+    title: "Interview cancelled",
+    salutation: `Hello ${params.recipientName},`,
+    leadParagraph: escapeHtml(lead),
+    contentHtml: `${renderDetailCard(rows)}${renderReason("Reason", params.reason)}`,
+    ctaButton: { text: isInterviewer ? "Open Interview Board" : "Open Candidate Portal", url: portalUrl },
+    ...(params.hasCalendarInvite
+      ? { secondaryNote: { text: "Your calendar app can remove the event using the attached cancellation." } }
+      : {}),
+  });
+
+  return { subject, text, html };
+}
+
+/** Time options listed in a booking email (in business time). */
+const BOOKING_OPTIONS_LIMIT = 8;
+
+/**
+ * 23. Candidate self-scheduling: choose your interview time
+ */
+export function buildInterviewBookingRequestEmail(params: {
+  candidateName: string;
+  openingTitle: string;
+  roundName: string;
+  durationMinutes: number;
+  /** ISO start times offered by the hiring team. */
+  options: readonly string[];
+  /** App-relative booking page (e.g. /candidate/interviews/<id>). */
+  href?: string;
+}): EmailContent {
+  const portalUrl = buildAppUrl(params.href, "/candidate/dashboard");
+  const optionLines = params.options.slice(0, BOOKING_OPTIONS_LIMIT).map((iso) => formatBusinessDateTime(iso));
+  const rows: Array<[string, string]> = [
+    ["Position", params.openingTitle],
+    ["Interview Round", params.roundName],
+    ["Duration", `${params.durationMinutes} minutes`],
+  ];
+
+  const subject = `[GARA Innovation] Choose your interview time: ${params.roundName} (${params.openingTitle})`;
+  const text = `Hello ${params.candidateName},\n\nThe hiring team has offered times for your ${params.roundName} interview for ${params.openingTitle}. Please choose the time that suits you in your candidate portal.\n\n${detailLines(rows)}\n${optionLines.length > 0 ? `\nTimes offered:\n${textItemList(optionLines)}\n` : ""}\nChoose your time: ${portalUrl}\n\nTimes are booked first come, first served; if a time is no longer available the portal shows the remaining ones.\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Choose a Time", bgColor: "#eff6ff", textColor: "#1d4ed8", borderColor: "#bfdbfe" },
+    title: "Choose your interview time",
+    salutation: `Hello ${params.candidateName},`,
+    leadParagraph: `The hiring team has offered times for your <strong>${escapeHtml(params.roundName)}</strong> interview for <strong>${escapeHtml(params.openingTitle)}</strong>. Please choose the time that suits you.`,
+    contentHtml: `${renderDetailCard(rows)}${
+      optionLines.length > 0
+        ? `<p style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #0f172a;">Times offered</p>${renderItemList(optionLines)}`
+        : ""
+    }`,
+    ctaButton: { text: "Choose Your Interview Time", url: portalUrl },
+    secondaryNote: {
+      text: "Times are booked first come, first served. If a time is no longer available, the portal shows the remaining ones.",
+    },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 24. Candidate self-scheduling: the hiring team withdrew the offered times
+ */
+export function buildInterviewBookingCancelledEmail(params: {
+  candidateName: string;
+  openingTitle: string;
+  roundName: string;
+  reason?: string;
+  href?: string;
+}): EmailContent {
+  const portalUrl = buildAppUrl(params.href, "/candidate/dashboard");
+  const rows: Array<[string, string]> = [
+    ["Position", params.openingTitle],
+    ["Interview Round", params.roundName],
+  ];
+  const lead = `The interview times offered for your ${params.roundName} interview (${params.openingTitle}) have been withdrawn. The hiring team will contact you about next steps.`;
+
+  const subject = `[GARA Innovation] Interview times withdrawn: ${params.roundName} (${params.openingTitle})`;
+  const text = `Hello ${params.candidateName},\n\n${lead}\n\n${detailLines(rows)}\n${params.reason ? `\nMessage from the hiring team: ${params.reason}\n` : ""}\nOpen your portal: ${portalUrl}\n\n— GARA Innovation`;
+
+  const html = renderEmailShell({
+    categoryBadge: { text: "Interview Update", bgColor: "#f1f5f9", textColor: "#334155", borderColor: "#cbd5e1" },
+    title: "Interview times withdrawn",
+    salutation: `Hello ${params.candidateName},`,
+    leadParagraph: escapeHtml(lead),
+    contentHtml: `${renderDetailCard(rows)}${renderReason("Message from the hiring team", params.reason)}`,
+    ctaButton: { text: "Open Candidate Portal", url: portalUrl },
+  });
+
+  return { subject, text, html };
+}
+
+/**
+ * 20. Fallback / Generic Outbox Notification Builder
  */
 export function buildGenericNotificationEmail(params: {
   templateName: string;

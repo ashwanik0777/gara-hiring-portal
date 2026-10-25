@@ -7,6 +7,7 @@ import {
   type AdminOpeningDetail,
 } from "@/features/openings/services/opening-service";
 import { openingIdSchema } from "@/features/openings/schemas";
+import { env } from "@/lib/env";
 import { OpeningPreviewView } from "@/features/openings/components/opening-preview-view";
 import { Navbar } from "@/components/navigation/navbar";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
@@ -76,7 +77,7 @@ export default async function PreviewOpeningPage({ params }: PreviewOpeningPageP
 
       <main className="flex-1 py-10">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <OpeningPreviewView opening={opening} basePath="/admin/openings" />
+          <OpeningPreviewView opening={opening} basePath="/admin/openings" documentMode={env.DOCUMENT_STORAGE_MODE} />
         </div>
       </main>
     </div>

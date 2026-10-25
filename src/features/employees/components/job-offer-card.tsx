@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { OfferStatus, JobOfferDetail } from "../types";
+import { EmployeeStatus, OfferStatus, JobOfferDetail } from "../types";
 import { extendJobOfferAction, revokeJobOfferAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -16,9 +16,15 @@ import {
   Send,
   XCircle,
   UserPlus,
+  FileDown,
+  PenLine,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
 import { HireEmployeeModal } from "./hire-employee-modal";
 import { joiningDatePrefill } from "../joining";
+import { offerLetterDownloadPath } from "../offer-esign";
+import { linkButtonClass } from "@/features/lifecycle/components/self-service-ui";
 
 interface JobOfferCardProps {
   offer: JobOfferDetail;
@@ -45,7 +51,13 @@ function getOfferBadge(status: OfferStatus) {
   }
 }
 
+const UNEXPECTED_ERROR = "Something went wrong. Please check your connection and try again.";
+
 export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps) {
+  // An exited record is reused when the person re-joins; any other record blocks joining.
+  const existingRecord = offer.candidateEmployment ?? null;
+  const rejoinCode = existingRecord?.status === EmployeeStatus.EXITED ? existingRecord.employeeCode : null;
+  const blockedByActiveRecord = existingRecord !== null && rejoinCode === null;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showHireModal, setShowHireModal] = useState(false);
@@ -59,6 +71,8 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
       if (!res.success) {
         setError(res.error);
       }
+    } catch {
+      setError(UNEXPECTED_ERROR);
     } finally {
       setIsSubmitting(false);
     }
@@ -74,6 +88,8 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
       if (!res.success) {
         setError(res.error);
       }
+    } catch {
+      setError(UNEXPECTED_ERROR);
     } finally {
       setIsSubmitting(false);
     }
@@ -94,7 +110,10 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
         </CardHeader>
         <CardContent className="pt-6 space-y-4 text-xs">
           {error && (
-            <div className="p-3 rounded-md bg-destructive/10 text-destructive border border-destructive/20 flex items-center gap-2">
+            <div
+              role="alert"
+              className="p-3 rounded-md bg-destructive/10 text-destructive border border-destructive/20 flex items-center gap-2"
+            >
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
@@ -165,6 +184,87 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
               {offer.notes}
             </div>
           )}
+
+          {offer.signature ? (
+            <section
+              aria-labelledby={`offer-signature-${offer.id}`}
+              className="rounded-lg border border-success/30 bg-success/5 p-4 space-y-3"
+            >
+              <h3
+                id={`offer-signature-${offer.id}`}
+                className="flex items-center gap-2 text-sm font-semibold text-foreground"
+              >
+                <PenLine className="h-4 w-4 text-success" aria-hidden="true" /> Electronic acceptance
+              </h3>
+              <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <dt className="text-[11px] text-muted-foreground">Signed as</dt>
+                  <dd className="font-semibold text-foreground">{offer.signature.signedName}</dd>
+                </div>
+                <div>
+                  <dt className="text-[11px] text-muted-foreground">Signed at</dt>
+                  <dd className="font-semibold text-foreground">
+                    <time dateTime={new Date(offer.signature.signedAt).toISOString()} suppressHydrationWarning>
+                      {new Date(offer.signature.signedAt).toLocaleString(undefined, {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                    </time>
+                  </dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-[11px] text-muted-foreground">Accepted letter (SHA-256)</dt>
+                  <dd className="font-mono text-[11px] text-foreground break-all">{offer.signature.documentHash}</dd>
+                  {offer.signature.documentMatches === true && (
+                    <dd className="mt-1 flex items-center gap-1 text-success">
+                      <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /> The letter generated now matches the
+                      accepted document.
+                    </dd>
+                  )}
+                  {offer.signature.documentMatches === false && (
+                    <dd className="mt-1 flex items-center gap-1 text-warning">
+                      <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" /> The letter generated now differs from
+                      the accepted document (for example, the candidate&apos;s account name changed). The hash above
+                      identifies what was accepted.
+                    </dd>
+                  )}
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-[11px] text-muted-foreground">Browser</dt>
+                  <dd className="text-foreground break-words">{offer.signature.userAgent || "Not recorded"}</dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-[11px] text-muted-foreground">Network address</dt>
+                  <dd className="text-foreground">
+                    {offer.signature.ipHashRecorded
+                      ? "Recorded as a one-way keyed hash (the address itself is not stored)."
+                      : "Not recorded"}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+          ) : (
+            offer.status === OfferStatus.ACCEPTED && (
+              <p className="text-[11px] text-muted-foreground">
+                This offer was accepted before electronic signatures were recorded, so no signature evidence is
+                available.
+              </p>
+            )
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 p-3">
+            <p className="text-muted-foreground">
+              {offer.status === OfferStatus.DRAFT
+                ? "Preview the letter the candidate will receive once the offer is extended."
+                : offer.signature
+                  ? "The offer letter with the candidate's electronic acceptance."
+                  : "The offer letter as issued to the candidate."}
+            </p>
+            <a href={offerLetterDownloadPath(offer.id)} className={linkButtonClass("outline", "sm", "shrink-0")}>
+              <FileDown className="h-3.5 w-3.5" aria-hidden="true" />
+              {offer.status === OfferStatus.DRAFT ? "Preview offer letter" : "Download offer letter"}
+            </a>
+          </div>
         </CardContent>
 
         {isStaffAdmin && (
@@ -182,15 +282,22 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
                 </Button>
               )}
 
-              {offer.status === OfferStatus.ACCEPTED && canHire && (
+              {offer.status === OfferStatus.ACCEPTED && canHire && !blockedByActiveRecord && (
                 <Button
                   variant="primary"
                   size="sm"
                   onClick={() => setShowHireModal(true)}
                   className="gap-1.5"
                 >
-                  <UserPlus className="h-3.5 w-3.5" aria-hidden="true" /> Mark as joined
+                  <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />{" "}
+                  {rejoinCode ? "Mark as re-joined" : "Mark as joined"}
                 </Button>
+              )}
+              {offer.status === OfferStatus.ACCEPTED && canHire && blockedByActiveRecord && existingRecord && (
+                <p className="text-xs text-muted-foreground">
+                  {offer.candidateName} already has a current employee record ({existingRecord.employeeCode},{" "}
+                  {existingRecord.status}). Record their exit before marking a new joining.
+                </p>
               )}
             </div>
 
@@ -216,6 +323,7 @@ export function JobOfferCard({ offer, isStaffAdmin, canHire }: JobOfferCardProps
           defaultDepartment={offer.department}
           defaultDesignation={offer.designation}
           defaultJoiningDate={joiningDatePrefill(offer.expectedJoiningDate)}
+          existingEmployeeCode={rejoinCode}
           onClose={() => setShowHireModal(false)}
         />
       )}

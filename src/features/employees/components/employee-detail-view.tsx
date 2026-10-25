@@ -6,6 +6,7 @@ import { EmployeeOnboardingChecklist } from "./employee-onboarding-checklist";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmploymentTypeBadge } from "./employment-type-badge";
+import { EmploymentPeriodTimeline, type TimelinePeriod } from "./employment-period-timeline";
 import {
   Calendar,
   FileText,
@@ -18,6 +19,7 @@ import {
   History,
   FolderLock,
   ChevronRight,
+  Route,
 } from "lucide-react";
 
 interface EmployeeDetailViewProps {
@@ -29,6 +31,8 @@ interface EmployeeDetailViewProps {
   allStaff: { id: string; employeeCode: string; name: string }[];
   /** Portal route that opens the originating application, or null to hide the link. */
   applicationHrefBase: string | null;
+  /** `?tab=exit` opens the Offboarding tab (linked from the intern review guidance). */
+  openExitTab?: boolean;
 }
 
 function getStatusBadge(status: EmployeeStatus) {
@@ -51,13 +55,28 @@ function getStatusBadge(status: EmployeeStatus) {
  * the calling page and in `employeeService.getEmployeeDetail`; this view only renders the
  * projection it receives.
  */
+/** Periods with the matching exit reason (staff view) or date only (self view). */
+function toTimelinePeriods(employee: ConfidentialEmployeeDetail): TimelinePeriod[] {
+  return employee.employmentPeriods.map((period) => {
+    const exit = employee.exitRecords.find((x) => x.periodId === period.id);
+    return {
+      ...period,
+      note: exit?.reason ? `Exit reason: ${exit.reason}` : null,
+    };
+  });
+}
+
 export function EmployeeDetailView({
   employee,
   isStaffAdmin,
   isSelf,
   allStaff,
   applicationHrefBase,
+  openExitTab = false,
 }: EmployeeDetailViewProps) {
+  // The current exit (if the person is exited) is the latest exit record.
+  const latestExit = employee.status === EmployeeStatus.EXITED ? employee.exitRecords[0] ?? null : null;
+
   return (
     <div className="w-full space-y-6">
       {/* Originating Application breadcrumb if present */}
@@ -245,6 +264,18 @@ export function EmployeeDetailView({
             </CardContent>
           </Card>
 
+          {/* Section: Employment periods (joining, re-joining, conversion) */}
+          <Card className="border-border shadow-xs">
+            <CardHeader className="pb-3 border-b border-border/50">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Route className="h-4 w-4 text-primary" aria-hidden="true" /> Employment Periods
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-5">
+              <EmploymentPeriodTimeline periods={toTimelinePeriods(employee)} />
+            </CardContent>
+          </Card>
+
           {/* Section: Employment History Timeline */}
           <Card className="border-border shadow-xs">
             <CardHeader className="pb-3 border-b border-border/50">
@@ -310,39 +341,46 @@ export function EmployeeDetailView({
               currentStatus={employee.status}
               currentManagerId={employee.manager?.id}
               allStaff={allStaff}
+              initialTab={openExitTab ? "EXIT" : "STATUS"}
             />
           )}
 
-          {/* Exit Record Summary if EXITED */}
-          {employee.exitRecord && (
+          {/* Exit Record Summary if EXITED (earlier exits appear in the period timeline) */}
+          {latestExit && (
             <Card className="border-destructive/30 bg-destructive/5 shadow-xs">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm text-destructive flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4" /> Exit Record
+                  <AlertTriangle className="h-4 w-4" aria-hidden="true" /> Exit Record
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-xs">
                 <div>
                   <span className="text-muted-foreground">Clearance Status:</span>{" "}
-                  <span className="font-medium text-foreground">{employee.exitRecord.status}</span>
+                  <span className="font-medium text-foreground">{latestExit.status}</span>
                 </div>
                 <div>
                   <span className="text-muted-foreground">Last Working Date:</span>{" "}
                   <span className="font-medium text-foreground">
-                    {new Date(employee.exitRecord.lastWorkingDate).toLocaleDateString()}
+                    {new Date(latestExit.lastWorkingDate).toLocaleDateString()}
                   </span>
                 </div>
-                {employee.exitRecord.reason && (
+                {latestExit.reason && (
                   <div>
                     <span className="text-muted-foreground">Reason:</span>{" "}
-                    <span className="text-foreground">{employee.exitRecord.reason}</span>
+                    <span className="text-foreground">{latestExit.reason}</span>
                   </div>
                 )}
-                {isStaffAdmin && employee.exitRecord.exitInterviewNotes && (
+                {isStaffAdmin && latestExit.exitInterviewNotes && (
                   <div className="p-2 rounded bg-muted/40 text-[11px] mt-2 border border-border/40">
                     <span className="font-semibold block mb-0.5">Exit Interview Notes:</span>
-                    {employee.exitRecord.exitInterviewNotes}
+                    {latestExit.exitInterviewNotes}
                   </div>
+                )}
+                {isStaffAdmin && (
+                  <p className="text-[11px] text-muted-foreground">
+                    If this person is hired again with the same account, marking them as joined reuses this
+                    record and employee code and starts a new employment period.
+                  </p>
                 )}
               </CardContent>
             </Card>

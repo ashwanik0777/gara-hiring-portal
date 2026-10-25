@@ -5,6 +5,12 @@ import { ValidationError } from "@/lib/errors";
 import { reportService } from "@/features/reports/services/report-service";
 import { AnalyticsDashboardClient } from "@/features/reports/components/analytics-dashboard-client";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import { Suspense } from "react";
+import {
+  HiringFunnelSection,
+  HiringFunnelSkeleton,
+  readHiringFunnelParams,
+} from "@/features/reports/components/hiring-funnel-section";
 
 export const instant = false;
 
@@ -20,6 +26,11 @@ interface ReportsPageProps {
     endDate?: string;
     department?: string;
     openingId?: string;
+    tab?: string;
+    funnelStart?: string;
+    funnelEnd?: string;
+    funnelType?: string;
+    funnelOpening?: string;
   }>;
 }
 
@@ -65,9 +76,35 @@ export default async function OperationalReportsPage({
     );
   }
 
+  // Dashboard filters kept when the funnel filters change (and vice versa).
+  const preservedParams: Record<string, string> = {};
+  for (const key of ["startDate", "endDate", "department", "openingId"] as const) {
+    const value = resolvedParams[key];
+    if (value) preservedParams[key] = value;
+  }
+  const showFunnel = resolvedParams.tab === "funnel";
+
   return (
     <div className="w-full">
-      <AnalyticsDashboardClient initialData={analyticsData} basePath="/admin" />
+      <AnalyticsDashboardClient
+        // Remount when switching to/from the funnel tab so the requested tab opens.
+        key={showFunnel ? "funnel" : "dashboard"}
+        initialData={analyticsData}
+        basePath="/admin"
+        initialTab={showFunnel ? "funnel" : "overview"}
+        hiringFunnel={
+          showFunnel ? (
+            <Suspense fallback={<HiringFunnelSkeleton />}>
+              <HiringFunnelSection
+                user={user}
+                filters={readHiringFunnelParams(resolvedParams)}
+                reportsPath="/admin/reports"
+                preservedParams={preservedParams}
+              />
+            </Suspense>
+          ) : undefined
+        }
+      />
     </div>
   );
 }

@@ -37,6 +37,20 @@ const envSchema = z.object({
     .string()
     .min(16, "CRON_SECRET must be at least 16 characters long")
     .optional(),
+  /**
+   * How candidates provide documents. "link": an external share link (e.g. Google Drive),
+   * used until the organisation runs its own storage server. "local": files uploaded to the
+   * server's private disk (requires a persistent server and ALLOW_LOCAL_STORAGE_IN_PROD).
+   */
+  DOCUMENT_STORAGE_MODE: z.enum(["link", "local"]).default("link"),
+  /**
+   * Malware scanning for uploaded files (own-server deployments). "clamav" streams every
+   * upload to a clamd daemon before it is stored and rejects the upload if clamd is
+   * unreachable; "off" disables scanning (link mode stores no files).
+   */
+  VIRUS_SCAN_MODE: z.enum(["off", "clamav"]).default("off"),
+  CLAMAV_HOST: z.string().default("127.0.0.1"),
+  CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -73,7 +87,13 @@ export function checkProductionReadiness(currentEnv: Env = env): {
 
   if (!currentEnv.CRON_SECRET) {
     blockers.push(
-      "CRON_SECRET is not configured, so the notification outbox retry cron cannot be authorized."
+      "CRON_SECRET is not configured, so the job runner endpoint (/api/jobs/run) cannot be authorized."
+    );
+  }
+
+  if (currentEnv.DOCUMENT_STORAGE_MODE === "local" && currentEnv.VIRUS_SCAN_MODE === "off") {
+    blockers.push(
+      "Document uploads are enabled (DOCUMENT_STORAGE_MODE=local) but VIRUS_SCAN_MODE is off, so uploaded files are not malware-scanned."
     );
   }
 

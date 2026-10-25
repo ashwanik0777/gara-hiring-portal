@@ -119,3 +119,43 @@ export const formResponsesPayloadSchema = z
   });
 
 export type FormResponsesPayload = z.infer<typeof formResponsesPayloadSchema>;
+
+/** Longest accepted document share link (also the limit after URL normalisation). */
+export const MAX_DOCUMENT_LINK_LENGTH = 2048;
+
+export const DOCUMENT_LINK_REQUIRED_MESSAGE = "Please paste the link to your resume.";
+export const DOCUMENT_LINK_INVALID_MESSAGE = "Please paste a valid https link to your resume.";
+export const DOCUMENT_LINK_TOO_LONG_MESSAGE =
+  "This link is too long. Please paste the share link from Google Drive, OneDrive or Dropbox.";
+
+/**
+ * True for an absolute https URL with a real host name and no embedded credentials.
+ * Rejects http:, javascript:, data: and every other scheme, and relative paths.
+ */
+export function isSafeHttpsUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    parsed.protocol === "https:" &&
+    parsed.hostname.includes(".") &&
+    parsed.username === "" &&
+    parsed.password === ""
+  );
+}
+
+/**
+ * Candidate-provided document share link (DOCUMENT_STORAGE_MODE "link"). Trimmed, https only,
+ * at most MAX_DOCUMENT_LINK_LENGTH characters; the stored value is the normalised URL.
+ */
+export const documentLinkSchema = z
+  .string()
+  .trim()
+  .min(1, DOCUMENT_LINK_REQUIRED_MESSAGE)
+  .max(MAX_DOCUMENT_LINK_LENGTH, DOCUMENT_LINK_TOO_LONG_MESSAGE)
+  .refine(isSafeHttpsUrl, DOCUMENT_LINK_INVALID_MESSAGE)
+  .transform((value) => new URL(value).href)
+  .refine((href) => href.length <= MAX_DOCUMENT_LINK_LENGTH, DOCUMENT_LINK_TOO_LONG_MESSAGE);

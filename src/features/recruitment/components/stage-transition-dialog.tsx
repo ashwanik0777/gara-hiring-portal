@@ -110,10 +110,11 @@ export function StageTransitionDialog({
           )}
 
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">
+            <label htmlFor="stage-transition-dialog-target-pipeline-stage" className="block text-xs font-medium text-foreground">
               Target Pipeline Stage <span className="text-destructive">*</span>
             </label>
             <select
+              id="stage-transition-dialog-target-pipeline-stage"
               value={toStatus}
               onChange={(e) => setToStatus(e.target.value as ApplicationStatus)}
               className="w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -149,10 +150,11 @@ export function StageTransitionDialog({
           </div>
 
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">
+            <label htmlFor="stage-transition-dialog-candidate-facing-notification-message" className="block text-xs font-medium text-foreground">
               Candidate-Facing Notification Message (Optional)
             </label>
             <textarea
+              id="stage-transition-dialog-candidate-facing-notification-message"
               rows={2}
               value={candidateMessage}
               onChange={(e) => setCandidateMessage(e.target.value)}

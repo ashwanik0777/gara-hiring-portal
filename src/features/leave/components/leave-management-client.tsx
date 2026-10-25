@@ -1216,7 +1216,7 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Employee Selection */}
                 <div>
-                  <label className="block text-xs font-semibold text-foreground mb-1.5">
+                  <label htmlFor="leave-management-client-apply-leave-employee" className="block text-xs font-semibold text-foreground mb-1.5">
                     Select Employee <span className="text-destructive">*</span>
                   </label>
                   {employees.length === 0 ? (
@@ -1227,6 +1227,7 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                     </div>
                   ) : (
                     <select
+                      id="leave-management-client-apply-leave-employee"
                       value={applyForm.employeeId}
                       onChange={(e) => setApplyForm({ ...applyForm, employeeId: e.target.value })}
                       className="w-full h-10 px-3 rounded-xl border border-border/80 bg-background text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
@@ -1246,10 +1247,11 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
 
                 {/* Leave Category */}
                 <div>
-                  <label className="block text-xs font-semibold text-foreground mb-1.5">
+                  <label htmlFor="leave-management-client-apply-leave-leave-category" className="block text-xs font-semibold text-foreground mb-1.5">
                     Leave Category <span className="text-destructive">*</span>
                   </label>
                   <select
+                    id="leave-management-client-apply-leave-leave-category"
                     value={applyForm.leaveTypeId}
                     onChange={(e) => setApplyForm({ ...applyForm, leaveTypeId: e.target.value })}
                     className="w-full h-10 px-3 rounded-xl border border-border/80 bg-background text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
@@ -1272,10 +1274,11 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
               {/* Row 2: Date Range & Live Duration Preview */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                 <div>
-                  <label className="block text-xs font-semibold text-foreground mb-1.5">
+                  <label htmlFor="leave-management-client-apply-leave-start-date" className="block text-xs font-semibold text-foreground mb-1.5">
                     Start Date <span className="text-destructive">*</span>
                   </label>
                   <Input
+                    id="leave-management-client-apply-leave-start-date"
                     type="date"
                     value={applyForm.startDate}
                     onChange={(e) => setApplyForm({ ...applyForm, startDate: e.target.value })}
@@ -1284,10 +1287,11 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-foreground mb-1.5">
+                  <label htmlFor="leave-management-client-apply-leave-end-date" className="block text-xs font-semibold text-foreground mb-1.5">
                     End Date <span className="text-destructive">*</span>
                   </label>
                   <Input
+                    id="leave-management-client-apply-leave-end-date"
                     type="date"
                     value={applyForm.endDate}
                     onChange={(e) => setApplyForm({ ...applyForm, endDate: e.target.value })}
@@ -1311,10 +1315,11 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
 
               {/* Row 3: Reason for Absence */}
               <div>
-                <label className="block text-xs font-semibold text-foreground mb-1.5">
+                <label htmlFor="leave-management-client-apply-leave-reason-for-absence" className="block text-xs font-semibold text-foreground mb-1.5">
                   Reason for Absence <span className="text-destructive">*</span>
                 </label>
                 <textarea
+                  id="leave-management-client-apply-leave-reason-for-absence"
                   rows={4}
                   value={applyForm.reason}
                   onChange={(e) => setApplyForm({ ...applyForm, reason: e.target.value })}
@@ -1416,10 +1421,11 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
 
               {/* Review notes textarea */}
               <div>
-                <label className="block font-semibold text-foreground mb-1">
+                <label htmlFor="leave-management-client-field" className="block font-semibold text-foreground mb-1">
                   {reviewModal.action === "APPROVED" ? "Approval Notes (Optional):" : "Rejection Reason / Notes (Recommended):"}
                 </label>
                 <textarea
+                  id="leave-management-client-field"
                   rows={3}
                   value={reviewModal.notes}
                   onChange={(e) => setReviewModal({ ...reviewModal, notes: e.target.value })}
@@ -1772,10 +1778,11 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
             <form onSubmit={handleCreateTypeSubmit}>
               <div className="p-5 space-y-3.5 text-xs">
                 <div>
-                  <label className="block font-semibold text-foreground mb-1">
+                  <label htmlFor="leave-management-client-create-type-category-code" className="block font-semibold text-foreground mb-1">
                     Category Code <span className="text-destructive">*</span>
                   </label>
                   <Input
+                    id="leave-management-client-create-type-category-code"
                     placeholder="e.g. COMP_OFF, STUDY, STUDY_LEAVE"
                     value={newTypeModal.code}
                     onChange={(e) =>
@@ -1790,10 +1797,11 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-foreground mb-1">
+                  <label htmlFor="leave-management-client-create-type-display-name" className="block font-semibold text-foreground mb-1">
                     Display Name <span className="text-destructive">*</span>
                   </label>
                   <Input
+                    id="leave-management-client-create-type-display-name"
                     placeholder="e.g. Compensatory Off, Sabbatical"
                     value={newTypeModal.name}
                     onChange={(e) => setNewTypeModal({ ...newTypeModal, name: e.target.value })}
@@ -1803,10 +1811,11 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-foreground mb-1">
+                  <label htmlFor="leave-management-client-create-type-policy-description" className="block font-semibold text-foreground mb-1">
                     Policy Description
                   </label>
                   <textarea
+                    id="leave-management-client-create-type-policy-description"
                     rows={2}
                     placeholder="Eligibility, purpose, or conditions for this leave..."
                     value={newTypeModal.description}

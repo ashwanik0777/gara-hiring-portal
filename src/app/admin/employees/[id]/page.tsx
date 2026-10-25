@@ -8,11 +8,12 @@ import { EmployeeDetailView } from "@/features/employees/components/employee-det
 
 interface EmployeeDetailPageProps {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string | string[] }>;
 }
 
 export const instant = false;
 
-export default async function EmployeeDetailPage({ params }: EmployeeDetailPageProps) {
+export default async function EmployeeDetailPage({ params, searchParams }: EmployeeDetailPageProps) {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login");
@@ -22,6 +23,7 @@ export default async function EmployeeDetailPage({ params }: EmployeeDetailPageP
   }
 
   const { id } = await params;
+  const { tab } = await searchParams;
   let employee;
   try {
     // The service allows HR/Admin with canEmployees, or the employee themselves.
@@ -48,6 +50,7 @@ export default async function EmployeeDetailPage({ params }: EmployeeDetailPageP
       isStaffAdmin={isStaffAdmin}
       isSelf={isSelf}
       allStaff={allStaff.map((s) => ({ id: s.id, employeeCode: s.employeeCode, name: s.name }))}
+      openExitTab={tab === "exit"}
       applicationHrefBase="/admin/applications"
     />
   );

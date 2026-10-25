@@ -98,13 +98,17 @@ export interface EvaluationEnrollmentDetail {
   /** Current recruitment stage of the linked application (HIRED once marked as joined). */
   applicationStatus: ApplicationStatus;
   openingType: OpeningType;
+  /** The intern's user id (staff view; used to exclude them from supervisor choices). */
+  internUserId: string;
   /** The person's employment record, if any (joined from this application or otherwise). */
   employment: {
     id: string;
     employeeCode: string;
     status: EmployeeStatus;
     employmentType: EmploymentType | null;
+    /** Start of the period this application opened, else the record's joining date. */
     joiningDate: Date;
+    /** True when the person joined from this application (also after a later re-join). */
     viaThisApplication: boolean;
   } | null;
   referenceCode: string;

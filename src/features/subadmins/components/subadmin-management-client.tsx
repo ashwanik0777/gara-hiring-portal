@@ -489,12 +489,13 @@ export function SubAdminManagementClient({
             <form onSubmit={handleCreateSubmit} className="space-y-4 pt-1">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+                  <label htmlFor="sub-admin-management-client-create-full-name" className="text-[11px] font-semibold text-muted-foreground block mb-1">
                     Full Name
                   </label>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                     <input
+                      id="sub-admin-management-client-create-full-name"
                       type="text"
                       required
                       value={formName}
@@ -506,12 +507,13 @@ export function SubAdminManagementClient({
                 </div>
 
                 <div>
-                  <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+                  <label htmlFor="sub-admin-management-client-create-email-address" className="text-[11px] font-semibold text-muted-foreground block mb-1">
                     Email Address
                   </label>
                   <div className="relative">
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                     <input
+                      id="sub-admin-management-client-create-email-address"
                       type="email"
                       required
                       value={formEmail}
@@ -523,12 +525,13 @@ export function SubAdminManagementClient({
                 </div>
 
                 <div>
-                  <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+                  <label htmlFor="sub-admin-management-client-create-temporary-password" className="text-[11px] font-semibold text-muted-foreground block mb-1">
                     Temporary Password
                   </label>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                     <input
+                      id="sub-admin-management-client-create-temporary-password"
                       type="password"
                       required
                       minLength={8}
@@ -543,14 +546,15 @@ export function SubAdminManagementClient({
 
               {/* Role Preset Selector */}
               <div>
-                <label className="text-[11px] font-semibold text-muted-foreground block mb-1.5">
+                <p id="subadmin-create-role-label" className="text-[11px] font-semibold text-muted-foreground block mb-1.5">
                   Staff Role & Baseline Preset
-                </label>
-                <div className="flex flex-wrap gap-2">
+                </p>
+                <div role="group" aria-labelledby="subadmin-create-role-label" className="flex flex-wrap gap-2">
                   {[Role.HR, Role.MANAGER, Role.INTERVIEWER, Role.MENTOR].map((r) => (
                     <button
                       key={r}
                       type="button"
+                      aria-pressed={formRole === r}
                       onClick={() => handleRolePreset(r)}
                       className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
                         formRole === r
@@ -566,16 +570,17 @@ export function SubAdminManagementClient({
 
               {/* Granular Module Permission Toggles */}
               <div>
-                <label className="text-[11px] font-semibold text-muted-foreground block mb-1.5">
+                <p id="subadmin-create-permissions-label" className="text-[11px] font-semibold text-muted-foreground block mb-1.5">
                   Granular Module Permissions
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                </p>
+                <div role="group" aria-labelledby="subadmin-create-permissions-label" className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {MODULE_CONFIGS.map(({ key, label, desc, icon: ModIcon }) => {
                     const isChecked = formPermissions[key as keyof typeof formPermissions];
                     return (
                       <button
                         key={key}
                         type="button"
+                        aria-pressed={isChecked}
                         onClick={() =>
                           setFormPermissions({
                             ...formPermissions,
@@ -713,14 +718,15 @@ export function SubAdminManagementClient({
 
             {/* Role & Baseline Presets */}
             <div>
-              <label className="text-[11px] font-semibold text-muted-foreground block mb-1.5">
+              <p id="subadmin-edit-role-label" className="text-[11px] font-semibold text-muted-foreground block mb-1.5">
                 Staff Role & Baseline Preset
-              </label>
-              <div className="flex flex-wrap gap-2">
+              </p>
+              <div role="group" aria-labelledby="subadmin-edit-role-label" className="flex flex-wrap gap-2">
                 {[Role.HR, Role.MANAGER, Role.INTERVIEWER, Role.MENTOR].map((r) => (
                   <button
                     key={r}
                     type="button"
+                    aria-pressed={editingSubAdmin.role === r}
                     onClick={() => {
                       if (r === Role.HR) {
                         setEditingSubAdmin({
@@ -803,9 +809,9 @@ export function SubAdminManagementClient({
             {/* Granular Module Permission Toggles */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[11px] font-semibold text-muted-foreground block">
+                <p id="subadmin-edit-permissions-label" className="text-[11px] font-semibold text-muted-foreground block">
                   Active Module Permissions
-                </label>
+                </p>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -855,7 +861,7 @@ export function SubAdminManagementClient({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div role="group" aria-labelledby="subadmin-edit-permissions-label" className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {MODULE_CONFIGS.map(({ key, label, desc, icon: ModIcon }) => {
                   const checked =
                     editingSubAdmin.permissions[
@@ -865,6 +871,7 @@ export function SubAdminManagementClient({
                     <button
                       key={key}
                       type="button"
+                      aria-pressed={checked}
                       onClick={() =>
                         togglePermission(
                           editingSubAdmin.id,

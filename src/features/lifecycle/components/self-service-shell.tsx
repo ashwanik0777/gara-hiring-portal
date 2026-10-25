@@ -11,6 +11,7 @@ import {
 } from "../capabilities";
 import { getLifecycleForUser, isStaffUser } from "../services/lifecycle-service";
 import { PortalUpgradeBanner } from "./portal-upgrade-banner";
+import { scheduleAutomationTick } from "@/features/automation/heartbeat";
 
 interface SelfServiceShellProps {
   children: React.ReactNode;
@@ -36,6 +37,8 @@ export async function SelfServiceShell({ children, loginCallbackPath, staffNavIt
   if (user.mustChangePassword) {
     redirect("/set-password");
   }
+  // Signed-in traffic keeps reminders and scheduled conversions flowing between scheduler runs.
+  scheduleAutomationTick();
 
   if (isStaffUser(user)) {
     if (!staffNavItems) {

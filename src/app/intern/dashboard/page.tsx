@@ -24,6 +24,8 @@ import {
   TodayAttendanceSection,
   type QuickLink,
 } from "@/features/lifecycle/components/hr-self-service-sections";
+import { InternConversionSection } from "@/features/lifecycle/components/intern-conversion-section";
+import { EmploymentPeriodsSection } from "@/features/lifecycle/components/employment-periods-section";
 import {
   formatCalendarDate,
   linkButtonClass,
@@ -208,6 +210,16 @@ function InternStageView({
         <QuickLinksSection links={INTERN_QUICK_LINKS} />
       </div>
 
+      <Suspense
+        fallback={
+          <SectionSkeleton label="Loading your progress review">
+            <ListCardSkeleton rows={2} />
+          </SectionSkeleton>
+        }
+      >
+        <InternConversionSection userId={userId} />
+      </Suspense>
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <IdCardSection idCard={workspace?.idCard ?? null} />
         <CertificateSection certificate={workspace?.certificate ?? null} />
@@ -215,6 +227,16 @@ function InternStageView({
 
       {workspace && <TasksSection workspace={workspace} />}
       {workspace && <ProgressReportsSection workspace={workspace} />}
+
+      <Suspense
+        fallback={
+          <SectionSkeleton label="Loading your employment history">
+            <ListCardSkeleton rows={2} />
+          </SectionSkeleton>
+        }
+      >
+        <EmploymentPeriodsSection userId={userId} />
+      </Suspense>
 
       <EvaluationRecordSection workspace={workspace} />
     </div>

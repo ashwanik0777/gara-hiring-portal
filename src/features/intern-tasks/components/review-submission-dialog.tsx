@@ -133,10 +133,11 @@ export function ReviewSubmissionDialog({
           className="mt-4 space-y-4"
         >
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <label htmlFor="review-submission-dialog-supervisor-feedback-review-notes" className="text-xs font-medium text-foreground">
               Supervisor Feedback & Review Notes *
             </label>
             <textarea
+              id="review-submission-dialog-supervisor-feedback-review-notes"
               name="supervisorFeedback"
               required
               rows={3}
@@ -146,10 +147,11 @@ export function ReviewSubmissionDialog({
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <label htmlFor="review-submission-dialog-change-request-notes" className="text-xs font-medium text-foreground">
               Change Request Notes (Optional, if requesting revisions)
             </label>
             <textarea
+              id="review-submission-dialog-change-request-notes"
               name="changeRequestNotes"
               rows={2}
               placeholder="Specific changes required before re-submission..."

@@ -13,6 +13,7 @@ import {
   linkButtonClass,
 } from "@/features/lifecycle/components/self-service-ui";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { OpenResumeLink } from "@/features/applications/components/resume-links";
 import {
   ArrowLeft,
   Calendar,
@@ -24,6 +25,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Briefcase,
+  Link2,
 } from "lucide-react";
 
 interface ApplicationDetailPageProps {
@@ -160,10 +162,29 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
       <Card className="border-border shadow-xs">
         <CardHeader className="pb-3 border-b border-border/50">
           <CardTitle className="text-base flex items-center gap-2">
-            <FileText className="h-4 w-4 text-primary" aria-hidden="true" /> Uploaded Application Documents
+            <FileText className="h-4 w-4 text-primary" aria-hidden="true" /> Application Documents
           </CardTitle>
         </CardHeader>
-        <CardContent className="pt-6">
+        <CardContent className="pt-6 space-y-3">
+          {application.resumeLink && (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 rounded-lg border border-border bg-muted/30">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2.5 bg-primary/10 rounded-md text-primary" aria-hidden="true">
+                  <Link2 className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-foreground">Resume link</div>
+                  <div className="text-xs text-muted-foreground break-all">
+                    {application.resumeLink.url}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Keep sharing set to &quot;Anyone with the link can view&quot; so the hiring team can open it.
+                  </p>
+                </div>
+              </div>
+              <OpenResumeLink link={application.resumeLink} className="shrink-0" />
+            </div>
+          )}
           {application.hasResume ? (
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 rounded-lg border border-border bg-muted/30">
               <div className="flex items-center gap-3">
@@ -186,7 +207,7 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
                 <span className="sr-only">(opens in a new tab)</span>
               </a>
             </div>
-          ) : (
+          ) : application.resumeLink ? null : (
             <p className="text-xs text-muted-foreground italic">
               No document was attached to this application.
             </p>

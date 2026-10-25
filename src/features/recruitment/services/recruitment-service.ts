@@ -27,6 +27,18 @@ import {
 } from "../schemas";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
 import {
+  cancelInterviewReminders,
+  scheduleInterviewReminders,
+} from "@/features/automation/interview-reminder-jobs";
+import {
+  ASSIGNABLE_STAFF_ROLES,
+  createInterviewSchedule,
+  findAssignableStaff,
+  isInterviewEligibleApplication,
+  queueInterviewEmails,
+  type InterviewerContact,
+} from "./interview-scheduling";
+import {
   ConflictError,
   ForbiddenError,
   NotFoundError,
@@ -44,8 +56,6 @@ import {
 
 const STAFF_ROLES: Role[] = RECRUITMENT_STAFF_ROLES;
 const DECISION_ROLES: Role[] = [Role.ADMIN, Role.HR];
-/** Roles that may be assigned to conduct an interview or manage an application. */
-const ASSIGNABLE_STAFF_ROLES: Role[] = [Role.INTERVIEWER, Role.MANAGER, Role.HR, Role.ADMIN];
 const OPEN_INTERVIEW_STATUSES: InterviewStatus[] = [
   InterviewStatus.SCHEDULED,
   InterviewStatus.RESCHEDULED,
@@ -75,17 +85,47 @@ export class RecruitmentService {
     tx: Prisma.TransactionClient,
     userId: string,
     label: string
-  ): Promise<void> {
-    const assignee = await tx.user.findUnique({
-      where: { id: userId },
-      select: { id: true, roles: { select: { role: true } } },
-    });
-    const isStaff = assignee?.roles.some((r) => ASSIGNABLE_STAFF_ROLES.includes(r.role)) ?? false;
-    if (!assignee || !isStaff) {
+  ): Promise<InterviewerContact> {
+    const assignee = await findAssignableStaff(tx, userId);
+    if (!assignee) {
       throw new ValidationError(
         `The selected ${label} must be a staff member with the Interviewer, Manager, HR or Admin role.`
       );
     }
+    return assignee;
+  }
+
+  /** Email/calendar context of an existing interview (reschedule and cancellation emails). */
+  private notificationContext(schedule: {
+    id: string;
+    applicationId: string;
+    icsSequence: number;
+    roundName: string;
+    scheduledAt: Date;
+    durationMinutes: number;
+    meetingLink: string | null;
+    interviewer: { id: string; name: string; email: string; roles: { role: Role }[] } | null;
+    application: {
+      referenceCode: string;
+      opening: { title: string };
+      candidate: { user: { id: string; name: string; email: string } };
+    };
+  }) {
+    return {
+      scheduleId: schedule.id,
+      applicationId: schedule.applicationId,
+      icsSequence: schedule.icsSequence,
+      referenceCode: schedule.application.referenceCode,
+      openingTitle: schedule.application.opening.title,
+      roundName: schedule.roundName,
+      scheduledAt: schedule.scheduledAt,
+      durationMinutes: schedule.durationMinutes,
+      meetingLink: schedule.meetingLink,
+      candidate: schedule.application.candidate.user,
+      interviewer: schedule.interviewer
+        ? { ...schedule.interviewer, roles: schedule.interviewer.roles.map((r) => r.role) }
+        : null,
+    };
   }
 
   /**
@@ -327,6 +367,17 @@ export class RecruitmentService {
         hiredEmployee: {
           select: { id: true, employeeCode: true, employmentType: true, joiningDate: true },
         },
+        // The period this application started. Employee.applicationId moves to the newest
+        // application when someone re-joins, so older applications rely on their own period.
+        employmentPeriods: {
+          orderBy: { startDate: "asc" },
+          take: 1,
+          select: {
+            startDate: true,
+            employmentType: true,
+            employee: { select: { id: true, employeeCode: true } },
+          },
+        },
       },
     });
 
@@ -354,7 +405,17 @@ export class RecruitmentService {
       : app.interviewSchedules;
     // Evaluation and joining summaries are pipeline information: omitted for interviewer-scoped views.
     const enrollment = scoped ? null : app.enrollment ?? null;
-    const hiredEmployee = scoped ? null : app.hiredEmployee ?? null;
+    const joiningPeriod = app.employmentPeriods?.[0];
+    const hiredEmployee = scoped
+      ? null
+      : joiningPeriod
+        ? {
+            id: joiningPeriod.employee.id,
+            employeeCode: joiningPeriod.employee.employeeCode,
+            employmentType: joiningPeriod.employmentType,
+            joiningDate: joiningPeriod.startDate,
+          }
+        : app.hiredEmployee ?? null;
 
     return {
       id: app.id,
@@ -464,6 +525,9 @@ export class RecruitmentService {
         durationMinutes: true,
         meetingLink: true,
         status: true,
+        icsSequence: true,
+        // Present when the candidate booked this interview from offered times.
+        bookingRequest: { select: { id: true } },
         application: {
           select: {
             candidate: {
@@ -486,8 +550,9 @@ export class RecruitmentService {
       orderBy: { scheduledAt: options.order ?? "asc" },
     });
 
-    return schedules.map(({ feedback, ...schedule }) => ({
+    return schedules.map(({ feedback, bookingRequest, ...schedule }) => ({
       ...schedule,
+      selfScheduled: Boolean(bookingRequest),
       feedback:
         feedback && (!scoped || feedback.interviewerId === user.id)
           ? { recommendation: feedback.recommendation }
@@ -719,53 +784,36 @@ export class RecruitmentService {
 
       assertNotOwnApplication(user, app.candidate.user.id);
 
-      if (app.isArchived || INTERVIEW_CLOSED_APPLICATION_STATUSES.includes(app.status)) {
+      if (!isInterviewEligibleApplication(app)) {
         throw new ValidationError(
           `Interviews cannot be scheduled for an application in status ${app.status}.`
         );
       }
 
+      let interviewer: InterviewerContact | null = null;
       if (input.interviewerId) {
         if (input.interviewerId === app.candidate.user.id) {
           throw new ValidationError("A candidate cannot be assigned as their own interviewer.");
         }
-        await this.assertAssignableStaff(tx, input.interviewerId, "interviewer");
+        interviewer = await this.assertAssignableStaff(tx, input.interviewerId, "interviewer");
       }
 
-      const createdSchedule = await tx.interviewSchedule.create({
-        data: {
-          applicationId: app.id,
-          roundNumber: input.roundNumber,
-          roundName: input.roundName,
-          scheduledAt: scheduledDate,
-          durationMinutes: input.durationMinutes,
-          meetingLink: input.meetingLink || null,
-          interviewerId: input.interviewerId || null,
-          scheduledById: user.id,
-          status: InterviewStatus.SCHEDULED,
+      // Interview row, reminder jobs and invitation emails (candidate + interviewer, with
+      // calendar invites) are committed together.
+      const createdSchedule = await createInterviewSchedule(tx, {
+        application: {
+          id: app.id,
+          referenceCode: app.referenceCode,
+          openingTitle: app.opening.title,
+          candidate: app.candidate.user,
         },
-      });
-
-      // Scheduling is not a stage change, so no stage-history row is written (a no-op
-      // X -> X row would corrupt stage lookups such as the offer revoke restore). The
-      // interview row and the audit entry below are the interview history.
-
-      // Queue email notification
-      await tx.notificationOutbox.create({
-        data: {
-          recipientEmail: app.candidate.user.email,
-          templateName: "INTERVIEW_INVITATION",
-          payload: {
-            referenceCode: app.referenceCode,
-            candidateName: app.candidate.user.name,
-            openingTitle: app.opening.title,
-            roundName: input.roundName,
-            scheduledAt: scheduledDate.toISOString(),
-            durationMinutes: input.durationMinutes,
-            meetingLink: input.meetingLink ?? null,
-          },
-          status: "PENDING",
-        },
+        roundNumber: input.roundNumber,
+        roundName: input.roundName,
+        scheduledAt: scheduledDate,
+        durationMinutes: input.durationMinutes,
+        meetingLink: input.meetingLink || null,
+        interviewer,
+        scheduledById: user.id,
       });
 
       await tx.auditLog.create({
@@ -812,11 +860,15 @@ export class RecruitmentService {
       const schedule = await tx.interviewSchedule.findUnique({
         where: { id: input.scheduleId },
         include: {
+          interviewer: {
+            select: { id: true, name: true, email: true, roles: { select: { role: true } } },
+          },
           application: {
             include: {
               candidate: {
                 include: { user: { select: { id: true, email: true, name: true } } },
               },
+              opening: { select: { title: true } },
             },
           },
         },
@@ -841,17 +893,28 @@ export class RecruitmentService {
         );
       }
 
+      // The SEQUENCE check makes concurrent reschedules/cancellations conflict instead of
+      // sending two calendar updates with the same SEQUENCE.
       const updated = await tx.interviewSchedule.updateMany({
-        where: { id: schedule.id, status: { in: OPEN_INTERVIEW_STATUSES } },
+        where: {
+          id: schedule.id,
+          status: { in: OPEN_INTERVIEW_STATUSES },
+          icsSequence: schedule.icsSequence,
+        },
         data: {
           scheduledAt: newDate,
           status: InterviewStatus.RESCHEDULED,
           rescheduleReason: input.rescheduleReason,
+          icsSequence: { increment: 1 },
         },
       });
       if (updated.count !== 1) {
         throw new ConflictError("The interview was updated by another action. Reload and try again.");
       }
+
+      // Replace the reminders for the old time with reminders for the new time.
+      await cancelInterviewReminders(tx, schedule.id);
+      await scheduleInterviewReminders(tx, { scheduleId: schedule.id, scheduledAt: newDate });
 
       // Not a stage change: the interview history is kept in the audit log instead of a
       // no-op stage-history row.
@@ -874,19 +937,17 @@ export class RecruitmentService {
         },
       });
 
-      await tx.notificationOutbox.create({
-        data: {
-          recipientEmail: schedule.application.candidate.user.email,
-          templateName: "INTERVIEW_RESCHEDULED",
-          payload: {
-            candidateName: schedule.application.candidate.user.name,
-            roundName: schedule.roundName,
-            newScheduledAt: newDate.toISOString(),
-            reason: input.rescheduleReason,
-          },
-          status: "PENDING",
+      // Updated calendar invite (same UID, higher SEQUENCE) for the candidate and interviewer.
+      await queueInterviewEmails(
+        tx,
+        "INTERVIEW_RESCHEDULED",
+        {
+          ...this.notificationContext(schedule),
+          icsSequence: schedule.icsSequence + 1,
+          scheduledAt: newDate,
         },
-      });
+        { previousScheduledAt: schedule.scheduledAt.toISOString(), reason: input.rescheduleReason }
+      );
 
       return { applicationId: schedule.applicationId };
     });
@@ -907,11 +968,15 @@ export class RecruitmentService {
       const schedule = await tx.interviewSchedule.findUnique({
         where: { id: input.scheduleId },
         include: {
+          interviewer: {
+            select: { id: true, name: true, email: true, roles: { select: { role: true } } },
+          },
           application: {
             include: {
               candidate: {
                 include: { user: { select: { id: true, email: true, name: true } } },
               },
+              opening: { select: { title: true } },
             },
           },
         },
@@ -926,15 +991,22 @@ export class RecruitmentService {
       }
 
       const updated = await tx.interviewSchedule.updateMany({
-        where: { id: schedule.id, status: { in: OPEN_INTERVIEW_STATUSES } },
+        where: {
+          id: schedule.id,
+          status: { in: OPEN_INTERVIEW_STATUSES },
+          icsSequence: schedule.icsSequence,
+        },
         data: {
           status: InterviewStatus.CANCELLED,
           cancellationReason: input.cancellationReason,
+          icsSequence: { increment: 1 },
         },
       });
       if (updated.count !== 1) {
         throw new ConflictError("The interview was updated by another action. Reload and try again.");
       }
+
+      await cancelInterviewReminders(tx, schedule.id);
 
       // Not a stage change: the interview history is kept in the audit log instead of a
       // no-op stage-history row.
@@ -956,18 +1028,13 @@ export class RecruitmentService {
         },
       });
 
-      await tx.notificationOutbox.create({
-        data: {
-          recipientEmail: schedule.application.candidate.user.email,
-          templateName: "INTERVIEW_CANCELLED",
-          payload: {
-            candidateName: schedule.application.candidate.user.name,
-            roundName: schedule.roundName,
-            reason: input.cancellationReason,
-          },
-          status: "PENDING",
-        },
-      });
+      // Calendar cancellation (METHOD:CANCEL, same UID, higher SEQUENCE) for both participants.
+      await queueInterviewEmails(
+        tx,
+        "INTERVIEW_CANCELLED",
+        { ...this.notificationContext(schedule), icsSequence: schedule.icsSequence + 1 },
+        { reason: input.cancellationReason }
+      );
 
       return { applicationId: schedule.applicationId };
     });

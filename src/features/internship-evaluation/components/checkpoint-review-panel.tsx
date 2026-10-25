@@ -70,7 +70,7 @@ export function CheckpointReviewPanel({
         setStatus("");
       }
     } catch {
-      setError("Failed to record checkpoint review.");
+      setError("We couldn't save the checkpoint review. Please check your connection and try again.");
     } finally {
       setIsSubmitting(false);
     }

@@ -7,6 +7,7 @@ import { toActionError } from "@/lib/errors";
 import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
 import { evaluationService, type IssueIdCardResult } from "./services/evaluation-service";
 import {
+  ChangeSupervisorSchema,
   EnrollCandidateSchema,
   FinalizeEvaluationSchema,
   IssueIdCardSchema,
@@ -51,7 +52,7 @@ export async function enrollCandidateAction(
 
     return { success: true, data: result };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to select the candidate for evaluation") };
+    return { success: false, error: toActionError(err, "We couldn't select the candidate for the evaluation. Please try again.") };
   }
 }
 
@@ -71,7 +72,7 @@ export async function triggerEvaluationStartAction(
 
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to start evaluation") };
+    return { success: false, error: toActionError(err, "We couldn't start the evaluation. Please try again.") };
   }
 }
 
@@ -94,7 +95,7 @@ export async function submitCheckpointAction(
 
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to submit checkpoint notes") };
+    return { success: false, error: toActionError(err, "We couldn't save your notes. Please try again.") };
   }
 }
 
@@ -118,7 +119,7 @@ export async function reviewCheckpointAction(
 
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to review checkpoint") };
+    return { success: false, error: toActionError(err, "We couldn't save the checkpoint review. Please try again.") };
   }
 }
 
@@ -143,7 +144,7 @@ export async function finalizeEvaluationAction(
 
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to finalize evaluation") };
+    return { success: false, error: toActionError(err, "We couldn't record the final outcome. Please try again.") };
   }
 }
 
@@ -167,7 +168,7 @@ export async function updateOnboardingItemAction(
 
     return { success: true, data: null };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to update onboarding item") };
+    return { success: false, error: toActionError(err, "We couldn't update the onboarding item. Please try again.") };
   }
 }
 
@@ -193,6 +194,30 @@ export async function issueIdCardAction(
 
     return { success: true, data: result };
   } catch (err: unknown) {
-    return { success: false, error: toActionError(err, "Failed to issue ID card") };
+    return { success: false, error: toActionError(err, "We couldn't issue the ID card. Please try again.") };
+  }
+}
+
+/**
+ * Changes an evaluation's supervisor from the cockpit. ADMIN / HR with canEvaluations; the
+ * service re-checks the final-outcome lock, separation of duties and supervisor eligibility.
+ */
+export async function changeEvaluationSupervisorAction(
+  formData: FormData
+): Promise<EvaluationActionResult<{ supervisorId: string }>> {
+  try {
+    const user = await requirePermission("canEvaluations", { roles: [Role.ADMIN, Role.HR] });
+    const input = parseInput(
+      ChangeSupervisorSchema,
+      readFormFields(formData, ["enrollmentId", "supervisorId"])
+    );
+
+    const result = await evaluationService.changeSupervisor(user, input.enrollmentId, input.supervisorId);
+    scheduleOutboxFlush();
+    revalidateEvaluationViews(result.enrollmentId);
+
+    return { success: true, data: { supervisorId: result.supervisorId } };
+  } catch (err: unknown) {
+    return { success: false, error: toActionError(err, "We couldn't change the supervisor. Please try again.") };
   }
 }

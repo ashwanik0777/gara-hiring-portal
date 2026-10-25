@@ -2,12 +2,19 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { FormSchemaDefinition, FormFieldDefinition } from "../types";
+import { FormSchemaDefinition, FormFieldDefinition, DocumentStorageMode } from "../types";
+import {
+  documentLinkSchema,
+  DOCUMENT_LINK_INVALID_MESSAGE,
+  DOCUMENT_LINK_REQUIRED_MESSAGE,
+  MAX_DOCUMENT_LINK_LENGTH,
+} from "../schemas";
 import { submitApplicationAction } from "@/features/applications/actions";
+import { APPLICATION_ATTRIBUTION_FIELDS } from "@/features/applications/source-tracking";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
-import { UploadCloud, CheckCircle2, AlertCircle, FileText } from "lucide-react";
+import { UploadCloud, CheckCircle2, AlertCircle, FileText, Link2 } from "lucide-react";
 
 const MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024;
 
@@ -22,12 +29,35 @@ function findPrimaryFileField(schema: FormSchemaDefinition): FormFieldDefinition
   return fileFields.find((field) => field.name === "resume") ?? fileFields[0] ?? null;
 }
 
+/** Label of the document field when it collects a share link. */
+function documentLinkLabel(field: FormFieldDefinition): string {
+  return field.name === "resume" ? "Resume link" : `${field.label} (link)`;
+}
+
+/** Client-side mirror of the server's link check, for immediate feedback only. */
+function getDocumentLinkError(field: FormFieldDefinition, value: unknown): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (trimmed === "") {
+    return field.required ? DOCUMENT_LINK_REQUIRED_MESSAGE : null;
+  }
+  const parsed = documentLinkSchema.safeParse(trimmed);
+  return parsed.success ? null : parsed.error.issues[0]?.message ?? DOCUMENT_LINK_INVALID_MESSAGE;
+}
+
 interface DynamicFormRendererProps {
   formSchema: FormSchemaDefinition;
+  /** How the document field is collected: an https share link, or a PDF upload. */
+  documentMode: DocumentStorageMode;
   openingTitle: string;
   openingSlug: string;
   candidateName?: string;
   candidateEmail?: string;
+  /**
+   * Optional source-attribution fields rendered inside the form ("How did you hear about
+   * us?" and hidden campaign parameters). Only fields named in
+   * APPLICATION_ATTRIBUTION_FIELDS are sent; the server normalizes them.
+   */
+  attributionFields?: React.ReactNode;
 }
 
 const INPUT_TYPES: Partial<Record<FormFieldDefinition["type"], string>> = {
@@ -41,9 +71,12 @@ export function DynamicFormRenderer({
   formSchema,
   openingTitle,
   openingSlug,
+  documentMode,
   candidateName = "",
   candidateEmail = "",
+  attributionFields,
 }: DynamicFormRendererProps) {
+  const collectsLink = documentMode === "link";
   const router = useRouter();
   const primaryFileField = findPrimaryFileField(formSchema);
   const fileErrorKey = primaryFileField?.name ?? "resume";
@@ -100,13 +133,26 @@ export function DynamicFormRenderer({
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    // Read the uncontrolled attribution fields before any await (currentTarget is reset after dispatch).
+    const nativeFields = new FormData(e.currentTarget);
+    const attribution: Array<[string, string]> = [];
+    for (const name of APPLICATION_ATTRIBUTION_FIELDS) {
+      const value = nativeFields.get(name);
+      if (typeof value === "string" && value !== "") attribution.push([name, value]);
+    }
     setServerError(null);
     setFieldErrors({});
 
-    // The document upload is only mandatory when the published form marks it required.
-    if (primaryFileField?.required && !resumeFile) {
+    // The document is only mandatory when the published form marks it required.
+    if (primaryFileField && collectsLink) {
+      const linkError = getDocumentLinkError(primaryFileField, formData[primaryFileField.name]);
+      if (linkError) {
+        setFieldErrors({ [fileErrorKey]: linkError });
+        return;
+      }
+    } else if (primaryFileField?.required && !resumeFile) {
       setFieldErrors({
         [fileErrorKey]: `${primaryFileField.label} is required. Please upload a PDF document.`,
       });
@@ -119,8 +165,12 @@ export function DynamicFormRenderer({
       const payload = new FormData();
       payload.append("openingSlug", openingSlug);
       payload.append("responses", JSON.stringify(formData));
-      if (primaryFileField && resumeFile) {
+      // Link mode sends the share link inside the responses; no file is ever attached.
+      if (primaryFileField && resumeFile && !collectsLink) {
         payload.append("resume", resumeFile);
+      }
+      for (const [name, value] of attribution) {
+        payload.append(name, value);
       }
 
       const res = await submitApplicationAction(payload);
@@ -137,7 +187,7 @@ export function DynamicFormRenderer({
       setSubmittedResult(res.data);
       setIsSubmitting(false);
     } catch {
-      setServerError("An error occurred during submission. Please check your connection and try again.");
+      setServerError("We couldn't submit your application. Please check your connection and try again.");
       setIsSubmitting(false);
     }
   };
@@ -191,10 +241,13 @@ export function DynamicFormRenderer({
   return (
     <form onSubmit={handleSubmit} className="space-y-8 max-w-3xl mx-auto">
       {serverError && (
-        <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive flex items-start gap-3">
-          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+        <div
+          role="alert"
+          className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive flex items-start gap-3"
+        >
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" aria-hidden="true" />
           <div>
-            <div className="font-semibold text-sm">Submission Error</div>
+            <div className="font-semibold text-sm">We couldn&apos;t submit your application</div>
             <div className="text-xs mt-0.5">{serverError}</div>
           </div>
         </div>
@@ -215,7 +268,38 @@ export function DynamicFormRenderer({
                   <div key={field.id} className="space-y-1">
                     <p className="text-sm font-medium text-foreground">{field.label}</p>
                     <p className="text-xs text-muted-foreground">
-                      Additional document uploads are not available for this form yet.
+                      {collectsLink
+                        ? "Additional documents are not collected on this form yet."
+                        : "Additional document uploads are not available for this form yet."}
+                    </p>
+                  </div>
+                );
+              }
+
+              if (field.type === "file" && collectsLink) {
+                const hintId = `${field.name}-link-hint`;
+                return (
+                  <div key={field.id} className="space-y-1.5">
+                    <Input
+                      id={field.name}
+                      label={documentLinkLabel(field) + (field.required ? " *" : "")}
+                      type="url"
+                      inputMode="url"
+                      autoComplete="url"
+                      spellCheck={false}
+                      maxLength={MAX_DOCUMENT_LINK_LENGTH}
+                      placeholder="https://drive.google.com/file/d/..."
+                      required={field.required}
+                      aria-describedby={hintId}
+                      aria-invalid={error ? true : undefined}
+                      icon={<Link2 className="h-4 w-4" aria-hidden="true" />}
+                      error={error}
+                      value={typeof formData[field.name] === "string" ? (formData[field.name] as string) : ""}
+                      onChange={(e) => handleFieldChange(field.name, e.target.value)}
+                    />
+                    <p id={hintId} className="text-xs text-muted-foreground">
+                      Paste a Google Drive, OneDrive or Dropbox link. Set sharing to &quot;Anyone
+                      with the link can view&quot;.
                     </p>
                   </div>
                 );
@@ -224,25 +308,27 @@ export function DynamicFormRenderer({
               if (field.type === "file") {
                 return (
                   <div key={field.id} className="space-y-2">
-                    <label className="block text-sm font-medium text-foreground">
+                    <p id={`file-${field.name}-label`} className="block text-sm font-medium text-foreground">
                       {field.label}{" "}
                       {field.required && <span className="text-destructive">*</span>}
-                    </label>
+                    </p>
                     {field.helpText && (
                       <p className="text-xs text-muted-foreground">{field.helpText}</p>
                     )}
 
                     <div className="border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-primary transition-colors bg-muted/20">
+                      {/* Visually hidden but focusable, so keyboard users can open the file picker. */}
                       <input
                         type="file"
                         id={`file-${field.name}`}
+                        aria-labelledby={`file-${field.name}-label`}
                         accept="application/pdf"
-                        className="hidden"
+                        className="peer sr-only"
                         onChange={handleFileChange}
                       />
                       <label
                         htmlFor={`file-${field.name}`}
-                        className="cursor-pointer flex flex-col items-center justify-center space-y-2"
+                        className="cursor-pointer flex flex-col items-center justify-center space-y-2 rounded-md peer-focus-visible:ring-2 peer-focus-visible:ring-primary peer-focus-visible:ring-offset-2"
                       >
                         {resumeFile ? (
                           <div className="flex items-center gap-2 text-primary font-medium text-sm">
@@ -420,6 +506,8 @@ export function DynamicFormRenderer({
           </CardContent>
         </Card>
       ))}
+
+      {attributionFields}
 
       <Card className="border-border">
         <CardFooter className="py-4 flex justify-between items-center">

@@ -7,13 +7,19 @@ import { assertPermission, hasPermission, type AuthenticatedUser } from "@/lib/a
 import {
   Role,
   ApplicationStatus,
+  ConversionOfferStatus,
+  ConversionReviewOutcome,
+  ConversionReviewStatus,
   EmployeeStatus,
+  EmploymentPeriodEndReason,
+  EmploymentPeriodStartReason,
   EmploymentType,
   EvaluationStatus,
   OfferStatus,
   OpeningType,
   Prisma,
 } from "@prisma/client";
+import { cancelJobsByKeyPrefix } from "@/infrastructure/jobs/job-queue";
 import {
   CreateEmployeeFromApplicationInput,
   JOINING_INITIAL_STATUSES,
@@ -42,6 +48,18 @@ import {
 } from "@/lib/errors";
 import { assertNotOwnApplication } from "@/features/recruitment/services/application-access";
 import { isFutureJoiningDate } from "../joining";
+import {
+  calendarDayKey,
+  conversionEffectiveDedupeKey,
+  firstReviewDate,
+  isReviewPeriodMonths,
+} from "../conversion-rules";
+import {
+  grantJoiningRole,
+  isUniqueViolation,
+  openEmploymentPeriod,
+  revokeJoiningRole,
+} from "./employment-records";
 
 const EMPLOYEE_ADMIN_ROLES: Role[] = [Role.ADMIN, Role.HR];
 
@@ -54,7 +72,8 @@ const DEFAULT_ONBOARDING_CHECKLIST: OnboardingChecklistItem[] = [
 
 /**
  * Status changes allowed through the generic status update. EXITED is excluded on purpose:
- * it is reachable only through the exit flow, which creates the exit record, and it is terminal.
+ * it is reachable only through the exit flow, which creates the exit record. Leaving EXITED
+ * happens only when HR marks the person as joined again (re-joining, decision 2026-10-25).
  * Finer probation/leave rules remain pending product approval (OD-015).
  */
 export const EMPLOYEE_STATUS_TRANSITIONS: Record<EmployeeStatus, EmployeeStatus[]> = {
@@ -97,6 +116,10 @@ export interface InternJoiningResult {
   employeeId: string;
   applicationId: string;
   enrollmentId: string;
+  /** The first progress review, scheduled `reviewAfterMonths` after the joining date. */
+  reviewId: string;
+  /** True when an exited record was reused (same row and employee code). */
+  rejoined: boolean;
 }
 
 /**
@@ -123,51 +146,44 @@ function assertJoiningInitialStatus(status: EmployeeStatus): void {
   }
 }
 
-/**
- * One employment record per user (`Employee.userId` is unique). An active record blocks a
- * second joining; an exited record cannot be reused because re-joining is not defined yet.
- */
-function assertNoEmployeeRecord(
-  personName: string,
-  profile: { employeeCode: string; status: EmployeeStatus } | null
-): void {
-  if (!profile) return;
-  if (profile.status === EmployeeStatus.EXITED) {
-    throw new ConflictError(
-      `${personName} has an exited employment record (${profile.employeeCode}). Re-joining with a new record is not supported yet.`
-    );
-  }
-  throw new ConflictError(
-    `${personName} already has an active employee record (${profile.employeeCode}).`
-  );
-}
+/** Fields of an existing employee record that a joining needs to inspect. */
+const EXISTING_RECORD_SELECT = {
+  id: true,
+  employeeCode: true,
+  status: true,
+  employmentType: true,
+} satisfies Prisma.EmployeeSelect;
+
+type ExistingEmployeeRecord = Prisma.EmployeeGetPayload<{ select: typeof EXISTING_RECORD_SELECT }>;
 
 /**
- * Grants the portal role that comes with joining. `assignedAt` is always refreshed, even when
- * a stale row exists, because it drives the portal upgrade banner.
+ * Re-joining (product-owner decision 2026-10-25): a person whose record is EXITED re-joins
+ * through normal hiring with the same account, and the same Employee row and employee code
+ * are reused (a new employment period starts). Returns that record, or null for a first
+ * joining. A current record (ACTIVE / PROBATION / ON_LEAVE) blocks a second joining.
  */
-async function grantJoiningRole(
-  tx: Prisma.TransactionClient,
-  userId: string,
-  role: typeof Role.INTERN | typeof Role.EMPLOYEE,
-  actorId: string,
-  now: Date
-): Promise<void> {
-  await tx.userRole.upsert({
-    where: { userId_role: { userId, role } },
-    create: { userId, role, assignedBy: actorId, assignedAt: now },
-    update: { assignedBy: actorId, assignedAt: now },
-  });
+function resolveJoiningRecord(
+  personName: string,
+  profile: ExistingEmployeeRecord | null | undefined,
+  employeeCode: string
+): ExistingEmployeeRecord | null {
+  if (!profile) return null;
+  if (profile.status !== EmployeeStatus.EXITED) {
+    throw new ConflictError(
+      `${personName} already has an active employee record (${profile.employeeCode}). Record their exit before marking a new joining.`
+    );
+  }
+  if (employeeCode !== profile.employeeCode) {
+    throw new ValidationError(
+      `${personName} is re-joining, so their existing employee code ${profile.employeeCode} is kept.`
+    );
+  }
+  return profile;
 }
 
 /** Re-throws unique-constraint races (employee code, user, application) as a conflict. */
 function rethrowJoiningConflict(error: unknown): never {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code: unknown }).code === "P2002"
-  ) {
+  if (isUniqueViolation(error)) {
     throw new ConflictError(
       "An employee record with this code, person or application was created at the same time. Reload and try again."
     );
@@ -217,14 +233,87 @@ export class EmployeeService {
   }
 
   /**
-   * Full-time "Mark as joined": creates the employee record from an accepted offer.
+   * Hierarchy cycle detection: the employee must not already be an ancestor of the manager.
+   * Runs inside the caller's transaction.
+   */
+  private async assertNoReportingCycle(
+    tx: Prisma.TransactionClient,
+    employee: { id: string; employeeCode: string },
+    manager: { id: string; employeeCode: string; managerId: string | null }
+  ): Promise<void> {
+    if (manager.id === employee.id) {
+      throw new ValidationError("An employee cannot be assigned as their own reporting manager.");
+    }
+    let currentManagerId: string | null = manager.managerId;
+    const visited = new Set<string>([manager.id]);
+
+    while (currentManagerId) {
+      if (currentManagerId === employee.id) {
+        throw new ValidationError(
+          `Circular reporting hierarchy detected: Employee ${employee.employeeCode} cannot report to ${manager.employeeCode} because ${manager.employeeCode} already reports up to ${employee.employeeCode}.`
+        );
+      }
+      if (visited.has(currentManagerId)) {
+        break; // Cycle in existing data, stop traversal
+      }
+      visited.add(currentManagerId);
+
+      const parent: { managerId: string | null } | null = await tx.employee.findUnique({
+        where: { id: currentManagerId },
+        select: { managerId: true },
+      });
+      currentManagerId = parent?.managerId ?? null;
+    }
+  }
+
+  /** A new employee code must not belong to anyone (the unique constraint also guards races). */
+  private async assertEmployeeCodeFree(tx: Prisma.TransactionClient, employeeCode: string): Promise<void> {
+    const existingCode = await tx.employee.findUnique({
+      where: { employeeCode },
+      select: { id: true },
+    });
+    if (existingCode) {
+      throw new ValidationError(`Employee code '${employeeCode}' is already assigned to another employee.`);
+    }
+  }
+
+  /**
+   * Re-joining: reuses the exited row (same id and employee code). The conditional write fails
+   * if the record left EXITED concurrently. Confidential details recorded earlier are kept.
+   */
+  private async reactivateExitedEmployee(
+    tx: Prisma.TransactionClient,
+    employeeId: string,
+    data: {
+      employmentType: EmploymentType;
+      designation: string;
+      department: string;
+      status: EmployeeStatus;
+      managerId: string | null;
+      joiningDate: Date;
+      applicationId: string;
+    }
+  ): Promise<void> {
+    const reactivated = await tx.employee.updateMany({
+      where: { id: employeeId, status: EmployeeStatus.EXITED },
+      data,
+    });
+    if (reactivated.count !== 1) {
+      throw new ConflictError("The employee record was changed by another action. Reload and try again.");
+    }
+  }
+
+  /**
+   * Full-time "Mark as joined": records that a candidate with an accepted offer has joined.
    * STRICT GATING:
    * 1. Requires ADMIN or HR role and the canEmployees permission.
    * 2. Requires an ACCEPTED job offer and application status OFFER_ACCEPTED.
-   * 3. The candidate must not already have an employee record.
+   * 3. A current (non-exited) employee record blocks the joining; an EXITED record is reused
+   *    with the same employee code (re-joining) and a REJOINED employment period starts.
    * 4. The actor must not be the candidate (separation of duties).
    * 5. The joining date must not be in the future (the person has joined).
-   * Grants the EMPLOYEE role with a fresh `assignedAt` and queues the EMPLOYEE_JOINED email.
+   * Opens an employment period, grants the EMPLOYEE role with a fresh `assignedAt` and queues
+   * the EMPLOYEE_JOINED email (`isRejoin: true` for a returning person).
    */
   async createEmployeeFromApplication(
     user: AuthenticatedUser,
@@ -234,10 +323,12 @@ export class EmployeeService {
     const joiningDate = parseJoiningDate(input.joiningDate);
     assertJoiningInitialStatus(input.initialStatus);
     const employeeCode = input.employeeCode.trim();
+    const department = input.department.trim();
+    const designation = input.designation.trim();
 
-    let createdEmployee: { id: string };
+    let joinedEmployeeId: string;
     try {
-      createdEmployee = await prisma.$transaction(async (tx) => {
+      joinedEmployeeId = await prisma.$transaction(async (tx) => {
         const application = await tx.application.findUnique({
           where: { id: input.applicationId },
           include: {
@@ -245,7 +336,7 @@ export class EmployeeService {
               include: {
                 user: {
                   include: {
-                    employeeProfile: true,
+                    employeeProfile: { select: EXISTING_RECORD_SELECT },
                   },
                 },
               },
@@ -277,23 +368,18 @@ export class EmployeeService {
 
         const candidateUser = application.candidate.user;
 
-        // STRICT CHECK 3: User must not already have an employee record
-        assertNoEmployeeRecord(candidateUser.name, candidateUser.employeeProfile);
-
-        // STRICT CHECK 4: Employee code uniqueness (the unique constraint also guards races)
-        const existingCode = await tx.employee.findUnique({
-          where: { employeeCode },
-          select: { id: true },
-        });
-        if (existingCode) {
-          throw new ValidationError(
-            `Employee code '${employeeCode}' is already assigned to another employee.`
-          );
+        // STRICT CHECK 3: no current employee record; an exited one is reused (re-joining).
+        const existing = resolveJoiningRecord(candidateUser.name, candidateUser.employeeProfile, employeeCode);
+        if (!existing) {
+          await this.assertEmployeeCodeFree(tx, employeeCode);
         }
 
-        // STRICT CHECK 5: Manager existence if supplied
+        // STRICT CHECK 4: Manager existence (and no reporting cycle for a returning person)
         if (input.managerId) {
-          await this.assertValidManager(tx, input.managerId);
+          const manager = await this.assertValidManager(tx, input.managerId);
+          if (existing) {
+            await this.assertNoReportingCycle(tx, existing, manager);
+          }
         }
 
         // Conditional transition: fails if the application stage changed concurrently.
@@ -308,109 +394,151 @@ export class EmployeeService {
         }
 
         const now = new Date();
+        const isRejoin = existing !== null;
 
-        // 1. Create Employee record
-        const employee = await tx.employee.create({
-          data: {
-            userId: candidateUser.id,
-            employeeCode,
-            department: input.department.trim(),
-            designation: input.designation.trim(),
-            joiningDate,
-            status: input.initialStatus,
+        // 1. Employee record: a new row, or the exited row reused with the same code.
+        let employeeId: string;
+        if (existing) {
+          await this.reactivateExitedEmployee(tx, existing.id, {
             employmentType: EmploymentType.FULL_TIME,
+            designation,
+            department,
+            status: input.initialStatus,
             managerId: input.managerId || null,
-            personalPhone: input.personalPhone?.trim() || null,
-            emergencyContact: input.emergencyContact
-              ? (input.emergencyContact as unknown as Prisma.InputJsonValue)
-              : undefined,
-            internalNotes: sanitizeStaffNotes(input.internalNotes),
+            joiningDate,
             applicationId: application.id,
-            onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
-          },
+          });
+          employeeId = existing.id;
+        } else {
+          const created = await tx.employee.create({
+            data: {
+              userId: candidateUser.id,
+              employeeCode,
+              department,
+              designation,
+              joiningDate,
+              status: input.initialStatus,
+              employmentType: EmploymentType.FULL_TIME,
+              managerId: input.managerId || null,
+              personalPhone: input.personalPhone?.trim() || null,
+              emergencyContact: input.emergencyContact
+                ? (input.emergencyContact as unknown as Prisma.InputJsonValue)
+                : undefined,
+              internalNotes: sanitizeStaffNotes(input.internalNotes),
+              applicationId: application.id,
+              onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
+            },
+          });
+          employeeId = created.id;
+        }
+
+        // 2. Employment period for this joining
+        const period = await openEmploymentPeriod(tx, {
+          employeeId,
+          employmentType: EmploymentType.FULL_TIME,
+          designation,
+          department,
+          startDate: joiningDate,
+          startReason: isRejoin ? EmploymentPeriodStartReason.REJOINED : EmploymentPeriodStartReason.JOINED,
+          applicationId: application.id,
+          createdById: user.id,
         });
 
-        // 2. Initial employment history entry
+        // 3. Employment history entry
         await tx.employmentHistory.create({
           data: {
-            employeeId: employee.id,
-            changeType: "HIRED",
-            previousValue: null,
-            newValue: employee.status,
-            remarks: `Marked as joined (full-time) via application ${application.referenceCode} for ${employee.designation} (${employee.department})`,
+            employeeId,
+            changeType: isRejoin ? "REJOINED" : "HIRED",
+            previousValue: isRejoin ? EmployeeStatus.EXITED : null,
+            newValue: input.initialStatus,
+            effectiveDate: joiningDate,
+            remarks: `${isRejoin ? "Re-joined" : "Marked as joined"} (full-time) via application ${application.referenceCode} for ${designation} (${department})`,
             changedById: user.id,
           },
         });
 
-        // 3. Application stage history (status already moved to HIRED above)
+        // 4. Application stage history (status already moved to HIRED above)
         await tx.applicationStatusHistory.create({
           data: {
             applicationId: application.id,
             fromStatus: ApplicationStatus.OFFER_ACCEPTED,
             toStatus: ApplicationStatus.HIRED,
             actorId: user.id,
-            internalNotes: `Marked as joined. Employee record created with code ${employee.employeeCode}. Onboarding initiated.`,
-            candidateMessage: `Welcome to GARA Innovation! You have joined as an employee (${employee.employeeCode}). Your employee home, attendance, leave and payslips are now available in your portal.`,
+            internalNotes: isRejoin
+              ? `Marked as re-joined. Existing employee record ${employeeCode} reused; a new employment period started.`
+              : `Marked as joined. Employee record created with code ${employeeCode}. Onboarding initiated.`,
+            candidateMessage: isRejoin
+              ? `Welcome back to GARA Innovation! You have re-joined as an employee (${employeeCode}). Your employee home, attendance, leave and payslips are available in your portal again.`
+              : `Welcome to GARA Innovation! You have joined as an employee (${employeeCode}). Your employee home, attendance, leave and payslips are now available in your portal.`,
           },
         });
 
-        // 4. Grant the EMPLOYEE role (fresh assignedAt drives the portal upgrade banner)
+        // 5. Grant the EMPLOYEE role (fresh assignedAt drives the portal upgrade banner). A
+        //    returning former intern no longer holds the INTERN role.
         await grantJoiningRole(tx, candidateUser.id, Role.EMPLOYEE, user.id, now);
+        if (isRejoin) {
+          await revokeJoiningRole(tx, candidateUser.id, Role.INTERN);
+        }
 
-        // 5. Welcome notification in outbox
+        // 6. Welcome notification in outbox
         await tx.notificationOutbox.create({
           data: {
             recipientEmail: candidateUser.email,
             templateName: "EMPLOYEE_JOINED",
             payload: {
               employeeName: candidateUser.name,
-              employeeCode: employee.employeeCode,
-              department: employee.department,
-              designation: employee.designation,
-              joiningDate: employee.joiningDate.toISOString(),
+              employeeCode,
+              department,
+              designation,
+              joiningDate: joiningDate.toISOString(),
+              ...(isRejoin ? { isRejoin: true } : {}),
             },
             status: "PENDING",
           },
         });
 
-        // 6. Audit Log
+        // 7. Audit Log
         await tx.auditLog.create({
           data: {
             actorId: user.id,
             actorRole: user.roles[0] ?? "HR",
             action: "MARK_EMPLOYEE_JOINED",
             resourceType: "EMPLOYEE",
-            resourceId: employee.id,
+            resourceId: employeeId,
             diffPayload: {
               applicationId: application.id,
               jobOfferId: application.jobOffer.id,
-              employeeCode: employee.employeeCode,
+              employeeCode,
               userId: candidateUser.id,
-              joiningDate: employee.joiningDate.toISOString(),
-              initialStatus: employee.status,
+              joiningDate: joiningDate.toISOString(),
+              initialStatus: input.initialStatus,
               employmentType: EmploymentType.FULL_TIME,
               applicationFromStatus: ApplicationStatus.OFFER_ACCEPTED,
               applicationToStatus: ApplicationStatus.HIRED,
               roleGranted: Role.EMPLOYEE,
+              isRejoin,
+              periodId: period.id,
+              ...(existing ? { previousEmploymentType: existing.employmentType } : {}),
             },
           },
         });
 
-        return employee;
+        return employeeId;
       });
     } catch (error) {
       rethrowJoiningConflict(error);
     }
 
-    return this.getEmployeeDetail(user, createdEmployee.id);
+    return this.getEmployeeDetail(user, joinedEmployeeId);
   }
 
   /**
    * Intern "Mark as joined" (internship step 2): after the supervised evaluation was recorded as
    * PASSED, HR records that the person has joined. In one transaction with conditional writes it
-   * creates the INTERN employee record, moves the application EVALUATION_SELECTED → HIRED, writes
-   * stage, employment and audit history, grants the INTERN role with a fresh `assignedAt` and
-   * queues the INTERN_JOINED welcome email.
+   * creates the INTERN employee record (or reuses an exited one with the same code), opens the
+   * employment period, schedules the first progress review (`reviewAfterMonths` after joining),
+   * moves the application EVALUATION_SELECTED → HIRED, writes stage, employment and audit
+   * history, grants the INTERN role with a fresh `assignedAt` and queues the INTERN_JOINED email.
    * Gated: ADMIN, or HR with canEmployees; never for one's own enrollment.
    */
   async createEmployeeFromInternship(
@@ -420,7 +548,13 @@ export class EmployeeService {
     await this.assertAdminAccess(user);
     const joiningDate = parseJoiningDate(input.joiningDate);
     assertJoiningInitialStatus(input.initialStatus);
+    if (!isReviewPeriodMonths(input.reviewAfterMonths)) {
+      throw new ValidationError("Choose when the progress review takes place (after 3 or 6 months).");
+    }
+    const reviewAfterMonths = input.reviewAfterMonths;
     const employeeCode = input.employeeCode.trim();
+    const department = input.department.trim();
+    const designation = input.designation.trim();
 
     try {
       return await prisma.$transaction(async (tx) => {
@@ -444,7 +578,7 @@ export class EmployeeService {
                 id: true,
                 name: true,
                 email: true,
-                employeeProfile: { select: { employeeCode: true, status: true } },
+                employeeProfile: { select: EXISTING_RECORD_SELECT },
               },
             },
           },
@@ -485,20 +619,16 @@ export class EmployeeService {
           );
         }
 
-        assertNoEmployeeRecord(enrollment.user.name, enrollment.user.employeeProfile);
-
-        const existingCode = await tx.employee.findUnique({
-          where: { employeeCode },
-          select: { id: true },
-        });
-        if (existingCode) {
-          throw new ValidationError(
-            `Employee code '${employeeCode}' is already assigned to another employee.`
-          );
+        const existing = resolveJoiningRecord(enrollment.user.name, enrollment.user.employeeProfile, employeeCode);
+        if (!existing) {
+          await this.assertEmployeeCodeFree(tx, employeeCode);
         }
 
         if (input.managerId) {
-          await this.assertValidManager(tx, input.managerId);
+          const manager = await this.assertValidManager(tx, input.managerId);
+          if (existing) {
+            await this.assertNoReportingCycle(tx, existing, manager);
+          }
         }
 
         // Conditional transition: the application must still be EVALUATION_SELECTED and the
@@ -518,29 +648,76 @@ export class EmployeeService {
         }
 
         const now = new Date();
+        const isRejoin = existing !== null;
 
-        const employee = await tx.employee.create({
-          data: {
-            userId: enrollment.userId,
-            employeeCode,
-            department: input.department.trim(),
-            designation: input.designation.trim(),
-            joiningDate,
-            status: input.initialStatus,
+        let employeeId: string;
+        if (existing) {
+          await this.reactivateExitedEmployee(tx, existing.id, {
             employmentType: EmploymentType.INTERN,
+            designation,
+            department,
+            status: input.initialStatus,
             managerId: input.managerId || null,
+            joiningDate,
             applicationId: application.id,
-            onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
+          });
+          // Reviews of an earlier internship never carry over to the new period.
+          await tx.conversionReview.updateMany({
+            where: { employeeId: existing.id, status: ConversionReviewStatus.SCHEDULED },
+            data: { status: ConversionReviewStatus.CANCELLED },
+          });
+          employeeId = existing.id;
+        } else {
+          const created = await tx.employee.create({
+            data: {
+              userId: enrollment.userId,
+              employeeCode,
+              department,
+              designation,
+              joiningDate,
+              status: input.initialStatus,
+              employmentType: EmploymentType.INTERN,
+              managerId: input.managerId || null,
+              applicationId: application.id,
+              onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
+            },
+          });
+          employeeId = created.id;
+        }
+
+        const period = await openEmploymentPeriod(tx, {
+          employeeId,
+          employmentType: EmploymentType.INTERN,
+          designation,
+          department,
+          startDate: joiningDate,
+          startReason: isRejoin ? EmploymentPeriodStartReason.REJOINED : EmploymentPeriodStartReason.JOINED,
+          applicationId: application.id,
+          createdById: user.id,
+        });
+
+        // Product-owner decision (2026-10-25): the first progress review takes place 3 or 6
+        // months after joining, as chosen by HR.
+        const review = await tx.conversionReview.create({
+          data: {
+            employeeId,
+            periodId: period.id,
+            reviewPeriodMonths: reviewAfterMonths,
+            scheduledFor: firstReviewDate(joiningDate, reviewAfterMonths),
+            status: ConversionReviewStatus.SCHEDULED,
+            createdById: user.id,
           },
+          select: { id: true, scheduledFor: true },
         });
 
         await tx.employmentHistory.create({
           data: {
-            employeeId: employee.id,
-            changeType: "INTERN_JOINED",
-            previousValue: null,
-            newValue: employee.status,
-            remarks: `Marked as joined (intern) via application ${application.referenceCode} after a PASSED evaluation, as ${employee.designation} (${employee.department})`,
+            employeeId,
+            changeType: isRejoin ? "INTERN_REJOINED" : "INTERN_JOINED",
+            previousValue: isRejoin ? EmployeeStatus.EXITED : null,
+            newValue: input.initialStatus,
+            effectiveDate: joiningDate,
+            remarks: `${isRejoin ? "Re-joined" : "Marked as joined"} (intern) via application ${application.referenceCode} after a PASSED evaluation, as ${designation} (${department}). Progress review after ${reviewAfterMonths} months (${calendarDayKey(review.scheduledFor)}).`,
             changedById: user.id,
           },
         });
@@ -551,13 +728,19 @@ export class EmployeeService {
             fromStatus: ApplicationStatus.EVALUATION_SELECTED,
             toStatus: ApplicationStatus.HIRED,
             actorId: user.id,
-            internalNotes: `Marked as joined as an intern. Employee record created with code ${employee.employeeCode}.`,
-            candidateMessage:
-              "Welcome to GARA Innovation! You have joined as an intern. Your intern workspace, attendance, leave, payslips, ID card and certificate are now available in your portal.",
+            internalNotes: isRejoin
+              ? `Marked as re-joined as an intern. Existing employee record ${employeeCode} reused; a new employment period started.`
+              : `Marked as joined as an intern. Employee record created with code ${employeeCode}.`,
+            candidateMessage: isRejoin
+              ? "Welcome back to GARA Innovation! You have re-joined as an intern. Your intern workspace, attendance, leave, payslips, ID card and certificate are available in your portal again."
+              : "Welcome to GARA Innovation! You have joined as an intern. Your intern workspace, attendance, leave, payslips, ID card and certificate are now available in your portal.",
           },
         });
 
         await grantJoiningRole(tx, enrollment.userId, Role.INTERN, user.id, now);
+        if (isRejoin) {
+          await revokeJoiningRole(tx, enrollment.userId, Role.EMPLOYEE);
+        }
 
         await tx.notificationOutbox.create({
           data: {
@@ -565,11 +748,12 @@ export class EmployeeService {
             templateName: "INTERN_JOINED",
             payload: {
               recipientName: enrollment.user.name,
-              employeeCode: employee.employeeCode,
-              department: employee.department,
-              designation: employee.designation,
+              employeeCode,
+              department,
+              designation,
               openingTitle: application.opening.title,
-              joiningDate: employee.joiningDate.toISOString(),
+              joiningDate: joiningDate.toISOString(),
+              ...(isRejoin ? { isRejoin: true } : {}),
             },
             status: "PENDING",
           },
@@ -581,24 +765,36 @@ export class EmployeeService {
             actorRole: user.roles[0] ?? "HR",
             action: "MARK_INTERN_JOINED",
             resourceType: "EMPLOYEE",
-            resourceId: employee.id,
+            resourceId: employeeId,
             diffPayload: {
               enrollmentId: enrollment.id,
               applicationId: application.id,
               userId: enrollment.userId,
-              employeeCode: employee.employeeCode,
-              joiningDate: employee.joiningDate.toISOString(),
-              initialStatus: employee.status,
+              employeeCode,
+              joiningDate: joiningDate.toISOString(),
+              initialStatus: input.initialStatus,
               employmentType: EmploymentType.INTERN,
-              managerId: employee.managerId,
+              managerId: input.managerId || null,
               applicationFromStatus: ApplicationStatus.EVALUATION_SELECTED,
               applicationToStatus: ApplicationStatus.HIRED,
               roleGranted: Role.INTERN,
+              isRejoin,
+              periodId: period.id,
+              reviewId: review.id,
+              reviewAfterMonths,
+              reviewScheduledFor: review.scheduledFor.toISOString(),
+              ...(existing ? { previousEmploymentType: existing.employmentType } : {}),
             },
           },
         });
 
-        return { employeeId: employee.id, applicationId: application.id, enrollmentId: enrollment.id };
+        return {
+          employeeId,
+          applicationId: application.id,
+          enrollmentId: enrollment.id,
+          reviewId: review.id,
+          rejoined: isRejoin,
+        };
       });
     } catch (error) {
       rethrowJoiningConflict(error);
@@ -640,7 +836,9 @@ export class EmployeeService {
 
       if (targetUser.employeeProfile) {
         throw new ValidationError(
-          `User ${targetUser.name} already has an employee record (${targetUser.employeeProfile.employeeCode}).`
+          targetUser.employeeProfile.status === EmployeeStatus.EXITED
+            ? `User ${targetUser.name} has an exited employee record (${targetUser.employeeProfile.employeeCode}). A returning person re-joins through hiring, which reuses that record.`
+            : `User ${targetUser.name} already has an employee record (${targetUser.employeeProfile.employeeCode}).`
         );
       }
 
@@ -674,6 +872,18 @@ export class EmployeeService {
           internalNotes: sanitizeStaffNotes(input.internalNotes),
           onboardingChecklist: DEFAULT_ONBOARDING_CHECKLIST as unknown as Prisma.InputJsonValue,
         },
+      });
+
+      await openEmploymentPeriod(tx, {
+        employeeId: employee.id,
+        // Direct creation does not record an employment type (unchanged behaviour).
+        employmentType: employee.employmentType,
+        designation: employee.designation,
+        department: employee.department,
+        startDate: employee.joiningDate,
+        startReason: EmploymentPeriodStartReason.JOINED,
+        applicationId: null,
+        createdById: user.id,
       });
 
       await tx.employmentHistory.create({
@@ -882,10 +1092,24 @@ export class EmployeeService {
           },
           orderBy: { uploadedAt: "desc" },
         },
-        exitRecord: {
+        exitRecords: {
           include: {
             processedBy: { select: { id: true, name: true } },
           },
+          orderBy: { lastWorkingDate: "desc" },
+        },
+        employmentPeriods: {
+          select: {
+            id: true,
+            employmentType: true,
+            designation: true,
+            department: true,
+            startDate: true,
+            endDate: true,
+            startReason: true,
+            endReason: true,
+          },
+          orderBy: { startDate: "asc" },
         },
       },
     });
@@ -964,18 +1188,27 @@ export class EmployeeService {
         designation: r.designation,
         department: r.department,
       })),
-      exitRecord: emp.exitRecord
-        ? {
-            id: emp.exitRecord.id,
-            resignationDate: emp.exitRecord.resignationDate,
-            lastWorkingDate: emp.exitRecord.lastWorkingDate,
-            reason: emp.exitRecord.reason,
-            clearanceChecklist: emp.exitRecord.clearanceChecklist as Record<string, unknown> | null,
-            exitInterviewNotes: isStaffAdmin ? emp.exitRecord.exitInterviewNotes : null,
-            status: emp.exitRecord.status,
-            processedBy: emp.exitRecord.processedBy,
-          }
-        : null,
+      exitRecords: emp.exitRecords.map((x) => ({
+        id: x.id,
+        periodId: x.periodId,
+        resignationDate: x.resignationDate,
+        lastWorkingDate: x.lastWorkingDate,
+        reason: x.reason,
+        clearanceChecklist: x.clearanceChecklist as Record<string, unknown> | null,
+        exitInterviewNotes: isStaffAdmin ? x.exitInterviewNotes : null,
+        status: x.status,
+        processedBy: x.processedBy,
+      })),
+      employmentPeriods: emp.employmentPeriods.map((p) => ({
+        id: p.id,
+        employmentType: p.employmentType,
+        designation: p.designation,
+        department: p.department,
+        startDate: p.startDate,
+        endDate: p.endDate,
+        startReason: p.startReason,
+        endReason: p.endReason,
+      })),
     };
   }
 
@@ -1105,28 +1338,7 @@ export class EmployeeService {
 
           const targetManager = await this.assertValidManager(tx, input.managerId);
           newManagerCode = targetManager.employeeCode;
-
-          // Hierarchy cycle detection: Ensure employee is not already an ancestor of the manager
-          let currentManagerId: string | null = targetManager.managerId;
-          const visited = new Set<string>([targetManager.id]);
-
-          while (currentManagerId) {
-            if (currentManagerId === emp.id) {
-              throw new ValidationError(
-                `Circular reporting hierarchy detected: Employee ${emp.employeeCode} cannot report to ${targetManager.employeeCode} because ${targetManager.employeeCode} already reports up to ${emp.employeeCode}.`
-              );
-            }
-            if (visited.has(currentManagerId)) {
-              break; // Cycle in existing data, stop traversal
-            }
-            visited.add(currentManagerId);
-
-            const parent: { managerId: string | null } | null = await tx.employee.findUnique({
-              where: { id: currentManagerId },
-              select: { managerId: true },
-            });
-            currentManagerId = parent?.managerId ?? null;
-          }
+          await this.assertNoReportingCycle(tx, emp, targetManager);
         }
 
         await tx.employee.update({
@@ -1254,8 +1466,12 @@ export class EmployeeService {
   }
 
   /**
-   * Records employee offboarding and sets status to EXITED.
-   * Clearance is not set automatically (OD-015): the exit record starts PENDING.
+   * Records employee offboarding and sets status to EXITED. The current employment period is
+   * closed (endDate = last working date, endReason EXITED) and the exit record is linked to it
+   * (one exit per period, so a person who re-joins can exit again later).
+   * Clearance is not set automatically (OD-015): the exit record starts PENDING. Scheduled
+   * progress reviews of the period are cancelled and a conversion offer that has not taken
+   * effect is withdrawn, so nothing is applied to an exited record.
    * Gated: HR / Admin with canEmployees.
    */
   async processEmployeeExit(
@@ -1264,71 +1480,164 @@ export class EmployeeService {
   ): Promise<void> {
     await this.assertAdminAccess(user);
 
-    await prisma.$transaction(async (tx) => {
-      const emp = await tx.employee.findUnique({
-        where: { id: input.employeeId },
-        select: { id: true, userId: true, status: true, exitRecord: { select: { id: true } } },
-      });
+    const lastWorkingDate = new Date(input.lastWorkingDate);
+    if (Number.isNaN(lastWorkingDate.getTime())) {
+      throw new ValidationError("A valid last working date is required.");
+    }
 
-      if (!emp) {
-        throw new NotFoundError("Employee record not found.");
-      }
-      assertNotOwnEmployeeRecord(user, emp.userId);
-
-      if (emp.exitRecord) {
-        throw new ValidationError("An exit record already exists for this employee.");
-      }
-
-      if (emp.status === EmployeeStatus.EXITED) {
-        throw new ValidationError("This employee has already exited.");
-      }
-
-      const updated = await tx.employee.updateMany({
-        where: { id: emp.id, status: emp.status },
-        data: { status: EmployeeStatus.EXITED },
-      });
-      if (updated.count !== 1) {
-        throw new ConflictError("The employee status was changed by another action. Reload and try again.");
-      }
-
-      // Unique employeeId on the exit record also guards concurrent exits.
-      await tx.employeeExitRecord.create({
-        data: {
-          employeeId: emp.id,
-          lastWorkingDate: new Date(input.lastWorkingDate),
-          resignationDate: input.resignationDate ? new Date(input.resignationDate) : null,
-          reason: input.reason?.trim() || null,
-          exitInterviewNotes: input.exitInterviewNotes?.trim() || null,
-          processedById: user.id,
-        },
-      });
-
-      await tx.employmentHistory.create({
-        data: {
-          employeeId: emp.id,
-          changeType: "STATUS_CHANGE",
-          previousValue: emp.status,
-          newValue: EmployeeStatus.EXITED,
-          remarks: `Exit recorded; clearance pending. Reason: ${input.reason?.trim() || "Not provided"}`,
-          changedById: user.id,
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          actorId: user.id,
-          actorRole: user.roles[0] ?? "HR",
-          action: "PROCESS_EMPLOYEE_EXIT",
-          resourceType: "EMPLOYEE",
-          resourceId: emp.id,
-          diffPayload: {
-            fromStatus: emp.status,
-            lastWorkingDate: input.lastWorkingDate,
-            reason: input.reason ?? null,
+    try {
+      await prisma.$transaction(async (tx) => {
+        const emp = await tx.employee.findUnique({
+          where: { id: input.employeeId },
+          select: {
+            id: true,
+            userId: true,
+            status: true,
+            employmentType: true,
+            designation: true,
+            department: true,
+            joiningDate: true,
+            applicationId: true,
+            employmentPeriods: {
+              where: { endDate: null },
+              orderBy: { startDate: "desc" },
+              take: 1,
+              select: { id: true, startDate: true, exitRecord: { select: { id: true } } },
+            },
           },
-        },
+        });
+
+        if (!emp) {
+          throw new NotFoundError("Employee record not found.");
+        }
+        assertNotOwnEmployeeRecord(user, emp.userId);
+
+        if (emp.status === EmployeeStatus.EXITED) {
+          throw new ValidationError("This employee has already exited.");
+        }
+
+        const currentPeriod = emp.employmentPeriods[0] ?? null;
+        if (currentPeriod?.exitRecord) {
+          throw new ValidationError("An exit has already been recorded for the current employment period.");
+        }
+        const periodStart = currentPeriod?.startDate ?? emp.joiningDate;
+        if (periodStart && calendarDayKey(lastWorkingDate) < calendarDayKey(periodStart)) {
+          throw new ValidationError(
+            `The last working date cannot be before the current employment period started (${calendarDayKey(periodStart)}).`
+          );
+        }
+
+        const updated = await tx.employee.updateMany({
+          where: { id: emp.id, status: emp.status },
+          data: { status: EmployeeStatus.EXITED },
+        });
+        if (updated.count !== 1) {
+          throw new ConflictError("The employee status was changed by another action. Reload and try again.");
+        }
+
+        // Close the current period, or record one for legacy data that never had a period.
+        let periodId: string;
+        if (currentPeriod) {
+          const closed = await tx.employmentPeriod.updateMany({
+            where: { id: currentPeriod.id, endDate: null },
+            data: { endDate: lastWorkingDate, endReason: EmploymentPeriodEndReason.EXITED },
+          });
+          if (closed.count !== 1) {
+            throw new ConflictError("The employment period was changed by another action. Reload and try again.");
+          }
+          periodId = currentPeriod.id;
+        } else {
+          const recorded = await tx.employmentPeriod.create({
+            data: {
+              employeeId: emp.id,
+              employmentType: emp.employmentType,
+              designation: emp.designation,
+              department: emp.department,
+              startDate: emp.joiningDate,
+              endDate: lastWorkingDate,
+              startReason: EmploymentPeriodStartReason.JOINED,
+              endReason: EmploymentPeriodEndReason.EXITED,
+              applicationId: emp.applicationId,
+              createdById: user.id,
+            },
+            select: { id: true },
+          });
+          periodId = recorded.id;
+        }
+
+        // The unique periodId on the exit record also guards concurrent exits.
+        await tx.employeeExitRecord.create({
+          data: {
+            employeeId: emp.id,
+            periodId,
+            lastWorkingDate,
+            resignationDate: input.resignationDate ? new Date(input.resignationDate) : null,
+            reason: input.reason?.trim() || null,
+            exitInterviewNotes: input.exitInterviewNotes?.trim() || null,
+            processedById: user.id,
+          },
+        });
+
+        // Nothing from the intern progress review may apply to an exited record.
+        const cancelledReviews = await tx.conversionReview.updateMany({
+          where: { employeeId: emp.id, status: ConversionReviewStatus.SCHEDULED },
+          data: { status: ConversionReviewStatus.CANCELLED },
+        });
+        const openOffers = await tx.conversionReview.findMany({
+          where: {
+            employeeId: emp.id,
+            outcome: ConversionReviewOutcome.CONVERT,
+            convertedAt: null,
+            offerStatus: { in: [ConversionOfferStatus.PENDING, ConversionOfferStatus.ACCEPTED] },
+          },
+          select: { id: true },
+        });
+        if (openOffers.length > 0) {
+          await tx.conversionReview.updateMany({
+            where: { id: { in: openOffers.map((o) => o.id) }, convertedAt: null },
+            data: { offerStatus: ConversionOfferStatus.WITHDRAWN },
+          });
+          for (const offer of openOffers) {
+            await cancelJobsByKeyPrefix(conversionEffectiveDedupeKey(offer.id), tx);
+          }
+        }
+
+        await tx.employmentHistory.create({
+          data: {
+            employeeId: emp.id,
+            changeType: "STATUS_CHANGE",
+            previousValue: emp.status,
+            newValue: EmployeeStatus.EXITED,
+            effectiveDate: lastWorkingDate,
+            remarks: `Exit recorded; clearance pending. Reason: ${input.reason?.trim() || "Not provided"}`,
+            changedById: user.id,
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            actorId: user.id,
+            actorRole: user.roles[0] ?? "HR",
+            action: "PROCESS_EMPLOYEE_EXIT",
+            resourceType: "EMPLOYEE",
+            resourceId: emp.id,
+            diffPayload: {
+              fromStatus: emp.status,
+              lastWorkingDate: input.lastWorkingDate,
+              reason: input.reason ?? null,
+              periodId,
+              cancelledReviews: cancelledReviews.count,
+              withdrawnConversionOffers: openOffers.map((o) => o.id),
+            },
+          },
+        });
       });
-    });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new ConflictError("An exit was recorded for this employment period at the same time. Reload to see it.");
+      }
+      throw error;
+    }
   }
 }
 

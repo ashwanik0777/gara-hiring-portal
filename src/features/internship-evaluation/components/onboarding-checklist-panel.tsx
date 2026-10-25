@@ -71,7 +71,7 @@ export function OnboardingChecklistPanel({
         setError(res.error);
       }
     } catch {
-      setError("Failed to update onboarding item.");
+      setError("We couldn't update the onboarding item. Please check your connection and try again.");
     } finally {
       setIsUpdating(false);
     }
@@ -104,7 +104,7 @@ export function OnboardingChecklistPanel({
         setReissueReason("");
       }
     } catch {
-      setError("Failed to issue Intern ID Card.");
+      setError("We couldn't issue the ID card. Please check your connection and try again.");
     } finally {
       setIsIssuing(false);
     }

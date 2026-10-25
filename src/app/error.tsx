@@ -1,27 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
-import { ErrorState } from "@/components/feedback/error-state";
+import { FriendlyError } from "@/components/feedback/friendly-error";
 
-export default function ErrorBoundary({
-  error,
-  reset,
-}: {
-  error: Error & { digest?: string };
-  reset: () => void;
-}) {
-  useEffect(() => {
-    // Log unexpected errors safely on client
-    console.error("App boundary error caught:", error.message);
-  }, [error]);
-
-  return (
-    <div className="flex flex-1 items-center justify-center p-8">
-      <ErrorState
-        title="Application Error"
-        message="An unexpected error occurred while processing this request."
-        reset={reset}
-      />
-    </div>
-  );
+export default function ErrorBoundary({ error, retry }: { error: unknown; retry: () => void }) {
+  return <FriendlyError error={error} retry={retry} homeHref="/" homeLabel="Go to home" />;
 }

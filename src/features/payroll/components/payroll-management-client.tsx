@@ -1793,10 +1793,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+              <label htmlFor="payroll-management-client-bank-transfer-utr-reference" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                 Bank Transfer / UTR Reference *
               </label>
               <Input
+                id="payroll-management-client-bank-transfer-utr-reference"
                 required
                 aria-label="Bank transfer or UTR reference"
                 placeholder="Reference issued by your bank"
@@ -1810,10 +1811,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+              <label htmlFor="payroll-management-client-audit-notes" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                 Audit Notes (Optional)
               </label>
               <Input
+                id="payroll-management-client-audit-notes"
                 placeholder="e.g. Verified via corporate netbanking"
                 value={disburseModal.notes}
                 onChange={(e) => setDisburseModal({ ...disburseModal, notes: e.target.value })}
@@ -1900,10 +1902,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+              <label htmlFor="payroll-management-client-audit-notes-2" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                 Audit Notes
               </label>
               <Input
+                id="payroll-management-client-audit-notes-2"
                 placeholder="e.g. Authorized by CFO for monthly bank payout"
                 value={bulkModal.notes}
                 onChange={(e) => setBulkModal({ ...bulkModal, notes: e.target.value })}
@@ -1963,12 +1966,13 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
 
             {/* Paid vs Unpaid Toggle Box */}
             <div className="p-3.5 rounded-2xl bg-muted/40 border border-border/60 space-y-3">
-              <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+              <p id="payroll-profile-compensation-label" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                 Compensation Status *
-              </label>
-              <div className="grid grid-cols-2 gap-2">
+              </p>
+              <div role="group" aria-labelledby="payroll-profile-compensation-label" className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
+                  aria-pressed={profileModal.isPaid}
                   onClick={() => setProfileModal({ ...profileModal, isPaid: true })}
                   className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
                     profileModal.isPaid
@@ -1987,6 +1991,7 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
 
                 <button
                   type="button"
+                  aria-pressed={!profileModal.isPaid}
                   onClick={() => setProfileModal({ ...profileModal, isPaid: false })}
                   className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
                     !profileModal.isPaid
@@ -2007,12 +2012,13 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
 
             {/* Employment Nature (Intern vs Full-Time) */}
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+              <p id="payroll-profile-employment-label" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                 Employment Category {profileModal.employmentType === null && `(${NOT_CONFIGURED})`}
-              </label>
-              <div className="flex gap-2">
+              </p>
+              <div role="group" aria-labelledby="payroll-profile-employment-label" className="flex gap-2">
                 <button
                   type="button"
+                  aria-pressed={profileModal.employmentType === "INTERN"}
                   onClick={() => setProfileModal({ ...profileModal, employmentType: "INTERN" })}
                   className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold cursor-pointer transition-all ${
                     profileModal.employmentType === "INTERN"
@@ -2024,6 +2030,7 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
                 </button>
                 <button
                   type="button"
+                  aria-pressed={profileModal.employmentType === "FULL_TIME"}
                   onClick={() => setProfileModal({ ...profileModal, employmentType: "FULL_TIME" })}
                   className={`flex-1 py-2 px-3 rounded-xl border text-xs font-semibold cursor-pointer transition-all ${
                     profileModal.employmentType === "FULL_TIME"
@@ -2061,10 +2068,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+                  <label htmlFor="payroll-management-client-bank-name" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                     Bank Name
                   </label>
                   <Input
+                    id="payroll-management-client-bank-name"
                     placeholder={NOT_CONFIGURED}
                     value={profileModal.bankName}
                     onChange={(e) =>
@@ -2098,10 +2106,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+                  <label htmlFor="payroll-management-client-ifsc-code" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                     IFSC Code
                   </label>
                   <Input
+                    id="payroll-management-client-ifsc-code"
                     placeholder={NOT_CONFIGURED}
                     value={profileModal.ifscCode}
                     onChange={(e) =>
@@ -2112,10 +2121,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+                  <label htmlFor="payroll-management-client-account-holder-name" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                     Account Holder Name
                   </label>
                   <Input
+                    id="payroll-management-client-account-holder-name"
                     placeholder="Name as per passbook"
                     value={profileModal.accountHolderName}
                     onChange={(e) =>
@@ -2211,10 +2221,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+              <label htmlFor="payroll-management-client-cycle-code" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                 Cycle Code (e.g. 2026-11) *
               </label>
               <Input
+                id="payroll-management-client-cycle-code"
                 required
                 placeholder="2026-11"
                 value={newPeriodModal.code}
@@ -2225,10 +2236,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+                <label htmlFor="payroll-management-client-start-date" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                   Start Date *
                 </label>
                 <Input
+                  id="payroll-management-client-start-date"
                   required
                   type="date"
                   value={newPeriodModal.startDate}
@@ -2238,10 +2250,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+                <label htmlFor="payroll-management-client-end-date" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                   End Date *
                 </label>
                 <Input
+                  id="payroll-management-client-end-date"
                   required
                   type="date"
                   value={newPeriodModal.endDate}
@@ -2252,10 +2265,11 @@ export function PayrollManagementClient({ initialData }: PayrollManagementClient
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
+              <label htmlFor="payroll-management-client-notes" className="text-[11px] font-bold text-muted-foreground uppercase font-mono">
                 Notes (Optional)
               </label>
               <Input
+                id="payroll-management-client-notes"
                 placeholder="e.g. November 2026 monthly cycle"
                 value={newPeriodModal.notes}
                 onChange={(e) => setNewPeriodModal({ ...newPeriodModal, notes: e.target.value })}

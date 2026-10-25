@@ -105,8 +105,9 @@ export function OpeningForm({ basePath = "/admin/openings" }: OpeningFormProps) 
             />
 
             <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-foreground">Program Type</label>
+              <label htmlFor="opening-form-program-type" className="block text-sm font-medium text-foreground">Program Type</label>
               <select
+                id="opening-form-program-type"
                 className="flex h-10 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 {...register("type")}
               >
@@ -116,8 +117,9 @@ export function OpeningForm({ basePath = "/admin/openings" }: OpeningFormProps) 
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-foreground">Workplace Model</label>
+              <label htmlFor="opening-form-workplace-model" className="block text-sm font-medium text-foreground">Workplace Model</label>
               <select
+                id="opening-form-workplace-model"
                 className="flex h-10 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 {...register("workplaceType")}
               >
@@ -136,8 +138,9 @@ export function OpeningForm({ basePath = "/admin/openings" }: OpeningFormProps) 
           />
 
           <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-foreground">Job Description</label>
+            <label htmlFor="opening-form-job-description" className="block text-sm font-medium text-foreground">Job Description</label>
             <textarea
+              id="opening-form-job-description"
               rows={4}
               className="flex w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               placeholder="Provide a comprehensive overview of the program or role..."
@@ -149,8 +152,9 @@ export function OpeningForm({ basePath = "/admin/openings" }: OpeningFormProps) 
           </div>
 
           <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-foreground">Requirements & Qualifications</label>
+            <label htmlFor="opening-form-requirements-qualifications" className="block text-sm font-medium text-foreground">Requirements & Qualifications</label>
             <textarea
+              id="opening-form-requirements-qualifications"
               rows={3}
               className="flex w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               placeholder="List required skills, technologies, and academic eligibility..."
@@ -162,8 +166,9 @@ export function OpeningForm({ basePath = "/admin/openings" }: OpeningFormProps) 
           </div>
 
           <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-foreground">Key Responsibilities (Optional)</label>
+            <label htmlFor="opening-form-key-responsibilities" className="block text-sm font-medium text-foreground">Key Responsibilities (Optional)</label>
             <textarea
+              id="opening-form-key-responsibilities"
               rows={3}
               className="flex w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               placeholder="Detail expected daily deliverables and project milestones..."

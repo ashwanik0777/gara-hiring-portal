@@ -13,6 +13,7 @@ import {
   Filter,
   Globe,
   Building,
+  TrendingDown,
 } from "lucide-react";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,23 +29,50 @@ import {
   PayrollTrendChart,
 } from "./analytics-charts";
 
+export type AnalyticsDashboardTab =
+  | "overview"
+  | "recruitment"
+  | "funnel"
+  | "workforce"
+  | "payroll"
+  | "exports";
+
 interface AnalyticsDashboardClientProps {
   initialData: ComprehensiveAnalyticsDashboardData;
   /** Console the dashboard is rendered in, used for filter navigation and module links. */
   basePath?: "/admin" | "/subadmin";
+  /** Tab shown first (the hiring funnel opens with `?tab=funnel`). */
+  initialTab?: AnalyticsDashboardTab;
+  /**
+   * Server-rendered hiring funnel section. It is only rendered (and queried) when the page
+   * was opened on the funnel tab; otherwise the tab navigates there.
+   */
+  hiringFunnel?: React.ReactNode;
 }
 
 export function AnalyticsDashboardClient({
   initialData,
   basePath = "/admin",
+  initialTab = "overview",
+  hiringFunnel,
 }: AnalyticsDashboardClientProps) {
   const reportsPath = `${basePath}/reports`;
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState<
-    "overview" | "recruitment" | "workforce" | "payroll" | "exports"
-  >("overview");
+  const [activeTab, setActiveTab] = useState<AnalyticsDashboardTab>(
+    initialTab === "funnel" && !hiringFunnel ? "overview" : initialTab
+  );
+
+  const openFunnelTab = () => {
+    if (hiringFunnel) {
+      setActiveTab("funnel");
+      return;
+    }
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", "funnel");
+    router.push(`${reportsPath}?${params.toString()}`);
+  };
 
   const [showCustomFilter, setShowCustomFilter] = useState(false);
   const [startDate, setStartDate] = useState(
@@ -131,6 +159,19 @@ export function AnalyticsDashboardClient({
           </button>
 
           <button
+            type="button"
+            onClick={openFunnelTab}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+              activeTab === "funnel"
+                ? "bg-background text-foreground shadow-2xs border border-border/60"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <TrendingDown className="h-3.5 w-3.5" aria-hidden="true" />
+            Hiring Funnel
+          </button>
+
+          <button
             onClick={() => setActiveTab("workforce")}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
               activeTab === "workforce"
@@ -169,7 +210,8 @@ export function AnalyticsDashboardClient({
           </button>
         </div>
 
-        {/* Date Filter Presets */}
+        {/* Date Filter Presets (the funnel tab has its own filters) */}
+        {activeTab !== "funnel" && (
         <div className="flex flex-wrap items-center gap-1.5 shrink-0">
           <Button
             size="sm"
@@ -213,17 +255,19 @@ export function AnalyticsDashboardClient({
             Custom Filter
           </Button>
         </div>
+        )}
       </div>
 
       {/* ─── Collapsible Custom Filter Drawer ─── */}
-      {showCustomFilter && (
+      {showCustomFilter && activeTab !== "funnel" && (
         <Card className="rounded-2xl border border-border/80 p-4 shadow-2xs animate-in fade-in duration-150">
           <form onSubmit={handleApplyFilter} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-muted-foreground uppercase font-mono">
+              <label htmlFor="analytics-dashboard-client-start-date" className="text-[10px] font-bold text-muted-foreground uppercase font-mono">
                 Start Date
               </label>
               <Input
+                id="analytics-dashboard-client-start-date"
                 type="date"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
@@ -231,10 +275,11 @@ export function AnalyticsDashboardClient({
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-muted-foreground uppercase font-mono">
+              <label htmlFor="analytics-dashboard-client-end-date" className="text-[10px] font-bold text-muted-foreground uppercase font-mono">
                 End Date
               </label>
               <Input
+                id="analytics-dashboard-client-end-date"
                 type="date"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
@@ -242,10 +287,11 @@ export function AnalyticsDashboardClient({
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-muted-foreground uppercase font-mono">
+              <label htmlFor="analytics-dashboard-client-department" className="text-[10px] font-bold text-muted-foreground uppercase font-mono">
                 Department
               </label>
               <Input
+                id="analytics-dashboard-client-department"
                 placeholder="e.g. Engineering"
                 value={department}
                 onChange={(e) => setDepartment(e.target.value)}
@@ -276,7 +322,8 @@ export function AnalyticsDashboardClient({
         </Card>
       )}
 
-      {/* ─── 5 EXECUTIVE KPI CARDS ─── */}
+      {/* ─── 5 EXECUTIVE KPI CARDS (not on the funnel tab, which has its own figures) ─── */}
+      {activeTab !== "funnel" && (
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
         {/* 1. Applications & Talent Funnel */}
         <div className="bg-card border border-border/80 border-l-4 border-l-blue-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
@@ -390,6 +437,12 @@ export function AnalyticsDashboardClient({
           </div>
         </div>
       </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════
+          TAB: HIRING FUNNEL (server-rendered section, streamed in Suspense)
+          ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === "funnel" && hiringFunnel}
 
       {/* ══════════════════════════════════════════════════════════════════
           TAB 1: OVERVIEW & SYSTEM HEALTH (RICH GRAPHS FIRST)

@@ -84,10 +84,11 @@ export function CreateTaskDialog({ enrollmentId }: CreateTaskDialogProps) {
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <label htmlFor="create-task-dialog-task-title" className="text-xs font-medium text-foreground">
               Task Title *
             </label>
             <Input
+              id="create-task-dialog-task-title"
               name="title"
               required
               placeholder="e.g. Implement authentication middleware or Build API client"
@@ -96,10 +97,11 @@ export function CreateTaskDialog({ enrollmentId }: CreateTaskDialogProps) {
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <label htmlFor="create-task-dialog-description-requirements" className="text-xs font-medium text-foreground">
               Description & Requirements *
             </label>
             <textarea
+              id="create-task-dialog-description-requirements"
               name="description"
               required
               rows={4}
@@ -110,10 +112,11 @@ export function CreateTaskDialog({ enrollmentId }: CreateTaskDialogProps) {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-medium text-foreground">
+              <label htmlFor="create-task-dialog-priority" className="text-xs font-medium text-foreground">
                 Priority
               </label>
               <select
+                id="create-task-dialog-priority"
                 name="priority"
                 defaultValue={TaskPriority.MEDIUM}
                 className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -126,10 +129,11 @@ export function CreateTaskDialog({ enrollmentId }: CreateTaskDialogProps) {
             </div>
 
             <div>
-              <label className="text-xs font-medium text-foreground">
+              <label htmlFor="create-task-dialog-due-date" className="text-xs font-medium text-foreground">
                 Due Date
               </label>
               <Input
+                id="create-task-dialog-due-date"
                 name="dueDate"
                 type="date"
                 className="mt-1"

@@ -4,12 +4,17 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { requireAuth } from "@/lib/auth/guards";
 import { getApplyBlockedReason } from "@/features/lifecycle/services/lifecycle-service";
-import { applicationService } from "./services/application-service";
+import {
+  applicationService,
+  FILE_UPLOADS_DISABLED_MESSAGE,
+} from "./services/application-service";
 import { CandidateProfileSchema } from "./schemas";
+import { ATTRIBUTION_FORM_FIELDS, resolveApplicationSource } from "./source-tracking";
 import { formResponsesPayloadSchema } from "@/features/application-forms/schemas";
 import { toActionError, ValidationError, ForbiddenError } from "@/lib/errors";
 import { defaultRateLimiter, RATE_LIMIT_POLICIES } from "@/lib/security/rate-limit";
 import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
+import { env } from "@/lib/env";
 
 export type ApplicationActionResult<T = unknown> =
   | { success: true; data: T }
@@ -17,6 +22,8 @@ export type ApplicationActionResult<T = unknown> =
 
 const MAX_RESUME_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
 const MAX_RESPONSES_PAYLOAD_LENGTH = 200_000; // characters of serialized JSON
+const UNREADABLE_FORM_MESSAGE =
+  "We couldn't read your answers. Please refresh the page and try again.";
 
 const SubmitApplicationPayloadSchema = z.object({
   openingSlug: z
@@ -72,14 +79,17 @@ export async function submitApplicationAction(
 
     const rawResponses = getStringField(formData, "responses") ?? "{}";
     if (rawResponses.length > MAX_RESPONSES_PAYLOAD_LENGTH) {
-      return { success: false, error: "Application payload is too large" };
+      return {
+        success: false,
+        error: "Your answers are too long. Please shorten them and try again.",
+      };
     }
 
     let parsedResponses: unknown;
     try {
       parsedResponses = JSON.parse(rawResponses);
     } catch {
-      return { success: false, error: "Invalid form payload format" };
+      return { success: false, error: UNREADABLE_FORM_MESSAGE };
     }
 
     const payload = SubmitApplicationPayloadSchema.safeParse({
@@ -87,26 +97,40 @@ export async function submitApplicationAction(
       responses: parsedResponses,
     });
     if (!payload.success) {
-      return {
-        success: false,
-        error: payload.error.issues[0]?.message ?? "Invalid application payload",
-      };
+      return { success: false, error: UNREADABLE_FORM_MESSAGE };
     }
 
     const resumeEntry = formData.get("resume");
     if (resumeEntry !== null && typeof resumeEntry === "string" && resumeEntry !== "") {
-      return { success: false, error: "Invalid document upload" };
+      return { success: false, error: UNREADABLE_FORM_MESSAGE };
     }
     const resumeFile = resumeEntry instanceof File && resumeEntry.size > 0 ? resumeEntry : null;
+
+    // Link mode: documents are external share links; a file is never read or stored.
+    if (resumeFile && env.DOCUMENT_STORAGE_MODE === "link") {
+      return { success: false, error: FILE_UPLOADS_DISABLED_MESSAGE };
+    }
 
     let resumeBuffer: Buffer | undefined;
     if (resumeFile) {
       // Enforce file size limit before loading into memory to prevent OOM
       if (resumeFile.size > MAX_RESUME_SIZE_BYTES) {
-        return { success: false, error: "Document size exceeds the maximum limit of 5MB" };
+        return {
+          success: false,
+          error: "Your document is larger than 5MB. Please upload a smaller PDF.",
+        };
       }
       resumeBuffer = Buffer.from(await resumeFile.arrayBuffer());
     }
+
+    // Untrusted marketing attribution: normalized to an allow-listed code + plain-text detail.
+    const attribution = resolveApplicationSource({
+      heardFrom: getStringField(formData, ATTRIBUTION_FORM_FIELDS.heardFrom),
+      source: getStringField(formData, ATTRIBUTION_FORM_FIELDS.source),
+      utmSource: getStringField(formData, ATTRIBUTION_FORM_FIELDS.utm_source),
+      utmCampaign: getStringField(formData, ATTRIBUTION_FORM_FIELDS.utm_campaign),
+      referrerHost: getStringField(formData, ATTRIBUTION_FORM_FIELDS.ref),
+    });
 
     const result = await applicationService.submitApplication({
       userId: user.id,
@@ -121,6 +145,7 @@ export async function submitApplicationAction(
               buffer: resumeBuffer,
             }
           : undefined,
+      attribution,
     });
 
     // The confirmation email was queued in the same transaction.

@@ -1,10 +1,13 @@
-import React from "react";
+import React, { Suspense } from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
+import { applicationService } from "@/features/applications/services/application-service";
+import { StaffResumeActions } from "@/features/applications/components/resume-links";
+import type { DocumentLinkView } from "@/features/applications/document-links";
 import { offerService } from "@/features/employees/services/offer-service";
 import { JobOfferCard } from "@/features/employees/components/job-offer-card";
 import { JobOfferButton } from "@/features/employees/components/job-offer-button";
@@ -17,15 +20,17 @@ import { ApplicationEvaluationStatus } from "@/features/internship-evaluation/co
 import { JoinedEmployeeNotice } from "@/features/employees/components/joined-employee-notice";
 import { InterviewSchedulerForm } from "@/features/recruitment/components/interview-scheduler-form";
 import { InterviewFeedbackForm } from "@/features/recruitment/components/interview-feedback-form";
+import {
+  BookingRequestsPanel,
+  BookingRequestsPanelSkeleton,
+} from "@/features/recruitment/components/booking-requests-panel";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft,
   Calendar,
   Building,
   MapPin,
-  Download,
   FileText,
   Clock,
   Briefcase,
@@ -120,9 +125,21 @@ export default async function SubAdminApplicationDetailPage({
     throw error;
   }
 
+  // Same access rules as the resume download; the page already authorized this viewer.
+  let resumeLink: DocumentLinkView | null = null;
+  try {
+    resumeLink = await applicationService.getApplicationResumeLink(application.id, user);
+  } catch (error) {
+    if (!(error instanceof ForbiddenError || error instanceof NotFoundError)) {
+      throw error;
+    }
+  }
+
   const nextRoundNumber = application.interviewSchedules.length + 1;
   // Stage decisions and scheduling are restricted to HR/Admin by the recruitment service.
   const canDecide = user.roles.includes("ADMIN") || user.roles.includes("HR");
+  // Offering interview times is also open to managers and interviewers with `canInterviews`.
+  const canOfferInterviewTimes = await hasPermission(user, "canInterviews");
   // Feedback may be recorded by the assigned interviewer, or by HR/Admin.
   const pendingInterview = application.interviewSchedules.find(
     (s) =>
@@ -201,17 +218,10 @@ export default async function SubAdminApplicationDetailPage({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <a
-              href={application.resumeDownloadUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <Button size="sm" variant="outline" className="gap-1.5">
-                <Download className="h-4 w-4" /> Download Resume
-              </Button>
-            </a>
-          </div>
+          <StaffResumeActions
+            link={resumeLink}
+            downloadUrl={application.resumeStorageKey !== "" ? application.resumeDownloadUrl : null}
+          />
         </div>
       </div>
 
@@ -243,6 +253,20 @@ export default async function SubAdminApplicationDetailPage({
             defaultRoundNumber={nextRoundNumber}
           />
         </div>
+      )}
+
+      {/* Candidate self-scheduling (HR/Admin/Manager/Interviewer with canInterviews; the
+          service enforces role, permission and record scope) */}
+      {canOfferInterviewTimes && (
+        <Suspense fallback={<BookingRequestsPanelSkeleton />}>
+          <BookingRequestsPanel
+            user={user}
+            applicationId={application.id}
+            applicationStatus={application.status}
+            candidateName={application.candidate.fullName}
+            defaultRoundNumber={nextRoundNumber}
+          />
+        </Suspense>
       )}
 
       {/* Internship evaluation selection and joining state */}

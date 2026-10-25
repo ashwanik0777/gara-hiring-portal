@@ -195,6 +195,9 @@ Proposed role hierarchy (subject to product-owner approval):
 - MIME type whitelist (e.g., `application/pdf`, `image/jpeg`, `image/png`)
 - File size limits enforced server-side
 - File content type verification (not just extension)
+- Implemented (2026-10-25, `src/infrastructure/storage/upload-policy.ts`): the declared type must match the file signature (`%PDF-`, JPEG SOI, PNG header); private uploads are capped at 10 MB.
+- Virus scanning (`VIRUS_SCAN_MODE=clamav`, `src/infrastructure/storage/virus-scanner.ts`): every upload is streamed to clamd (`zINSTREAM`) before it is written. Infected files are rejected and logged as a warning (signature name, type and size, never the content); an unreachable or erroring scanner refuses the upload (fail closed). `checkProductionReadiness` blocks uploads without scanning.
+- By default (`DOCUMENT_STORAGE_MODE=link`) no files are accepted at all: candidates submit an https share link, validated on the server.
 
 ---
 
@@ -214,6 +217,26 @@ These actions require extra security scrutiny:
 | Certificate revocation | Admin-only, audit logged, old cert marked invalid |
 | Payroll execution | Authorized role, audit logged, confirmation step |
 | Bulk operations | Rate limited, audit logged, confirmation step |
+| Bulk application stage changes | ADMIN/HR with `canApplications`, at most 100 per request, each item through the single-transition checks (allowed transition, self-dealing block, conditional write, history), one batch audit row plus per-item audit rows, confirmation dialog stating the count |
+| Offer acceptance (e-signature) | Owner only, offer `EXTENDED` and application `OFFERED`, typed name must match the account name, letter hash must match, evidence stored atomically with the acceptance (see below) |
+
+### E-signature Evidence (offer acceptance)
+
+A candidate accepts an offer by typing their full name and ticking a consent box. In the same conditional update that marks the offer `ACCEPTED`, the server stores:
+
+| Field | Content |
+|---|---|
+| `signedName` | The typed name (trimmed, whitespace collapsed); must equal the account name ignoring case and spacing |
+| `signedAt` | Server time of acceptance |
+| `signatureIpHash` | HMAC-SHA-256 of the client IP keyed with a purpose label and `BETTER_AUTH_SECRET` (`src/lib/security/client-ip.ts`); the raw IP is never stored. Rotating the secret makes old hashes non-reproducible, but they stay valid as recorded evidence |
+| `signatureUserAgent` | The browser user agent with control characters removed, truncated |
+| `signedDocumentHash` | SHA-256 of the exact offer-letter PDF bytes. The letter is generated deterministically; the page carries the hash of the letter the candidate reviewed, and acceptance is refused if the regenerated letter hashes differently (the offer changed in between) |
+
+The status-history row records the hash, and the confirmation email shows its first 16 characters. Whether a typed-name signature is legally sufficient is an open decision (`docs/OPEN_DECISIONS.md`, round 4 item 12).
+
+### Public Structured Data
+
+Opening pages embed `JobPosting` JSON-LD. It is the only `dangerouslySetInnerHTML` in page content (besides the theme bootstrap script in the root layout), built from published openings only, with `<`, `>`, `&`, U+2028 and U+2029 escaped (`src/app/careers/_lib/seo.ts`); a unit test enforces both rules. `robots.txt` disallows portals, auth screens, APIs and apply forms.
 
 ---
 

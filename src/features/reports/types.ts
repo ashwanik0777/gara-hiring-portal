@@ -203,3 +203,88 @@ export interface ComprehensiveAnalyticsDashboardData {
   payroll: PayrollAnalytics | null;
   telemetry: PlatformTelemetry;
 }
+
+// ─── Hiring Funnel Analytics ───────────────────────────────────────────────────
+
+export type FunnelOpeningTypeFilter = "INTERNSHIP" | "FULL_TIME";
+
+export interface HiringFunnelFilters {
+  startDate: string | null;
+  endDate: string | null;
+  openingType: FunnelOpeningTypeFilter | null;
+  openingId: string | null;
+}
+
+export interface HiringFunnelStageRow {
+  stage: string;
+  label: string;
+  /** Applications in the cohort that ever reached this stage (from the stage history). */
+  reached: number;
+  /** `reached` as a share of all applications in the cohort (0–100, one decimal). */
+  reachedPct: number;
+  /** Applications that reached a later funnel stage after this one. */
+  progressed: number;
+  /** `progressed / reached`; null for the final stage or when nobody reached the stage. */
+  conversionPct: number | null;
+  /** Rejected / withdrawn while at this stage. */
+  rejected: number;
+  withdrawn: number;
+  dropOffPct: number | null;
+  /** Applications currently at this stage. */
+  current: number;
+  /** Average days spent in this stage (completed stays only); null without data. */
+  averageDaysInStage: number | null;
+  stageSamples: number;
+  /** True for stages only internships pass through. */
+  internshipOnly: boolean;
+}
+
+export interface TimeToHireRow {
+  group: "ALL" | FunnelOpeningTypeFilter;
+  label: string;
+  hires: number;
+  medianDays: number | null;
+  averageDays: number | null;
+}
+
+export interface SourceBreakdownRow {
+  source: string;
+  label: string;
+  applications: number;
+  shortlisted: number;
+  hired: number;
+  /** hired / applications (0–100, one decimal); null without applications. */
+  hireRatePct: number | null;
+}
+
+export interface TopOpeningRow {
+  openingId: string;
+  title: string;
+  type: string;
+  department: string;
+  applications: number;
+  hired: number;
+}
+
+export interface HiringFunnelReport {
+  generatedAt: Date;
+  periodLabel: string;
+  filters: HiringFunnelFilters;
+  totalApplications: number;
+  totalHired: number;
+  totalRejected: number;
+  totalWithdrawn: number;
+  stages: HiringFunnelStageRow[];
+  timeToHire: TimeToHireRow[];
+  sources: SourceBreakdownRow[];
+  topOpenings: TopOpeningRow[];
+  openingOptions: Array<{ id: string; title: string; type: string; status: string }>;
+}
+
+export interface HiringFunnelCsvExportResult {
+  fileName: string;
+  csvContent: string;
+  rowCount: number;
+  generatedAt: Date;
+  filters: HiringFunnelFilters;
+}

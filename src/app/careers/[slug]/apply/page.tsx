@@ -13,17 +13,23 @@ import { prisma } from "@/lib/db";
 import { OpeningStatus } from "@prisma/client";
 import { NotFoundError } from "@/lib/errors";
 import { getApplyBlockedReason, resolveHomePath } from "@/features/lifecycle/services/lifecycle-service";
+import { env } from "@/lib/env";
+import { pickAttributionParams, toAttributionQuery } from "@/features/applications/source-tracking";
+import { ApplicationSourceFields } from "@/features/applications/components/application-source-fields";
 
 // Next.js 16 Cache Components: Allow streaming/blocking data access
 export const instant = false;
 
 interface ApplyPageProps {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export default async function ApplyPage({ params }: ApplyPageProps) {
+export default async function ApplyPage({ params, searchParams }: ApplyPageProps) {
   const { slug } = await params;
   const user = await getCurrentUser();
+  // Sanitized campaign parameters carried from the opening link (kept through sign-in).
+  const attribution = pickAttributionParams(await searchParams);
 
   let opening: Awaited<ReturnType<typeof getPublicOpeningBySlug>>;
   try {
@@ -67,7 +73,7 @@ export default async function ApplyPage({ params }: ApplyPageProps) {
 
   // Enforce Candidate Account Requirement
   if (!user) {
-    const callbackUrl = `/careers/${slug}/apply`;
+    const callbackUrl = `/careers/${slug}/apply${toAttributionQuery(attribution)}`;
     return (
       <div className="container mx-auto px-4 py-12 max-w-2xl">
         <div className="mb-6">
@@ -169,8 +175,10 @@ export default async function ApplyPage({ params }: ApplyPageProps) {
         formSchema={formSchema}
         openingTitle={opening.title}
         openingSlug={opening.slug}
+        documentMode={env.DOCUMENT_STORAGE_MODE}
         candidateName={user.name}
         candidateEmail={user.email}
+        attributionFields={<ApplicationSourceFields attribution={attribution} />}
       />
     </div>
   );

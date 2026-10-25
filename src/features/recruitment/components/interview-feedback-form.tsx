@@ -114,10 +114,11 @@ export function InterviewFeedbackForm({
           {/* Ratings Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-muted/20 border border-border/50 rounded-lg">
             <div className="space-y-1">
-              <label className="block text-xs font-medium text-foreground">
+              <label htmlFor="interview-feedback-form-technical-mastery" className="block text-xs font-medium text-foreground">
                 Technical Mastery (1-5)
               </label>
               <select
+                id="interview-feedback-form-technical-mastery"
                 value={technical}
                 onChange={(e) => setTechnical(Number(e.target.value))}
                 className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-xs text-foreground"
@@ -131,10 +132,11 @@ export function InterviewFeedbackForm({
             </div>
 
             <div className="space-y-1">
-              <label className="block text-xs font-medium text-foreground">
+              <label htmlFor="interview-feedback-form-problem-solving" className="block text-xs font-medium text-foreground">
                 Problem Solving (1-5)
               </label>
               <select
+                id="interview-feedback-form-problem-solving"
                 value={problemSolving}
                 onChange={(e) => setProblemSolving(Number(e.target.value))}
                 className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-xs text-foreground"
@@ -148,10 +150,11 @@ export function InterviewFeedbackForm({
             </div>
 
             <div className="space-y-1">
-              <label className="block text-xs font-medium text-foreground">
+              <label htmlFor="interview-feedback-form-communication" className="block text-xs font-medium text-foreground">
                 Communication (1-5)
               </label>
               <select
+                id="interview-feedback-form-communication"
                 value={communication}
                 onChange={(e) => setCommunication(Number(e.target.value))}
                 className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-xs text-foreground"
@@ -167,10 +170,11 @@ export function InterviewFeedbackForm({
 
           {/* Advisory Recommendation */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">
+            <label htmlFor="interview-feedback-form-interviewer-recommendation" className="block text-xs font-medium text-foreground">
               Interviewer Recommendation (Advisory) <span className="text-destructive">*</span>
             </label>
             <select
+              id="interview-feedback-form-interviewer-recommendation"
               value={recommendation}
               onChange={(e) => setRecommendation(e.target.value as InterviewRecommendation)}
               className="w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

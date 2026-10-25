@@ -148,6 +148,9 @@ Application submitted for a specific opening.
 - `status` (ENUM: `'DRAFT'`, `'SUBMITTED'`, `'SCREENING'`, `'SHORTLISTED'`, `'INTERVIEW_SCHEDULED'`, `'INTERVIEWED'`, `'EVALUATION_SELECTED'`, `'OFFERED'`, `'OFFER_ACCEPTED'`, `'REJECTED'`, `'WITHDRAWN'`, `'ARCHIVED'`)
 - `submitted_responses` (JSONB, NOT NULL) — Immutable snapshot of user's form answers
 - `resume_storage_key` (VARCHAR(512), NOT NULL) — Private storage key (not public URL)
+- `resume_url` (TEXT, NULLABLE) — https share link when `DOCUMENT_STORAGE_MODE=link` (2026-10-25)
+- `source` (TEXT, NULLABLE, indexed) — Normalised application source code (e.g. `LINKEDIN`, `CAREERS_PAGE`, `OTHER`); 2026-10-25
+- `source_detail` (TEXT, NULLABLE) — Plain-text campaign detail (utm values, referrer host), max 200 characters
 - `is_archived` (BOOLEAN, DEFAULT false)
 - `archived_at` (TIMESTAMP, NULLABLE)
 - `created_at` (TIMESTAMP, DEFAULT NOW())
@@ -177,8 +180,28 @@ Audit record of every status transition in the hiring pipeline.
 - `meeting_link` (VARCHAR(512), NULLABLE)
 - `status` (ENUM: `'SCHEDULED'`, `'COMPLETED'`, `'CANCELLED'`, `'RESCHEDULED'`)
 - `scheduled_by` (UUID, FK -> `User.id`)
+- `ics_sequence` (INTEGER, DEFAULT 0) — iCalendar `SEQUENCE`; incremented on every reschedule and on cancel (2026-10-25)
 - `created_at` (TIMESTAMP, DEFAULT NOW())
 - `updated_at` (TIMESTAMP, DEFAULT NOW())
+
+#### `InterviewBookingRequest` (2026-10-25)
+Slots offered to a candidate to choose an interview time.
+- `id` (UUID, PK)
+- `application_id` (UUID, FK -> `Application.id`, ON DELETE CASCADE)
+- `round_number` (INTEGER), `round_name` (TEXT), `duration_minutes` (INTEGER)
+- `interviewer_id` (UUID, FK -> `User.id`, NULLABLE, ON DELETE SET NULL)
+- `meeting_link` (TEXT, NULLABLE)
+- `status` (ENUM: `'PENDING'`, `'BOOKED'`, `'CANCELLED'`)
+- `booked_schedule_id` (UUID, FK -> `InterviewSchedule.id`, UNIQUE, NULLABLE, ON DELETE SET NULL) — Interview created by the booking
+- `created_by_id` (UUID), `created_at`, `updated_at`
+- Index: (`application_id`, `status`). One pending request per round is enforced in the service.
+
+#### `InterviewSlotOption` (2026-10-25)
+- `id` (UUID, PK)
+- `request_id` (UUID, FK -> `InterviewBookingRequest.id`, ON DELETE CASCADE)
+- `starts_at` (TIMESTAMP)
+- `status` (ENUM: `'OPEN'`, `'BOOKED'`, `'RELEASED'`)
+- Index: (`request_id`, `status`)
 
 #### `InterviewFeedback`
 - `id` (UUID, PK)
@@ -355,6 +378,7 @@ Audit record of every status transition in the hiring pipeline.
 - `decision_at` (TIMESTAMP, NULLABLE)
 - `decline_reason` (TEXT, NULLABLE)
 - `notes` (TEXT, NULLABLE — Confidential internal notes)
+- Electronic acceptance evidence (2026-10-25, all NULLABLE, written atomically with `ACCEPTED`; see `docs/SECURITY.md` §E-signature Evidence): `signed_name`, `signed_at`, `signature_ip_hash` (keyed HMAC, never the raw IP), `signature_user_agent`, `signed_document_hash` (SHA-256 of the accepted letter PDF)
 - `created_at` (TIMESTAMP, DEFAULT NOW())
 - `updated_at` (TIMESTAMP, DEFAULT NOW())
 

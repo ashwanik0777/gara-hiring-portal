@@ -89,10 +89,11 @@ export function TaskSubmissionDialog({
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <label htmlFor="task-submission-dialog-submission-notes-summary" className="text-xs font-medium text-foreground">
               Submission Notes / Summary *
             </label>
             <textarea
+              id="task-submission-dialog-submission-notes-summary"
               name="submissionNotes"
               required
               rows={4}
@@ -102,10 +103,11 @@ export function TaskSubmissionDialog({
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <label htmlFor="task-submission-dialog-deliverable-links" className="text-xs font-medium text-foreground">
               Deliverable Links (comma-separated URLs)
             </label>
             <Input
+              id="task-submission-dialog-deliverable-links"
               name="deliverableUrls"
               type="text"
               placeholder="https://github.com/..., https://demo.app/..."

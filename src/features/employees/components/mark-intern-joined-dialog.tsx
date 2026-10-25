@@ -6,14 +6,20 @@ import { AlertCircle, CheckCircle2, ShieldCheck, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { markInternJoinedAction } from "../actions";
 import { todayDateInputValue } from "../joining";
+import { firstReviewDate, type ReviewPeriodMonths } from "../conversion-rules";
 import type { ReportingManagerOption } from "../types";
 import { AccessibleDialog } from "./accessible-dialog";
 import {
   FieldError,
   InitialStatusField,
   joiningInputClass,
+  ReviewPeriodField,
   type JoiningInitialStatus,
 } from "./joining-fields";
+
+function formatReviewDay(date: Date): string {
+  return date.toLocaleDateString("en-GB", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+}
 
 interface MarkInternJoinedDialogProps {
   enrollmentId: string;
@@ -23,12 +29,18 @@ interface MarkInternJoinedDialogProps {
   /** Prefill from the internship opening's title (editable). */
   defaultDesignation: string;
   managerOptions: ReportingManagerOption[];
+  /**
+   * Re-joining: the person's exited employee record is reused, so its employee code is
+   * prefilled and read-only (product-owner decision 2026-10-25).
+   */
+  existingEmployeeCode?: string | null;
 }
 
 /**
- * Internship step 2: HR records that an intern whose evaluation PASSED has joined. The server
- * re-checks every rule (role, permission, PASSED, no existing record, joining date not in the
- * future) before creating the record and granting the INTERN role.
+ * Internship step 2: HR records that an intern whose evaluation PASSED has joined and chooses
+ * when the first progress review takes place (3 or 6 months, no default). The server re-checks
+ * every rule (role, permission, PASSED, no current record, joining date not in the future)
+ * before creating or reusing the record and granting the INTERN role.
  */
 export function MarkInternJoinedDialog({
   enrollmentId,
@@ -36,7 +48,9 @@ export function MarkInternJoinedDialog({
   defaultDepartment,
   defaultDesignation,
   managerOptions,
+  existingEmployeeCode = null,
 }: MarkInternJoinedDialogProps) {
+  const isRejoin = Boolean(existingEmployeeCode);
   const router = useRouter();
   const baseId = useId();
   const ids = {
@@ -51,12 +65,14 @@ export function MarkInternJoinedDialog({
 
   const [open, setOpen] = useState(false);
   // No invented defaults: the employee numbering series and the joining day are entered by HR.
-  const [employeeCode, setEmployeeCode] = useState("");
+  // A returning person keeps their existing code.
+  const [employeeCode, setEmployeeCode] = useState(existingEmployeeCode ?? "");
   const [joiningDate, setJoiningDate] = useState("");
   const [department, setDepartment] = useState(defaultDepartment);
   const [designation, setDesignation] = useState(defaultDesignation);
   const [initialStatus, setInitialStatus] = useState<JoiningInitialStatus | "">("");
   const [managerId, setManagerId] = useState("");
+  const [reviewAfterMonths, setReviewAfterMonths] = useState<ReviewPeriodMonths | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -74,8 +90,15 @@ export function MarkInternJoinedDialog({
     setError(null);
     setFieldErrors({});
 
+    const missing: Record<string, string> = {};
     if (!initialStatus) {
-      setFieldErrors({ initialStatus: "Choose the initial employment status (Active or Probation)" });
+      missing.initialStatus = "Choose the initial employment status (Active or Probation)";
+    }
+    if (!reviewAfterMonths) {
+      missing.reviewAfterMonths = "Choose when the progress review takes place (after 3 or 6 months)";
+    }
+    if (!initialStatus || !reviewAfterMonths) {
+      setFieldErrors(missing);
       return;
     }
 
@@ -88,6 +111,7 @@ export function MarkInternJoinedDialog({
     formData.append("designation", designation);
     formData.append("initialStatus", initialStatus);
     formData.append("managerId", managerId);
+    formData.append("reviewAfterMonths", String(reviewAfterMonths));
 
     try {
       const res = await markInternJoinedAction(formData);
@@ -100,7 +124,7 @@ export function MarkInternJoinedDialog({
       setOpen(false);
       router.refresh();
     } catch {
-      setError("Marking the intern as joined failed. Please try again.");
+      setError("We couldn't mark the intern as joined. Please check your connection and try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -114,7 +138,8 @@ export function MarkInternJoinedDialog({
       >
         <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span>
-          {candidateName} is now marked as joined as an intern. The welcome email has been queued.
+          {candidateName} is now marked as {isRejoin ? "re-joined" : "joined"} as an intern. The welcome email
+          has been queued and the first progress review is scheduled.
         </span>
       </div>
     );
@@ -123,7 +148,7 @@ export function MarkInternJoinedDialog({
   return (
     <>
       <Button size="sm" className="gap-1.5" onClick={() => setOpen(true)}>
-        <UserPlus className="h-3.5 w-3.5" aria-hidden="true" /> Mark as joined
+        <UserPlus className="h-3.5 w-3.5" aria-hidden="true" /> {isRejoin ? "Mark as re-joined" : "Mark as joined"}
       </Button>
 
       <AccessibleDialog
@@ -136,7 +161,8 @@ export function MarkInternJoinedDialog({
         <form onSubmit={handleSubmit}>
           <div className="border-b border-border/50 px-5 py-4">
             <h2 id={ids.title} className="flex items-center gap-2 text-base font-semibold text-foreground">
-              <UserPlus className="h-4 w-4 text-primary" aria-hidden="true" /> Mark as joined: {candidateName}
+              <UserPlus className="h-4 w-4 text-primary" aria-hidden="true" />{" "}
+              {isRejoin ? "Mark as re-joined" : "Mark as joined"}: {candidateName}
             </h2>
           </div>
 
@@ -147,10 +173,18 @@ export function MarkInternJoinedDialog({
             >
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
               <span>
+                {isRejoin ? (
+                  <>
+                    {candidateName} worked here before. Their existing employee record and code are reused
+                    and a new employment period starts; earlier periods stay as history.{" "}
+                  </>
+                ) : (
+                  <>This creates the intern employee record. </>
+                )}
                 Records that {candidateName} has joined as an intern after passing the supervised
-                evaluation. This creates the intern employee record, moves the application to HIRED,
-                grants the INTERN role (intern workspace, attendance, leave, payslips, ID card &amp;
-                certificate) and emails a welcome message. It cannot be undone from this screen.
+                evaluation, moves the application to HIRED, grants the INTERN role (intern workspace,
+                attendance, leave, payslips, ID card &amp; certificate), schedules the first progress
+                review and emails a welcome message. It cannot be undone from this screen.
               </span>
             </div>
 
@@ -175,13 +209,23 @@ export function MarkInternJoinedDialog({
                   required
                   autoComplete="off"
                   value={employeeCode}
+                  readOnly={isRejoin}
                   onChange={(e) => setEmployeeCode(e.target.value.toUpperCase())}
                   placeholder="Uppercase letters, digits, - or _"
                   aria-invalid={Boolean(fieldErrors.employeeCode)}
-                  aria-describedby={fieldErrors.employeeCode ? `${ids.code}-error` : undefined}
+                  aria-describedby={
+                    [isRejoin ? `${ids.code}-hint` : null, fieldErrors.employeeCode ? `${ids.code}-error` : null]
+                      .filter(Boolean)
+                      .join(" ") || undefined
+                  }
                   disabled={isSubmitting}
-                  className={`${joiningInputClass} font-mono`}
+                  className={`${joiningInputClass} font-mono ${isRejoin ? "bg-muted" : ""}`}
                 />
+                {isRejoin && (
+                  <p id={`${ids.code}-hint`} className="mt-1 text-[11px] text-muted-foreground">
+                    Existing employee code, kept for a returning person.
+                  </p>
+                )}
                 <FieldError id={`${ids.code}-error`} message={fieldErrors.employeeCode} />
               </div>
 
@@ -251,6 +295,19 @@ export function MarkInternJoinedDialog({
               disabled={isSubmitting}
             />
 
+            <ReviewPeriodField
+              legend="Progress review after"
+              hint={
+                reviewAfterMonths && joiningDate
+                  ? `The review is scheduled for ${formatReviewDay(firstReviewDate(new Date(joiningDate), reviewAfterMonths))}. Its outcome decides on a full-time offer, an extension or the end of the internship.`
+                  : "The review decides on a full-time offer, an extension or the end of the internship."
+              }
+              value={reviewAfterMonths}
+              onChange={setReviewAfterMonths}
+              error={fieldErrors.reviewAfterMonths}
+              disabled={isSubmitting}
+            />
+
             <div>
               <label htmlFor={ids.manager} className="mb-1 block font-medium text-foreground">
                 Reporting manager (optional)
@@ -285,7 +342,11 @@ export function MarkInternJoinedDialog({
               Cancel
             </Button>
             <Button size="sm" type="submit" isLoading={isSubmitting}>
-              {isSubmitting ? "Marking as joined…" : "Confirm: mark as joined"}
+              {isSubmitting
+                ? "Saving…"
+                : isRejoin
+                  ? "Confirm: mark as re-joined"
+                  : "Confirm: mark as joined"}
             </Button>
           </div>
         </form>

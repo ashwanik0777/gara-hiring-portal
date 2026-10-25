@@ -64,7 +64,7 @@
 - Test at multiple viewports: mobile (375px), tablet (768px), desktop (1280px)
 - Slower; run in CI but not on every keystroke
 
-**Framework:** Playwright (recommended — to be validated in Prompt 0)
+**Framework:** Playwright (adopted 2026-10-25; `playwright.config.ts`, specs in `tests/e2e`, usage in `docs/RUNBOOK.md` §3.1). Projects: desktop Chromium and a 375 px mobile profile.
 
 ---
 

@@ -11,10 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Award, ArrowRight, Calendar, Clock, UserCheck } from "lucide-react";
 import { employeeService } from "@/features/employees/services/employee-service";
 import type { ReportingManagerOption } from "@/features/employees/types";
-import { evaluationService } from "../services/evaluation-service";
+import { evaluationService, FINAL_EVALUATION_OUTCOMES } from "../services/evaluation-service";
 import { resolveEvaluationAccess } from "../services/enrollment-access";
 import { getInternJourneyState } from "../joining-state";
-import type { EvaluationEnrollmentDetail } from "../types";
+import type { EvaluationEnrollmentDetail, SupervisorOption } from "../types";
 import { EvaluationCockpit, getEvaluationBadge } from "./evaluation-cockpit";
 import { InternJourneyBadge } from "./intern-journey-badge";
 
@@ -43,11 +43,14 @@ async function canMarkInternJoined(user: AuthenticatedUser): Promise<boolean> {
   return user.roles.includes(Role.HR) && (await hasPermission(user, "canEmployees"));
 }
 
-/** True when the cockpit should offer "Mark as joined" for this enrollment. */
+/**
+ * True when the cockpit should offer "Mark as joined" for this enrollment: no employee record
+ * yet, or an EXITED one that is reused when the person re-joins.
+ */
 function awaitsJoining(enrollment: EvaluationEnrollmentDetail): boolean {
   return (
     enrollment.status === "PASSED" &&
-    enrollment.employment === null &&
+    (enrollment.employment === null || enrollment.employment.status === "EXITED") &&
     enrollment.applicationStatus === "EVALUATION_SELECTED"
   );
 }
@@ -218,6 +221,15 @@ export async function EvaluationCockpitView({
       ? await employeeService.listReportingManagerOptions(user)
       : [];
 
+  // Supervisor change: decision authority only, and only before a final outcome.
+  const canChangeSupervisor =
+    access.scope === "ALL" && !FINAL_EVALUATION_OUTCOMES.includes(enrollment.status);
+  const supervisorOptions: SupervisorOption[] = canChangeSupervisor
+    ? (await evaluationService.listSupervisorOptions(user, enrollment.internUserId)).filter(
+        (option) => option.id !== enrollment.supervisor?.id
+      )
+    : [];
+
   return (
     <EvaluationCockpit
       enrollment={enrollment}
@@ -231,6 +243,7 @@ export async function EvaluationCockpitView({
         managerOptions,
         employeesHrefBase: canMarkJoined ? paths.employees : null,
       }}
+      supervisorChange={{ canChange: canChangeSupervisor, options: supervisorOptions }}
     />
   );
 }

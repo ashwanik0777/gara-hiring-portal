@@ -7,6 +7,7 @@ import { CareerInterestPrompt } from "@/features/lifecycle/components/career-int
 import {
   ActiveApplicationsSection,
   EvaluationSummarySection,
+  InterviewBookingRequestsSection,
   JourneySection,
   PendingOffersSection,
   ProfileCompletenessSection,
@@ -14,6 +15,7 @@ import {
   UpcomingInterviewsSection,
 } from "@/features/lifecycle/components/candidate-dashboard-sections";
 import { JourneySkeleton, SectionSkeleton } from "@/features/lifecycle/components/self-service-ui";
+import { EmploymentPeriodsSection } from "@/features/lifecycle/components/employment-periods-section";
 
 export const instant = false;
 
@@ -23,7 +25,8 @@ export const metadata = {
 };
 
 export default async function CandidateDashboardPage() {
-  // Candidates and evaluation-stage users only; joined users are sent to their own home.
+  // Candidates, evaluation-stage users and alumni (people who exited and may re-apply);
+  // joined users are sent to their own home.
   const { user, lifecycle } = await requirePortalCapability("candidateOverview", {
     callbackPath: "/candidate/dashboard",
   });
@@ -38,7 +41,9 @@ export default async function CandidateDashboardPage() {
           <p className="text-sm text-muted-foreground">
             {lifecycle.stage === "EVALUATION"
               ? "You are in the supervised internship evaluation. Your workspace and applications are below."
-              : "Here is where your applications stand and what to do next."}
+              : lifecycle.stage === "ALUMNI"
+                ? "Good to see you again. You can apply for new openings with this account; your earlier employment is kept below."
+                : "Here is where your applications stand and what to do next."}
           </p>
         </div>
         {interest && (
@@ -67,6 +72,22 @@ export default async function CandidateDashboardPage() {
         <JourneySection userId={user.id} />
       </Suspense>
 
+      {lifecycle.employment && (
+        <Suspense
+          fallback={
+            <SectionSkeleton label="Loading your employment history">
+              <ListCardSkeleton rows={2} />
+            </SectionSkeleton>
+          }
+        >
+          <EmploymentPeriodsSection
+            userId={user.id}
+            title="Your time at GARA Innovation"
+            description="If you are hired again, HR re-activates the same employee record and a new period starts."
+          />
+        </Suspense>
+      )}
+
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">
           <Suspense
@@ -89,6 +110,10 @@ export default async function CandidateDashboardPage() {
           </Suspense>
         </div>
         <div className="space-y-6">
+          {/* Shown only when the hiring team offered interview times; no placeholder otherwise. */}
+          <Suspense fallback={null}>
+            <InterviewBookingRequestsSection userId={user.id} />
+          </Suspense>
           <Suspense
             fallback={
               <SectionSkeleton label="Loading offers">

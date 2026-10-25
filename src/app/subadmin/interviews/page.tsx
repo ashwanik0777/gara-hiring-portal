@@ -1,10 +1,13 @@
-import React from "react";
+import React, { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { ForbiddenError } from "@/lib/errors";
 import { getUserPermissions, STAFF_ROLES } from "@/lib/auth/permissions";
 import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
+import { PendingBookingRequestsBoard } from "@/features/recruitment/components/pending-booking-requests-board";
+import { AddToCalendarButton } from "@/features/recruitment/components/add-to-calendar-button";
+import { absoluteUrl, getSiteUrl } from "@/lib/site-url";
 import { InterviewRecommendation } from "@prisma/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -58,6 +61,8 @@ export default async function SubAdminInterviewsPage() {
     }
     throw err;
   }
+
+  const calendarHost = getSiteUrl();
 
   // KPI Metrics Calculation
   const totalSessions = schedules.length;
@@ -150,6 +155,11 @@ export default async function SubAdminInterviewsPage() {
         </div>
       </div>
 
+      {/* Interview times still waiting for candidates (self-scheduling) */}
+      <Suspense fallback={null}>
+        <PendingBookingRequestsBoard user={user} applicationHrefBase="/subadmin/applications" />
+      </Suspense>
+
       {/* Main Schedule Content */}
       {schedules.length === 0 ? (
         <EmptyState
@@ -177,6 +187,11 @@ export default async function SubAdminInterviewsPage() {
                     <Badge variant="secondary" className="text-xs">
                       {schedule.status}
                     </Badge>
+                    {schedule.selfScheduled && (
+                      <Badge variant="outline" className="text-[10px]">
+                        Booked by candidate
+                      </Badge>
+                    )}
                     {schedule.feedback && getRecommendationBadge(schedule.feedback.recommendation)}
                   </div>
 
@@ -213,6 +228,22 @@ export default async function SubAdminInterviewsPage() {
                     >
                       <Video className="h-3.5 w-3.5" /> Join Meeting
                     </a>
+                  )}
+
+                  {(schedule.status === "SCHEDULED" || schedule.status === "RESCHEDULED") && (
+                    <AddToCalendarButton
+                      scheduleId={schedule.id}
+                      sequence={schedule.icsSequence}
+                      startsAt={new Date(schedule.scheduledAt).toISOString()}
+                      durationMinutes={schedule.durationMinutes}
+                      recipientRole="INTERVIEWER"
+                      roundName={schedule.roundName}
+                      openingTitle={schedule.application.opening.title}
+                      candidateName={schedule.application.candidate.user.name}
+                      meetingLink={schedule.meetingLink}
+                      detailsUrl={absoluteUrl(`/subadmin/applications/${schedule.applicationId}`)}
+                      host={calendarHost}
+                    />
                   )}
 
                   <Link href={`/subadmin/applications/${schedule.applicationId}`}>

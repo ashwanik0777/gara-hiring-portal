@@ -124,10 +124,11 @@ export function InterviewSchedulerForm({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-foreground">
+              <label htmlFor="interview-scheduler-form-round-number" className="block text-xs font-medium text-foreground">
                 Round Number
               </label>
               <input
+                id="interview-scheduler-form-round-number"
                 type="number"
                 min={1}
                 max={10}
@@ -139,10 +140,11 @@ export function InterviewSchedulerForm({
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-foreground">
+              <label htmlFor="interview-scheduler-form-round-name" className="block text-xs font-medium text-foreground">
                 Round Name
               </label>
               <input
+                id="interview-scheduler-form-round-name"
                 type="text"
                 value={roundName}
                 onChange={(e) => setRoundName(e.target.value)}
@@ -155,10 +157,11 @@ export function InterviewSchedulerForm({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-foreground">
+              <label htmlFor="interview-scheduler-form-date-time" className="block text-xs font-medium text-foreground">
                 Date & Time (Local / Time-Zone Safe)
               </label>
               <input
+                id="interview-scheduler-form-date-time"
                 type="datetime-local"
                 value={scheduledAt}
                 onChange={(e) => setScheduledAt(e.target.value)}
@@ -168,10 +171,11 @@ export function InterviewSchedulerForm({
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-foreground">
+              <label htmlFor="interview-scheduler-form-duration" className="block text-xs font-medium text-foreground">
                 Duration (Minutes)
               </label>
               <select
+                id="interview-scheduler-form-duration"
                 value={durationMinutes}
                 onChange={(e) => setDurationMinutes(Number(e.target.value))}
                 className="w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

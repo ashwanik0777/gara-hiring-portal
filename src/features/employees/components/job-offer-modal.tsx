@@ -49,10 +49,12 @@ export function JobOfferModal({
       const res = await createJobOfferAction(formData);
       if (!res.success) {
         const details = Object.values(res.fieldErrors ?? {});
-        setError(details.length > 0 ? `${res.error}: ${details.join(" ")}` : res.error);
+        setError(details.length > 0 ? `${res.error} ${details.join(" ")}` : res.error);
       } else {
         onClose();
       }
+    } catch {
+      setError("Something went wrong. Please check your connection and try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -95,10 +97,11 @@ export function JobOfferModal({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="job-offer-modal-department" className="block font-medium text-foreground mb-1">
                   Department <span className="text-destructive">*</span>
                 </label>
                 <input
+                  id="job-offer-modal-department"
                   type="text"
                   required
                   value={department}
@@ -109,10 +112,11 @@ export function JobOfferModal({
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="job-offer-modal-designation" className="block font-medium text-foreground mb-1">
                   Designation <span className="text-destructive">*</span>
                 </label>
                 <input
+                  id="job-offer-modal-designation"
                   type="text"
                   required
                   value={designation}
@@ -125,10 +129,11 @@ export function JobOfferModal({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="job-offer-modal-expected-joining-date" className="block font-medium text-foreground mb-1">
                   Expected Joining Date <span className="text-destructive">*</span>
                 </label>
                 <input
+                  id="job-offer-modal-expected-joining-date"
                   type="date"
                   required
                   value={expectedJoiningDate}
@@ -138,10 +143,11 @@ export function JobOfferModal({
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="job-offer-modal-work-location" className="block font-medium text-foreground mb-1">
                   Work Location
                 </label>
                 <input
+                  id="job-offer-modal-work-location"
                   type="text"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
@@ -152,10 +158,11 @@ export function JobOfferModal({
             </div>
 
             <div>
-              <label className="block font-medium text-foreground mb-1">
+              <label htmlFor="job-offer-modal-agreed-terms-summary" className="block font-medium text-foreground mb-1">
                 Agreed Terms Summary <span className="text-destructive">*</span>
               </label>
               <textarea
+                id="job-offer-modal-agreed-terms-summary"
                 rows={4}
                 required
                 value={termsSummary}
@@ -166,10 +173,11 @@ export function JobOfferModal({
             </div>
 
             <div>
-              <label className="block font-medium text-foreground mb-1">
+              <label htmlFor="job-offer-modal-confidential-staff-notes" className="block font-medium text-foreground mb-1">
                 Confidential Staff Notes (Optional)
               </label>
               <textarea
+                id="job-offer-modal-confidential-staff-notes"
                 rows={2}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}

@@ -97,6 +97,7 @@ Each domain module encapsulates one business concern. Modules interact through w
 | `notifications` | Email/in-app notification orchestration | `infrastructure/email`, `infrastructure/jobs` |
 | `chatbot` | Conversational interface, FAQ | `infrastructure/ai`, `auth` |
 | `reports` | Cross-module reporting | Read-only access to multiple modules |
+| `staff-dashboard` | Role-specific staff overviews (HR, manager, interviewer, mentor) and the module-access map used by staff navigation | Read-only access to `recruitment`, `internship-evaluation`, `employees`, `attendance`, `leave` |
 | `audit` | Activity logs, change history | All modules (passive listener) |
 
 ### Cross-Module Communication Rules

@@ -6,6 +6,7 @@ import {
   Briefcase,
   Building2,
   CalendarClock,
+  CalendarRange,
   ExternalLink,
   FileText,
   Handshake,
@@ -15,7 +16,9 @@ import {
   Video,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { absoluteUrl, getSiteUrl } from "@/lib/site-url";
 import { OpeningType, type CareerInterest } from "@/types/enums";
+import { AddToCalendarButton } from "@/features/recruitment/components/add-to-calendar-button";
 import type { LifecycleEnrollmentSummary } from "../types";
 import {
   buildJourneyProgress,
@@ -26,6 +29,7 @@ import {
 import {
   getOffersAwaitingDecision,
   getOwnApplicationHistory,
+  getOwnPendingInterviewBookings,
   getOwnCheckpointProgress,
   getProfileCompleteness,
   getRecommendedOpenings,
@@ -220,8 +224,66 @@ export async function ActiveApplicationsSection({ userId }: { userId: string }) 
   );
 }
 
+/**
+ * "Choose your interview time": requests where the hiring team offered times. Renders
+ * nothing when there are none, so the dashboard only shows it when action is needed.
+ */
+export async function InterviewBookingRequestsSection({ userId }: { userId: string }) {
+  const requests = await getOwnPendingInterviewBookings(userId);
+  if (requests.length === 0) return null;
+
+  return (
+    <SectionCard
+      id="choose-interview-time"
+      title="Choose your interview time"
+      icon={<CalendarRange className="h-4 w-4" />}
+      className="border-primary/30"
+    >
+      <ul className="space-y-3">
+        {requests.map((request) => (
+          <li key={request.id} className="rounded-xl border border-primary/30 bg-primary/5 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-foreground">
+                Round {request.roundNumber}: {request.roundName}
+              </p>
+              {request.availableSlots.length > 0 ? (
+                <Badge variant="warning">Action required</Badge>
+              ) : (
+                <Badge variant="outline">No times left</Badge>
+              )}
+            </div>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {request.application.openingTitle} · {request.durationMinutes} min
+            </p>
+            {request.availableSlots.length > 0 ? (
+              <>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {request.availableSlots.length === 1
+                    ? "1 time is still available."
+                    : `${request.availableSlots.length} times are still available.`}
+                </p>
+                <Link
+                  href={`/candidate/interviews/${request.id}`}
+                  className={linkButtonClass("primary", "sm", "mt-3")}
+                >
+                  Choose a time <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                </Link>
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                No times left — the hiring team will contact you.
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </SectionCard>
+  );
+}
+
 export async function UpcomingInterviewsSection({ userId }: { userId: string }) {
   const interviews = await getUpcomingInterviews(userId);
+  const calendarHost = getSiteUrl();
 
   return (
     <SectionCard id="upcoming-interviews" title="Upcoming interviews" icon={<CalendarClock className="h-4 w-4" />}>
@@ -250,22 +312,37 @@ export async function UpcomingInterviewsSection({ userId }: { userId: string }) 
                   {interview.application.referenceCode}
                 </Link>
               </p>
-              {interview.meetingLink ? (
-                <a
-                  href={interview.meetingLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={linkButtonClass("outline", "sm", "mt-3")}
-                >
-                  <Video className="h-3.5 w-3.5" aria-hidden="true" /> Join meeting
-                  <ExternalLink className="h-3 w-3" aria-hidden="true" />
-                  <span className="sr-only">(opens in a new tab)</span>
-                </a>
-              ) : (
+              {!interview.meetingLink && (
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   Joining details will be shared by the hiring team.
                 </p>
               )}
+              <div className="mt-3 flex flex-wrap items-start gap-2">
+                {interview.meetingLink && (
+                  <a
+                    href={interview.meetingLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={linkButtonClass("outline", "sm")}
+                  >
+                    <Video className="h-3.5 w-3.5" aria-hidden="true" /> Join meeting
+                    <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                    <span className="sr-only">(opens in a new tab)</span>
+                  </a>
+                )}
+                <AddToCalendarButton
+                  scheduleId={interview.id}
+                  sequence={interview.icsSequence}
+                  startsAt={interview.scheduledAt}
+                  durationMinutes={interview.durationMinutes}
+                  recipientRole="CANDIDATE"
+                  roundName={interview.roundName}
+                  openingTitle={interview.application.openingTitle}
+                  meetingLink={interview.meetingLink}
+                  detailsUrl={absoluteUrl(`/candidate/applications/${interview.application.id}`)}
+                  host={calendarHost}
+                />
+              </div>
             </li>
           ))}
         </ul>

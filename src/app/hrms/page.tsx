@@ -14,6 +14,7 @@ import {
   type QuickLink,
 } from "@/features/lifecycle/components/hr-self-service-sections";
 import { SectionSkeleton } from "@/features/lifecycle/components/self-service-ui";
+import { EmploymentPeriodsSection } from "@/features/lifecycle/components/employment-periods-section";
 import { EmployeeStatus } from "@/types/enums";
 
 export const instant = false;
@@ -67,6 +68,10 @@ export default async function EmployeeHomePage() {
 
       <Suspense fallback={<SectionFallback label="Loading employment summary" rows={3} />}>
         <EmploymentSummarySection userId={user.id} />
+      </Suspense>
+
+      <Suspense fallback={<SectionFallback label="Loading employment history" rows={2} />}>
+        <EmploymentPeriodsSection userId={user.id} />
       </Suspense>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">

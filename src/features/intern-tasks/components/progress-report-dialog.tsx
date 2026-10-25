@@ -85,10 +85,11 @@ export function ProgressReportDialog({ enrollmentId }: ProgressReportDialogProps
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-medium text-foreground">
+              <label htmlFor="progress-report-dialog-reporting-cadence" className="text-xs font-medium text-foreground">
                 Reporting Cadence
               </label>
               <select
+                id="progress-report-dialog-reporting-cadence"
                 name="cadence"
                 defaultValue={ProgressCadence.WEEKLY}
                 className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -101,10 +102,11 @@ export function ProgressReportDialog({ enrollmentId }: ProgressReportDialogProps
             </div>
 
             <div>
-              <label className="text-xs font-medium text-foreground">
+              <label htmlFor="progress-report-dialog-period-milestone-title" className="text-xs font-medium text-foreground">
                 Period / Milestone Title *
               </label>
               <Input
+                id="progress-report-dialog-period-milestone-title"
                 name="periodIdentifier"
                 required
                 placeholder="e.g. Week 1 or Milestone A"
@@ -114,10 +116,11 @@ export function ProgressReportDialog({ enrollmentId }: ProgressReportDialogProps
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <label htmlFor="progress-report-dialog-executive-summary-achievements" className="text-xs font-medium text-foreground">
               Executive Summary & Achievements *
             </label>
             <textarea
+              id="progress-report-dialog-executive-summary-achievements"
               name="summary"
               required
               rows={4}
@@ -127,10 +130,11 @@ export function ProgressReportDialog({ enrollmentId }: ProgressReportDialogProps
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <label htmlFor="progress-report-dialog-key-learnings-takeaways" className="text-xs font-medium text-foreground">
               Key Learnings & Takeaways
             </label>
             <textarea
+              id="progress-report-dialog-key-learnings-takeaways"
               name="learnings"
               rows={2}
               placeholder="What technical skills or domain concepts did you learn this period?"
@@ -139,10 +143,11 @@ export function ProgressReportDialog({ enrollmentId }: ProgressReportDialogProps
           </div>
 
           <div>
-            <label className="text-xs font-medium text-foreground">
+            <label htmlFor="progress-report-dialog-active-blockers-or-assistance" className="text-xs font-medium text-foreground">
               Active Blockers or Assistance Needed
             </label>
             <textarea
+              id="progress-report-dialog-active-blockers-or-assistance"
               name="blockers"
               rows={2}
               placeholder="Any roadblocks, environment issues, or guidance you need from your mentor..."

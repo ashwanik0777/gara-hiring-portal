@@ -839,6 +839,105 @@ export class EvaluationService {
   }
 
   /**
+   * Changes the supervisor of an internship evaluation (product-owner decision 2026-10-25).
+   * ADMIN / HR with canEvaluations; never on one's own enrollment; only while no final outcome
+   * (PASSED / FAILED) is recorded. The new supervisor must be eligible staff, never the intern
+   * and never the current supervisor. Conditional write on the current supervisor and status,
+   * audit row, and EVALUATION_SUPERVISOR_CHANGED emails to the intern and the new supervisor.
+   */
+  async changeSupervisor(
+    user: AuthenticatedUser,
+    enrollmentId: string,
+    supervisorId: string
+  ): Promise<{ enrollmentId: string; supervisorId: string }> {
+    await assertEvaluationDecisionAuthority(user);
+
+    const enrollment = await prisma.internshipEnrollment.findUnique({
+      where: { id: enrollmentId },
+      select: {
+        id: true,
+        userId: true,
+        status: true,
+        supervisorId: true,
+        user: { select: { name: true, email: true } },
+        application: { select: { opening: { select: { title: true } } } },
+      },
+    });
+    if (!enrollment) throw new NotFoundError("Evaluation enrollment not found.");
+    if (enrollment.userId === user.id) {
+      throw new ForbiddenError("You cannot review or decide on your own internship records.");
+    }
+    if (FINAL_EVALUATION_OUTCOMES.includes(enrollment.status)) {
+      throw new ConflictError("The supervisor cannot be changed after the final evaluation outcome is recorded.");
+    }
+    if (supervisorId === enrollment.supervisorId) {
+      throw new ValidationError("This person already supervises the evaluation. Choose a different supervisor.");
+    }
+    await this.assertSupervisorEligible(supervisorId, enrollment.userId);
+
+    const newSupervisor = await prisma.user.findUnique({
+      where: { id: supervisorId },
+      select: { name: true, email: true },
+    });
+    if (!newSupervisor) {
+      throw new ValidationError("The selected supervisor must be a staff member.");
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const changed = await tx.internshipEnrollment.updateMany({
+        where: {
+          id: enrollment.id,
+          supervisorId: enrollment.supervisorId,
+          status: { notIn: FINAL_EVALUATION_OUTCOMES },
+        },
+        data: { supervisorId },
+      });
+      if (changed.count !== 1) {
+        throw new ConflictError("The evaluation was changed by another action. Please reload and try again.");
+      }
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: primaryActorRole(user),
+          action: "EVALUATION_SUPERVISOR_CHANGED",
+          resourceType: "InternshipEnrollment",
+          resourceId: enrollment.id,
+          diffPayload: {
+            fromSupervisorId: enrollment.supervisorId,
+            toSupervisorId: supervisorId,
+            evaluationStatus: enrollment.status,
+          },
+        },
+      });
+
+      const common = {
+        internName: enrollment.user.name,
+        openingTitle: enrollment.application.opening.title,
+        newSupervisorName: newSupervisor.name,
+      };
+      await tx.notificationOutbox.create({
+        data: {
+          recipientEmail: enrollment.user.email,
+          templateName: "EVALUATION_SUPERVISOR_CHANGED",
+          payload: { recipientName: enrollment.user.name, recipientRole: "INTERN", ...common },
+          status: "PENDING",
+        },
+      });
+      await tx.notificationOutbox.create({
+        data: {
+          recipientEmail: newSupervisor.email,
+          templateName: "EVALUATION_SUPERVISOR_CHANGED",
+          payload: { recipientName: newSupervisor.name, recipientRole: "SUPERVISOR", ...common },
+          status: "PENDING",
+        },
+      });
+    });
+
+    return { enrollmentId: enrollment.id, supervisorId };
+  }
+
+  /**
    * Lists enrollments visible to the staff member (all for ADMIN/HR, assigned ones for supervisors).
    */
   async listEnrollmentsForStaff(user: AuthenticatedUser): Promise<EvaluationEnrollmentListItem[]> {
@@ -857,6 +956,12 @@ export class EvaluationService {
             referenceCode: true,
             opening: { select: { title: true, department: true } },
             hiredEmployee: { select: { id: true, employmentType: true } },
+            // The period this application opened (kept as history after a re-join).
+            employmentPeriods: {
+              select: { employmentType: true },
+              orderBy: { startDate: "asc" },
+              take: 1,
+            },
           },
         },
         supervisor: { select: { name: true } },
@@ -880,8 +985,9 @@ export class EvaluationService {
       reviewedCheckpoints: enr.checkpoints.filter((c) => c.status === CheckpointStatus.REVIEWED).length,
       totalCheckpoints: enr.checkpoints.length,
       idCardNumber: enr.idCard?.cardNumber ?? null,
-      joined: Boolean(enr.application.hiredEmployee),
-      joinedEmploymentType: enr.application.hiredEmployee?.employmentType ?? null,
+      joined: Boolean(enr.application.employmentPeriods[0] ?? enr.application.hiredEmployee),
+      joinedEmploymentType:
+        enr.application.employmentPeriods[0]?.employmentType ?? enr.application.hiredEmployee?.employmentType ?? null,
     }));
   }
 
@@ -901,6 +1007,12 @@ export class EvaluationService {
           include: {
             candidate: { include: { user: true } },
             opening: true,
+            // The period this application opened, if the person joined from it.
+            employmentPeriods: {
+              select: { employmentType: true, startDate: true },
+              orderBy: { startDate: "asc" },
+              take: 1,
+            },
           },
         },
         supervisor: {
@@ -948,20 +1060,26 @@ export class EvaluationService {
     assertEnrollmentInScope(access, user, enrollment);
 
     const employeeProfile = enrollment.user?.employeeProfile ?? null;
+    // Joined from this application: the period it opened (a later re-join moves
+    // Employee.applicationId to the newer application, but the period remains).
+    const joinedPeriod = enrollment.application.employmentPeriods[0] ?? null;
+    const viaThisApplication =
+      joinedPeriod !== null || employeeProfile?.applicationId === enrollment.applicationId;
 
     return {
       id: enrollment.id,
       applicationId: enrollment.applicationId,
       applicationStatus: enrollment.application.status,
       openingType: enrollment.application.opening.type,
+      internUserId: enrollment.userId,
       employment: employeeProfile
         ? {
             id: employeeProfile.id,
             employeeCode: employeeProfile.employeeCode,
             status: employeeProfile.status,
-            employmentType: employeeProfile.employmentType,
-            joiningDate: employeeProfile.joiningDate,
-            viaThisApplication: employeeProfile.applicationId === enrollment.applicationId,
+            employmentType: joinedPeriod?.employmentType ?? employeeProfile.employmentType,
+            joiningDate: joinedPeriod?.startDate ?? employeeProfile.joiningDate,
+            viaThisApplication,
           }
         : null,
       referenceCode: enrollment.application.referenceCode,

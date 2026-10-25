@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
+import type { Metadata } from "next";
 import { Navbar } from "@/components/navigation/navbar";
 import { Footer } from "@/components/navigation/footer";
 import { Button } from "@/components/ui/button";
@@ -7,6 +9,13 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { getPublicOpeningBySlug } from "@/features/openings/services/opening-service";
 import { NotFoundError } from "@/lib/errors";
+import { getSiteUrl } from "@/lib/site-url";
+import {
+  externalReferrerHost,
+  pickAttributionParams,
+  toAttributionQuery,
+} from "@/features/applications/source-tracking";
+import { buildJobPostingJsonLd, buildOpeningMetadata, serializeJsonLd } from "../_lib/seo";
 import {
   Briefcase,
   MapPin,
@@ -24,24 +33,24 @@ interface OpeningDetailPageProps {
   params: Promise<{
     slug: string;
   }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export async function generateMetadata({ params }: OpeningDetailPageProps) {
+export async function generateMetadata({ params }: OpeningDetailPageProps): Promise<Metadata> {
   const { slug } = await params;
   try {
+    // Only PUBLISHED openings resolve; anything else is reported as not found.
     const opening = await getPublicOpeningBySlug(slug);
-    return {
-      title: opening.title,
-      description: opening.description.slice(0, 160),
-    };
+    return buildOpeningMetadata(opening);
   } catch {
     return {
       title: "Opening Not Found",
+      robots: { index: false, follow: false },
     };
   }
 }
 
-export default async function OpeningDetailPage({ params }: OpeningDetailPageProps) {
+export default async function OpeningDetailPage({ params, searchParams }: OpeningDetailPageProps) {
   const { slug } = await params;
 
   let opening: Awaited<ReturnType<typeof getPublicOpeningBySlug>>;
@@ -54,8 +63,22 @@ export default async function OpeningDetailPage({ params }: OpeningDetailPagePro
     throw error;
   }
 
+  // Campaign parameters (and an external referrer host) travel with the apply link so the
+  // application records where the candidate came from.
+  const attribution = pickAttributionParams(await searchParams);
+  if (!attribution.ref) {
+    const referrerHost = externalReferrerHost((await headers()).get("referer"), getSiteUrl());
+    if (referrerHost) attribution.ref = referrerHost;
+  }
+  const applyHref = `/careers/${opening.slug}/apply${toAttributionQuery(attribution)}`;
+
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
+      {/* Google Jobs structured data; serializeJsonLd escapes <, > and & as unicode. */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(buildJobPostingJsonLd(opening)) }}
+      />
       <Navbar />
 
       <main className="flex-1 py-10 md:py-14">
@@ -93,7 +116,7 @@ export default async function OpeningDetailPage({ params }: OpeningDetailPagePro
             </h1>
 
             <div className="flex items-center gap-4 pt-2">
-              <Link href={`/careers/${opening.slug}/apply`}>
+              <Link href={applyHref}>
                 <Button size="lg" className="gap-2">
                   <FileText className="h-4 w-4" />
                   Apply for this Role
@@ -162,7 +185,7 @@ export default async function OpeningDetailPage({ params }: OpeningDetailPagePro
                 <p className="text-sm font-semibold text-foreground">Interested in this role?</p>
                 <p className="text-xs text-muted-foreground">Sign in or create a candidate account to apply.</p>
               </div>
-              <Link href={`/careers/${opening.slug}/apply`}>
+              <Link href={applyHref}>
                 <Button>Apply Now</Button>
               </Link>
             </div>

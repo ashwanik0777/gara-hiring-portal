@@ -1,9 +1,12 @@
-import React from "react";
+import React, { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { ForbiddenError } from "@/lib/errors";
 import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
+import { PendingBookingRequestsBoard } from "@/features/recruitment/components/pending-booking-requests-board";
+import { AddToCalendarButton } from "@/features/recruitment/components/add-to-calendar-button";
+import { absoluteUrl, getSiteUrl } from "@/lib/site-url";
 import { InterviewRecommendation, Role } from "@prisma/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -45,6 +48,10 @@ export default async function RecruitmentInterviewsPage() {
 
   const isStaff = user.roles.some((r) => STAFF_ROLES.includes(r));
   if (!isStaff) redirect("/candidate/dashboard");
+  // Page-level guard: the /admin portal is restricted to Super Administrators.
+  if (!user.roles.includes(Role.ADMIN)) {
+    return <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />;
+  }
 
   let schedules: Awaited<ReturnType<typeof recruitmentService.getInterviewSchedules>>;
   try {
@@ -56,6 +63,8 @@ export default async function RecruitmentInterviewsPage() {
     }
     throw err;
   }
+
+  const calendarHost = getSiteUrl();
 
   // KPI Metrics Calculation
   const totalSessions = schedules.length;
@@ -148,6 +157,11 @@ export default async function RecruitmentInterviewsPage() {
         </div>
       </div>
 
+      {/* Interview times still waiting for candidates (self-scheduling) */}
+      <Suspense fallback={null}>
+        <PendingBookingRequestsBoard user={user} applicationHrefBase="/admin/applications" />
+      </Suspense>
+
       {/* Main Schedule Content */}
       {schedules.length === 0 ? (
         <EmptyState
@@ -175,6 +189,11 @@ export default async function RecruitmentInterviewsPage() {
                     <Badge variant="outline" className="text-[10px]">
                       {schedule.status}
                     </Badge>
+                    {schedule.selfScheduled && (
+                      <Badge variant="outline" className="text-[10px]">
+                        Booked by candidate
+                      </Badge>
+                    )}
                     {schedule.feedback && getRecommendationBadge(schedule.feedback.recommendation)}
                   </div>
 
@@ -211,6 +230,22 @@ export default async function RecruitmentInterviewsPage() {
                     >
                       <Video className="h-3.5 w-3.5" /> Join Meeting
                     </a>
+                  )}
+
+                  {(schedule.status === "SCHEDULED" || schedule.status === "RESCHEDULED") && (
+                    <AddToCalendarButton
+                      scheduleId={schedule.id}
+                      sequence={schedule.icsSequence}
+                      startsAt={new Date(schedule.scheduledAt).toISOString()}
+                      durationMinutes={schedule.durationMinutes}
+                      recipientRole="INTERVIEWER"
+                      roundName={schedule.roundName}
+                      openingTitle={schedule.application.opening.title}
+                      candidateName={schedule.application.candidate.user.name}
+                      meetingLink={schedule.meetingLink}
+                      detailsUrl={absoluteUrl(`/admin/applications/${schedule.applicationId}`)}
+                      host={calendarHost}
+                    />
                   )}
 
                   <Link href={`/admin/applications/${schedule.applicationId}`}>

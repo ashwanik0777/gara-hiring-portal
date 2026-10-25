@@ -23,23 +23,33 @@ interface EmployeeLifecycleCardProps {
   currentStatus: EmployeeStatus;
   currentManagerId?: string | null;
   allStaff: Array<{ id: string; employeeCode: string; name: string }>;
+  /** Opens a tab directly (the exit guidance link opens Offboarding). */
+  initialTab?: "STATUS" | "MANAGER" | "DOC" | "EXIT";
 }
 
 function formatError(res: Extract<EmployeeActionResult, { success: false }>): string {
   const details = Object.values(res.fieldErrors ?? {});
-  return details.length > 0 ? `${res.error}: ${details.join(" ")}` : res.error;
+  return details.length > 0 ? `${res.error} ${details.join(" ")}` : res.error;
 }
+
+/** Anchor used by guidance links (e.g. "Process exit" after an END_INTERNSHIP review). */
+export const EMPLOYEE_ADMINISTRATION_ANCHOR = "employee-administration";
+
+const UNEXPECTED_ERROR = "Something went wrong. Please check your connection and try again.";
 
 export function EmployeeLifecycleCard({
   employeeId,
   currentStatus,
   currentManagerId,
   allStaff,
+  initialTab = "STATUS",
 }: EmployeeLifecycleCardProps) {
   const [status, setStatus] = useState<EmployeeStatus>(currentStatus);
   const [managerId, setManagerId] = useState(currentManagerId || "");
   const [remarks, setRemarks] = useState("");
-  const [activeTab, setActiveTab] = useState<"STATUS" | "MANAGER" | "DOC" | "EXIT">("STATUS");
+  const [activeTab, setActiveTab] = useState<"STATUS" | "MANAGER" | "DOC" | "EXIT">(
+    initialTab === "EXIT" && currentStatus === EmployeeStatus.EXITED ? "STATUS" : initialTab
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -66,6 +76,8 @@ export function EmployeeLifecycleCard({
       } else {
         setSuccess("Employee status updated successfully.");
       }
+    } catch {
+      setError(UNEXPECTED_ERROR);
     } finally {
       setIsSubmitting(false);
     }
@@ -91,6 +103,8 @@ export function EmployeeLifecycleCard({
       } else {
         setSuccess("Reporting manager updated successfully.");
       }
+    } catch {
+      setError(UNEXPECTED_ERROR);
     } finally {
       setIsSubmitting(false);
     }
@@ -98,7 +112,12 @@ export function EmployeeLifecycleCard({
 
   const handleProcessExit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!confirm("Record this exit and mark the employee as EXITED? This status is terminal.")) return;
+    if (
+      !confirm(
+        "Record this exit and mark the employee as EXITED? The current employment period ends on the last working date."
+      )
+    )
+      return;
 
     setError(null);
     setSuccess(null);
@@ -116,13 +135,15 @@ export function EmployeeLifecycleCard({
       } else {
         setSuccess("Exit recorded and status set to EXITED. Clearance remains pending.");
       }
+    } catch {
+      setError(UNEXPECTED_ERROR);
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <Card className="border-border shadow-xs">
+    <Card id={EMPLOYEE_ADMINISTRATION_ANCHOR} className="border-border shadow-xs scroll-mt-6">
       <CardHeader className="pb-3 border-b border-border/50">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="space-y-1">
@@ -166,14 +187,20 @@ export function EmployeeLifecycleCard({
       </CardHeader>
       <CardContent className="pt-6 space-y-4 text-xs">
         {error && (
-          <div className="p-3 rounded-md bg-destructive/10 text-destructive border border-destructive/20 flex items-center gap-2">
+          <div
+            role="alert"
+            className="p-3 rounded-md bg-destructive/10 text-destructive border border-destructive/20 flex items-center gap-2"
+          >
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{error}</span>
           </div>
         )}
 
         {success && (
-          <div className="p-3 rounded-md bg-success/10 text-success border border-success/20 flex items-center gap-2">
+          <div
+            role="status"
+            className="p-3 rounded-md bg-success/10 text-success border border-success/20 flex items-center gap-2"
+          >
             <CheckCircle2 className="h-4 w-4 shrink-0" />
             <span>{success}</span>
           </div>
@@ -181,7 +208,8 @@ export function EmployeeLifecycleCard({
 
         {activeTab === "STATUS" && currentStatus === EmployeeStatus.EXITED && (
           <p className="text-muted-foreground">
-            This employee has exited. Exited status is terminal and cannot be changed.
+            This employee has exited. The status changes again only if they are hired and marked as
+            joined again, which starts a new employment period on this record.
           </p>
         )}
 
@@ -189,10 +217,11 @@ export function EmployeeLifecycleCard({
           <form onSubmit={handleUpdateStatus} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="employee-lifecycle-card-change-lifecycle-status" className="block font-medium text-foreground mb-1">
                   Change Lifecycle Status
                 </label>
                 <select
+                  id="employee-lifecycle-card-change-lifecycle-status"
                   value={status}
                   onChange={(e) => setStatus(e.target.value as EmployeeStatus)}
                   className="w-full px-3 py-2 rounded-md border border-input bg-background"
@@ -207,10 +236,11 @@ export function EmployeeLifecycleCard({
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="employee-lifecycle-card-status-change-remarks" className="block font-medium text-foreground mb-1">
                   Status Change Remarks
                 </label>
                 <input
+                  id="employee-lifecycle-card-status-change-remarks"
                   type="text"
                   value={remarks}
                   onChange={(e) => setRemarks(e.target.value)}
@@ -235,10 +265,11 @@ export function EmployeeLifecycleCard({
           <form onSubmit={handleAssignManager} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="employee-lifecycle-card-assign-reporting-manager" className="block font-medium text-foreground mb-1">
                   Assign Reporting Manager
                 </label>
                 <select
+                  id="employee-lifecycle-card-assign-reporting-manager"
                   value={managerId}
                   onChange={(e) => setManagerId(e.target.value)}
                   className="w-full px-3 py-2 rounded-md border border-input bg-background"
@@ -255,10 +286,11 @@ export function EmployeeLifecycleCard({
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="employee-lifecycle-card-assignment-remarks" className="block font-medium text-foreground mb-1">
                   Assignment Remarks
                 </label>
                 <input
+                  id="employee-lifecycle-card-assignment-remarks"
                   type="text"
                   value={remarks}
                   onChange={(e) => setRemarks(e.target.value)}
@@ -291,10 +323,11 @@ export function EmployeeLifecycleCard({
           <form onSubmit={handleProcessExit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="employee-lifecycle-card-last-working-date" className="block font-medium text-foreground mb-1">
                   Last Working Date <span className="text-destructive">*</span>
                 </label>
                 <input
+                  id="employee-lifecycle-card-last-working-date"
                   type="date"
                   required
                   value={lastWorkingDate}
@@ -304,10 +337,11 @@ export function EmployeeLifecycleCard({
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">
+                <label htmlFor="employee-lifecycle-card-reason-for-exit" className="block font-medium text-foreground mb-1">
                   Reason for Exit
                 </label>
                 <input
+                  id="employee-lifecycle-card-reason-for-exit"
                   type="text"
                   value={exitReason}
                   onChange={(e) => setExitReason(e.target.value)}
