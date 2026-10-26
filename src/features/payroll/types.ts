@@ -113,10 +113,12 @@ export interface PageInfo {
   pageCount: number;
 }
 
-/** Record filters of the payout register; every value travels in the URL. */
+/** Record filters of the payout register; every value travels in the URL and is applied in SQL. */
 export interface PayrollRecordFilters {
   status?: PayrollStatus;
   search?: string;
+  /** Employment category recorded in the payout profile. */
+  type?: EmploymentCategory;
 }
 
 /** What the payout profile dialog needs; satisfied by directory entries and register rows. */
@@ -136,6 +138,7 @@ export interface PayrollDashboardQueryInput {
   periodId?: string;
   status?: PayrollStatus;
   search?: string;
+  type?: EmploymentCategory;
   page?: number;
   periodsPage?: number;
   directoryPage?: number;
@@ -156,6 +159,15 @@ export interface PayrollDashboardData {
   employeesPage: PageInfo;
   directorySearch?: string;
   stats: PayrollStats;
+}
+
+/** Register CSV built on the server from SQL (masked identifiers only). */
+export interface PayrollRegisterExport {
+  filename: string;
+  csvContent: string;
+  rowCount: number;
+  /** True when more records matched than one export may contain. */
+  truncated: boolean;
 }
 
 export interface MyPayrollRecord {

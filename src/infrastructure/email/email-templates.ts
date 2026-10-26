@@ -329,6 +329,72 @@ export function buildPasswordResetEmail(params: {
   return { subject, text, html };
 }
 
+/** Why a one-time code was emailed. */
+export type OtpEmailPurpose = "verify-email" | "sign-in";
+
+const OTP_PURPOSE_COPY: Record<OtpEmailPurpose, { title: string; lead: string; action: string }> = {
+  "verify-email": {
+    title: "Verify your email address",
+    lead: "Use this code to verify your email address and finish setting up your GARA Innovation account.",
+    action: "verify your email address",
+  },
+  "sign-in": {
+    title: "Your sign-in code",
+    lead: "Use this code to finish signing in to your GARA Innovation account.",
+    action: "finish signing in",
+  },
+};
+
+/**
+ * 2b. One-Time Verification Code Email (email verification and sign-in)
+ *
+ * The code is time-critical and single-use; callers send it directly (not through the
+ * outbox) and must never log it.
+ */
+export function buildOtpCodeEmail(params: {
+  name?: string | null;
+  code: string;
+  purpose: OtpEmailPurpose;
+  expiresInMinutes: number;
+}): { subject: string; text: string; html: string } {
+  const copy = OTP_PURPOSE_COPY[params.purpose];
+  const salutation = params.name?.trim() ? `Hello ${params.name.trim()},` : "Hello,";
+  const subject = "Your GARA Innovation verification code";
+  const text = `${salutation}\n\nYour GARA Innovation verification code is: ${params.code}\n\nEnter this code to ${copy.action}. It expires in ${params.expiresInMinutes} minutes and can be used once.\n\nIf this wasn't you, you can ignore this email. Never share this code with anyone; GARA Innovation staff will never ask you for it.\n\n— GARA Innovation Security`;
+
+  const contentHtml = `
+    <div style="margin: 20px 0; padding: 20px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; text-align: center;">
+      <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em;">Verification code</p>
+      <p style="margin: 0; font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 30px; font-weight: 700; color: #0f172a; letter-spacing: 0.3em;">${escapeHtml(params.code)}</p>
+    </div>
+    <p style="margin: 0 0 12px 0; font-size: 13px; color: #334155; line-height: 1.6;">
+      This code expires in <strong>${escapeHtml(params.expiresInMinutes)} minutes</strong> and can be used once.
+    </p>
+  `;
+
+  const html = renderEmailShell({
+    categoryBadge: {
+      text: "Account Security",
+      bgColor: "#eff6ff",
+      textColor: "#1d4ed8",
+      borderColor: "#bfdbfe",
+    },
+    title: copy.title,
+    salutation,
+    leadParagraph: escapeHtml(copy.lead),
+    contentHtml,
+    secondaryNote: {
+      title: "Wasn't you?",
+      text: "If this wasn't you, you can ignore this email. Never share this code with anyone; GARA Innovation staff will never ask you for it.",
+      bgColor: "#fef2f2",
+      borderColor: "#dc2626",
+      textColor: "#991b1b",
+    },
+  });
+
+  return { subject, text, html };
+}
+
 /**
  * 3. Application Submission Confirmation
  */

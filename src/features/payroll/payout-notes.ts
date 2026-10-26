@@ -1,8 +1,10 @@
 /**
- * Payout details currently live in `Employee.internalNotes` as a marked block:
+ * Legacy guard. Payout details used to live in `Employee.internalNotes` as a marked block:
  *   PAYROLL_PROFILE:{...json...}
- * Only the payroll module (gated by `canPayroll`) may write that block. Other modules
- * must reject input containing the marker and strip the block before displaying notes.
+ * They now live in the `EmployeePayoutProfile` table (the migration refuses to run while
+ * any such block remains). The marker stays reserved: free-text notes must reject input
+ * containing it, and any old block is stripped before notes are displayed, so stray
+ * bank details can never be typed into or leak out of notes.
  * Pure helpers: safe to import from any server module.
  */
 

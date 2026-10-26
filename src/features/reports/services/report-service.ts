@@ -1,5 +1,4 @@
 import { prisma } from "@/lib/db";
-import { PAYROLL_PROFILE_MARKER, locatePayoutProfileBlock } from "@/features/payroll/payout-notes";
 import { assertPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { getUserPermissions } from "@/lib/auth/permissions";
 import {
@@ -64,9 +63,6 @@ export const MAX_EXPORT_ROWS = 10_000;
 const CHART_MONTHS = 6;
 const CHART_DAYS = 7;
 const RECENT_PAYROLL_CYCLES = 5;
-/** Payout profiles live in a text column (OD-008), so they are scanned in bounded pages. */
-const PAYOUT_PROFILE_PAGE_SIZE = 500;
-const MAX_PAYOUT_PROFILE_PAGES = 200;
 
 /** Statuses counted as "Interviews & Evals" in the monthly recruitment trend. */
 const INTERVIEW_STAGE_STATUSES: readonly string[] = [
@@ -95,40 +91,6 @@ const INTERN_EMPLOYEE_WHERE: Prisma.EmployeeWhereInput = {
     { department: { contains: "intern", mode: "insensitive" } },
   ],
 };
-
-interface RecordedPayoutProfile {
-  isPaid: boolean | null;
-  stipendAmount: number | null;
-}
-
-/**
- * Reads the staff-entered payout profile stored after the `PAYROLL_PROFILE:` marker
- * in `Employee.internalNotes`. The JSON object is extracted with a string-aware
- * brace scan (so values containing `}` do not truncate it). Missing or malformed
- * data yields `null` fields — never a default amount.
- */
-export function readRecordedPayoutProfile(
-  internalNotes: string | null | undefined
-): RecordedPayoutProfile {
-  const empty: RecordedPayoutProfile = { isPaid: null, stipendAmount: null };
-  if (!internalNotes) return empty;
-  const block = locatePayoutProfileBlock(internalNotes);
-  if (!block) return empty;
-
-  try {
-    const parsed: unknown = JSON.parse(block.json);
-    if (typeof parsed !== "object" || parsed === null) return empty;
-    const record = parsed as Record<string, unknown>;
-    const amount = record.stipendAmount;
-    return {
-      isPaid: typeof record.isPaid === "boolean" ? record.isPaid : null,
-      stipendAmount:
-        typeof amount === "number" && Number.isFinite(amount) && amount >= 0 ? amount : null,
-    };
-  } catch {
-    return empty;
-  }
-}
 
 // ─── Aggregate row shapes (what PostgreSQL returns; never individual records) ──────
 
@@ -889,33 +851,17 @@ export class ReportService {
   }
 
   /**
-   * Counts employees whose recorded payout profile says paid / unpaid. The profile is a
-   * JSON block inside `internalNotes` (OD-008), so only rows carrying the marker are read,
-   * in fixed-size pages and with no other column. Only called for `canPayroll` viewers.
+   * Counts employees whose payout profile is recorded as paid / unpaid, grouped in
+   * PostgreSQL (`EmployeePayoutProfile.isPaid`). Employees without a profile row are
+   * "not configured". Only called for `canPayroll` viewers; no other column is read.
    */
   private async countRecordedPayoutFlags(): Promise<{ paid: number; unpaid: number }> {
-    const totals = { paid: 0, unpaid: 0 };
-    let cursor: string | null = null;
-    for (let page = 0; page < MAX_PAYOUT_PROFILE_PAGES; page++) {
-      const rows: Array<{ id: string; internalNotes: string | null }> = await prisma.employee.findMany({
-        where: { internalNotes: { contains: PAYROLL_PROFILE_MARKER } },
-        select: { id: true, internalNotes: true },
-        orderBy: { id: "asc" },
-        take: PAYOUT_PROFILE_PAGE_SIZE,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      });
-      for (const row of rows) {
-        const { isPaid } = readRecordedPayoutProfile(row.internalNotes);
-        if (isPaid === true) totals.paid++;
-        else if (isPaid === false) totals.unpaid++;
-      }
-      if (rows.length < PAYOUT_PROFILE_PAGE_SIZE) {
-        return totals;
-      }
-      cursor = rows[rows.length - 1].id;
-    }
-    // Never report a partial count as the real figure.
-    throw new Error("Payout profile scan exceeded the maximum number of pages.");
+    const groups = await prisma.employeePayoutProfile.groupBy({
+      by: ["isPaid"],
+      _count: { _all: true },
+    });
+    const count = (isPaid: boolean) => groups.find((group) => group.isPaid === isPaid)?._count._all ?? 0;
+    return { paid: count(true), unpaid: count(false) };
   }
 
   /**

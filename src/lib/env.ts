@@ -4,6 +4,23 @@ export const DEV_DEFAULT_AUTH_SECRET =
   "gara-dev-secret-key-at-least-32-chars-long";
 
 /**
+ * Decodes the payout field-encryption key: exactly 32 bytes, given as 64 hex characters
+ * or as base64 / base64url (44 characters with padding, 43 without). Returns null for
+ * anything else, so a malformed key is rejected instead of silently weakened.
+ */
+export function decodePayoutEncryptionKey(value: string): Buffer | null {
+  const trimmed = value.trim();
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    return Buffer.from(trimmed, "hex");
+  }
+  if (/^[A-Za-z0-9+/_-]{43}=?$/.test(trimmed)) {
+    const decoded = Buffer.from(trimmed.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+    return decoded.length === 32 ? decoded : null;
+  }
+  return null;
+}
+
+/**
  * Server-only environment variable schema.
  * Boot-time validation halts immediately in production if required variables are missing or insecure.
  */
@@ -51,6 +68,19 @@ const envSchema = z.object({
   VIRUS_SCAN_MODE: z.enum(["off", "clamav"]).default("off"),
   CLAMAV_HOST: z.string().default("127.0.0.1"),
   CLAMAV_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
+  /**
+   * AES-256-GCM key for payout bank details (account number, PAN): 32 random bytes as
+   * base64 or hex, e.g. `openssl rand -base64 32`. Without it, production refuses to save
+   * those fields; development derives a local key from BETTER_AUTH_SECRET. An empty value
+   * counts as not set.
+   */
+  PAYOUT_ENCRYPTION_KEY: z
+    .string()
+    .refine(
+      (value) => value.trim() === "" || decodePayoutEncryptionKey(value) !== null,
+      "PAYOUT_ENCRYPTION_KEY must be 32 bytes encoded as base64 (44 characters) or hex (64 characters)"
+    )
+    .optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -94,6 +124,12 @@ export function checkProductionReadiness(currentEnv: Env = env): {
   if (currentEnv.DOCUMENT_STORAGE_MODE === "local" && currentEnv.VIRUS_SCAN_MODE === "off") {
     blockers.push(
       "Document uploads are enabled (DOCUMENT_STORAGE_MODE=local) but VIRUS_SCAN_MODE is off, so uploaded files are not malware-scanned."
+    );
+  }
+
+  if (!currentEnv.PAYOUT_ENCRYPTION_KEY?.trim()) {
+    blockers.push(
+      "PAYOUT_ENCRYPTION_KEY is not configured, so payout bank details (account number, PAN) cannot be saved."
     );
   }
 

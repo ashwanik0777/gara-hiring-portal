@@ -52,6 +52,7 @@ npm run dev
 | `APP_TIMEZONE` | No | Business time zone for reminders and digests (default `Asia/Kolkata`) |
 | `VIRUS_SCAN_MODE` | No | `off` (default) or `clamav`: every upload is streamed to clamd before it is stored; uploads are refused when clamd is unreachable (fail closed) |
 | `CLAMAV_HOST` / `CLAMAV_PORT` | With `clamav` | clamd TCP address (default `127.0.0.1:3310`) |
+| `PAYOUT_ENCRYPTION_KEY` | Production (to save bank details) | 32 random bytes, base64 (`openssl rand -base64 32`) or hex. Encrypts payout account numbers and PANs (AES-256-GCM). Keep it stable and backed up: a changed or lost key makes stored numbers unreadable. Without it, production refuses to save account numbers/PANs and `checkProductionReadiness` reports a blocker |
 | `APP_URL` / `WORKER_INTERVAL_SECONDS` | Worker only | Base URL the worker calls and its polling interval (default 60 s) |
 | `DATABASE_SSL_REJECT_UNAUTHORIZED` | No | Defaults to verifying the database TLS certificate. Set to `false` only as a documented, temporary exception |
 | `NEXT_PUBLIC_WHATSAPP_URL` | No | Public `https://wa.me/<number>` contact link; hidden when unset |
@@ -102,6 +103,7 @@ npm run test:e2e           # public suite: no database needed
 - The public suite starts the app with `DATABASE_URL` pointed at a closed local port, so it can never touch a real database. It covers public pages, the 375 px mobile layout, auth form validation and security headers.
 - The journey suite (candidate → evaluation → intern, and candidate → offer → employee) runs only when `E2E_DATABASE_URL` points at a **dedicated test database**: the URL must differ from `DATABASE_URL` in `.env` and its database name must contain `test`. Global setup applies the migrations to that database and idempotently seeds deterministic fixtures (staff accounts and two published openings). Never point it at production.
 - Optional: `E2E_SERVER_MODE=production` (run `npm run build` first) and `E2E_PORT`.
+- Journeys pass the sign-in code step with `E2E_FIXED_OTP=<6 digits>`; it only takes effect against the dedicated test database outside production (see `docs/SECURITY.md`).
 
 ---
 
@@ -179,6 +181,12 @@ DATABASE_URL="$RECOVERY_DATABASE_URL" npx prisma migrate status
 - Uses `PostgresRateLimitStore` backed by the shared PostgreSQL `verifications` table (`identifier = 'RL:<scope>:<actor>'`) so rate limits are enforced consistently across multiple Node.js instances. Each check runs in a transaction holding `pg_advisory_xact_lock(hashtext(key))`, so concurrent requests cannot all slip past the limit.
 - Better Auth endpoints (sign-in, sign-up, password reset) use Better Auth's own limiter with `storage: "database"` (`rate_limits` table), shared across serverless instances.
 - Client IPs come from `x-real-ip` / `x-forwarded-for` (`src/lib/security/client-ip.ts`). This assumes the edge (Vercel) overwrites those headers; behind another proxy, configure it to do the same. Only keyed hashes of IPs are stored.
+
+### 5.3a Sign-in Codes (email OTP)
+- Every password sign-in and every new email/password account needs a 6-digit code emailed through SMTP (see `docs/SECURITY.md` §2 "Email One-Time Codes"). **If SMTP fails, nobody can sign in with a password**, administrators included: monitor delivery and keep SMTP credentials current. Google sign-in keeps working for accounts linked to Google.
+- A person who did not receive a code can press "Resend code" after 60 seconds; codes expire after 10 minutes. After 10 wrong codes the second step is locked for 15 minutes.
+- Unlock a locked account early: `UPDATE two_factors SET "failedVerificationCount" = 0, "lockedUntil" = NULL WHERE "userId" = '<user id>';`
+- Accounts that existed before 2026-10-26 without a verified email are asked to verify on their next sign-in.
 
 ### 5.4 Password Reset
 - `/forgot-password` calls Better Auth `requestPasswordReset`; the response is identical for known and unknown emails and the email is sent after the response.

@@ -2,7 +2,7 @@ import React, { Suspense } from "react";
 import Link from "next/link";
 import { connection } from "next/server";
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/guards";
+import { getCurrentUser, type AuthenticatedUser } from "@/lib/auth/guards";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { ApplicationStatus, Role } from "@prisma/client";
 import {
@@ -33,10 +33,15 @@ import {
   getOperationsOverview,
   getRecentActivityOverview,
   getRecruitmentOverview,
+  getRegistrationOverview,
   getWorkforceOverview,
   UNAVAILABLE,
   type OverviewMetric,
 } from "@/features/analytics/services/admin-overview-service";
+import {
+  RegistrationsSummaryCard,
+  RegistrationsSummarySkeleton,
+} from "@/features/reports/components/registrations-summary-card";
 
 export const instant = false;
 
@@ -301,6 +306,13 @@ async function ExecutiveMetrics() {
       </Link>
     </div>
   );
+}
+
+// ─── Registrations summary (candidate sign-ups, separate from applications) ───────
+
+async function RegistrationsSummary({ user }: { user: AuthenticatedUser }) {
+  const summary = await getRegistrationOverview(user);
+  return <RegistrationsSummaryCard summary={summary} href="/admin/reports?tab=registrations" />;
 }
 
 // ─── Row 2: hiring funnel breakdown & workforce turnout ────────────────────────
@@ -876,6 +888,11 @@ export default async function AdminOverviewPage() {
         }
       >
         <ExecutiveMetrics />
+      </Suspense>
+
+      {/* ─── REGISTRATIONS: who signed up, for what, and who has not applied yet ─── */}
+      <Suspense fallback={<RegistrationsSummarySkeleton />}>
+        <RegistrationsSummary user={user} />
       </Suspense>
 
       {/* ─── ROW 2: HIRING FUNNEL BREAKDOWN & WORKFORCE TURNOUT ─── */}

@@ -150,6 +150,8 @@ Re-run on 2026-10-25 after rounds 3–4: TypeScript 0 errors, ESLint 0 errors, V
 
 Re-run on 2026-10-26 after the performance round: TypeScript 0 errors, ESLint 0 errors, Vitest 30 files / 1002 tests passed, `npm audit --omit=dev` 0 vulnerabilities, production build passed, Playwright public suite 43 passed / 21 skipped (database journeys) / 0 failed. Migration `20261028000000_performance_indexes` (19 indexes, no other statements) applied to Neon after a drift check and a data backup; the post-deploy diff is empty.
 
+Re-run on 2026-10-26 after email OTP, payout table and registration analytics: TypeScript 0 errors, ESLint 0 errors, Vitest 34 files / 1118 tests passed, `npm audit --omit=dev` 0 vulnerabilities, production build passed, Playwright public suite 43 passed / 21 skipped / 0 failed. Migration `20261029000000_otp_payout_profiles` applied to Neon after a drift check and a data backup; post-deploy diff empty; all 5 users have the sign-in code enabled and a lockout row.
+
 What this does **not** prove:
 - End-to-end tests exist since 2026-10-25, but database behaviour (row locks, advisory locks, conditional updates) is still verified only against mocks (ENG-07).
 - Migrations were applied to the Neon database and verified with a schema diff (OPS-05); application behaviour against it has not been exercised yet.

@@ -9,6 +9,11 @@ import {
   type EmployeeActionResult,
 } from "../actions";
 import { Button } from "@/components/ui/button";
+import {
+  ReportingManagerCombobox,
+  formatReportingManagerLabel,
+  type ReportingManagerChoice,
+} from "./reporting-manager-combobox";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
   Settings,
@@ -22,6 +27,9 @@ interface EmployeeLifecycleCardProps {
   employeeId: string;
   currentStatus: EmployeeStatus;
   currentManagerId?: string | null;
+  /** Display label of the current manager ("Name (CODE)"); looked up in `allStaff` when omitted. */
+  currentManagerLabel?: string | null;
+  /** First reporting-manager options loaded by the page (shown on focus; search finds the rest). */
   allStaff: Array<{ id: string; employeeCode: string; name: string }>;
   /** Opens a tab directly (the exit guidance link opens Offboarding). */
   initialTab?: "STATUS" | "MANAGER" | "DOC" | "EXIT";
@@ -41,11 +49,19 @@ export function EmployeeLifecycleCard({
   employeeId,
   currentStatus,
   currentManagerId,
+  currentManagerLabel,
   allStaff,
   initialTab = "STATUS",
 }: EmployeeLifecycleCardProps) {
   const [status, setStatus] = useState<EmployeeStatus>(currentStatus);
-  const [managerId, setManagerId] = useState(currentManagerId || "");
+  const [manager, setManager] = useState<ReportingManagerChoice | null>(() => {
+    if (!currentManagerId) return null;
+    const known = allStaff.find((s) => s.id === currentManagerId);
+    return {
+      id: currentManagerId,
+      label: currentManagerLabel || (known ? formatReportingManagerLabel(known) : "Current manager"),
+    };
+  });
   const [remarks, setRemarks] = useState("");
   const [activeTab, setActiveTab] = useState<"STATUS" | "MANAGER" | "DOC" | "EXIT">(
     initialTab === "EXIT" && currentStatus === EmployeeStatus.EXITED ? "STATUS" : initialTab
@@ -91,8 +107,8 @@ export function EmployeeLifecycleCard({
 
     const formData = new FormData();
     formData.append("employeeId", employeeId);
-    if (managerId) {
-      formData.append("managerId", managerId);
+    if (manager) {
+      formData.append("managerId", manager.id);
     }
     formData.append("remarks", remarks);
 
@@ -268,21 +284,14 @@ export function EmployeeLifecycleCard({
                 <label htmlFor="employee-lifecycle-card-assign-reporting-manager" className="block font-medium text-foreground mb-1">
                   Assign Reporting Manager
                 </label>
-                <select
-                  id="employee-lifecycle-card-assign-reporting-manager"
-                  value={managerId}
-                  onChange={(e) => setManagerId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-md border border-input bg-background"
-                >
-                  <option value="">No Manager Assigned (Direct / Root)</option>
-                  {allStaff
-                    .filter((s) => s.id !== employeeId)
-                    .map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.employeeCode})
-                      </option>
-                    ))}
-                </select>
+                <ReportingManagerCombobox
+                  inputId="employee-lifecycle-card-assign-reporting-manager"
+                  excludeEmployeeId={employeeId}
+                  value={manager}
+                  onChange={setManager}
+                  initialOptions={allStaff}
+                  disabled={isSubmitting}
+                />
               </div>
 
               <div>

@@ -47,8 +47,10 @@ import {
   recordDisbursementAction,
   bulkDisburseAction,
   updateEmployeePayoutProfileAction,
+  exportPayrollRegisterAction,
 } from "../actions";
-import { NOT_CONFIGURED, csvCell, employmentLabel, formatCurrency, formatDate, PayrollStatusBadge } from "./payroll-ui";
+import { PAYROLL_EXPORT_MAX_ROWS } from "../schemas";
+import { NOT_CONFIGURED, employmentLabel, formatCurrency, formatDate, PayrollStatusBadge } from "./payroll-ui";
 import type { PayoutProfileFormValues } from "./dialogs/payout-profile-dialog";
 import type { CreatePeriodValues } from "./dialogs/create-period-dialog";
 
@@ -94,8 +96,8 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
   const [activeTab, setActiveTab] = useState<PayrollTab>(initialTab ?? "records");
   const [searchInput, setSearchInput] = useState(recordFilters.search ?? "");
   const [directorySearchInput, setDirectorySearchInput] = useState(data.directorySearch ?? "");
-  // Employment category lives in the payout profile, not in a column, so it filters the loaded page.
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("ALL");
+  // Applied in SQL through the payout profile, like the status and search filters.
+  const typeFilter: TypeFilter = recordFilters.type ?? "ALL";
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [isPending, startTransition] = useTransition();
   const [copiedUtr, setCopiedUtr] = useState<string | null>(null);
@@ -123,6 +125,7 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
       period?: string | null;
       status?: string | null;
       q?: string | null;
+      type?: string | null;
       page?: number | null;
       ppage?: number | null;
       dpage?: number | null;
@@ -135,6 +138,7 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
       const period = pick(overrides.period, activePeriod?.id);
       const status = pick(overrides.status, recordFilters.status);
       const q = pick(overrides.q, recordFilters.search);
+      const type = pick<string>(overrides.type, recordFilters.type);
       const page = pick(overrides.page, recordsPage.page);
       const ppage = pick(overrides.ppage, periodsPage.page);
       const dpage = pick(overrides.dpage, employeesPage.page);
@@ -143,6 +147,7 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
       if (period) params.set("period", period);
       if (status) params.set("status", status);
       if (q) params.set("q", q);
+      if (type) params.set("type", type);
       if (page && page > 1) params.set("page", String(page));
       if (ppage && ppage > 1) params.set("ppage", String(ppage));
       if (dpage && dpage > 1) params.set("dpage", String(dpage));
@@ -169,12 +174,11 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
     window.history.replaceState(null, "", query ? `${pathname}?${query}` : pathname);
   };
 
-  const visibleRecords = typeFilter === "ALL" ? data.records : data.records.filter((r) => r.employmentType === typeFilter);
   const statusPill: StatusPill =
     recordFilters.status === "PAID" || recordFilters.status === "FINALIZED" || recordFilters.status === "DRAFT"
       ? recordFilters.status
       : "ALL";
-  const hasRecordFilters = Boolean(recordFilters.status || recordFilters.search || typeFilter !== "ALL");
+  const hasRecordFilters = Boolean(recordFilters.status || recordFilters.search || recordFilters.type);
 
   // ─── ACTION HANDLERS (the server re-renders stats and rows after each success) ─────
 
@@ -333,33 +337,36 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
     });
   };
 
-  // Register export of the loaded page. Account numbers are masked (the browser never
-  // receives full numbers); a bank upload file format is pending approval (OD-008).
+  // Register export of the active cycle with the current filters, read and built on the
+  // server. Account numbers are masked (the browser never receives full numbers); a bank
+  // upload file format is pending approval (OD-008).
   const downloadRegisterCsv = () => {
-    if (!visibleRecords.length) return;
-    const headers = ["Employee Code", "Employee Name", "Account Holder", "Bank", "Account Number (masked)", "IFSC Code", "Configured Amount", "Employment Type", "Reference", "Status"];
-    const rows = visibleRecords.map((r) => [
-      csvCell(r.employeeCode),
-      csvCell(r.employeeName),
-      csvCell(r.accountHolderName ?? NOT_CONFIGURED),
-      csvCell(r.bankName ?? NOT_CONFIGURED),
-      csvCell(r.accountNumberMasked ?? NOT_CONFIGURED),
-      csvCell(r.ifscCode ?? NOT_CONFIGURED),
-      csvCell(typeof r.stipendAmount === "number" ? r.stipendAmount : NOT_CONFIGURED),
-      csvCell(employmentLabel(r.employmentType)),
-      csvCell(r.disbursementReference ?? ""),
-      csvCell(r.status),
-    ]);
-    const csvContent = [headers.map(csvCell).join(","), ...rows.map((row) => row.join(","))].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Payroll_Register_${activePeriod?.code || "Current"}_page${recordsPage.page}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    if (!activePeriod || recordsPage.total === 0) return;
+    startTransition(async () => {
+      const res = await exportPayrollRegisterAction({
+        periodId: activePeriod.id,
+        status: recordFilters.status,
+        search: recordFilters.search,
+        type: recordFilters.type,
+      });
+      if (!res.success) {
+        showFeedback("error", res.error || "Failed to export the payroll register.");
+        return;
+      }
+      const { csvContent, filename, rowCount, truncated } = res.data;
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      if (truncated) {
+        showFeedback("error", `Exported the first ${rowCount} records only. Narrow the filters to export the rest.`);
+      }
+    });
   };
 
   const tabClass = (tab: PayrollTab) =>
@@ -447,7 +454,7 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
               </Button>
             )}
 
-            <Button size="sm" variant="outline" onClick={downloadRegisterCsv} disabled={visibleRecords.length === 0} className="h-9 rounded-xl text-xs gap-1.5" title="Download the loaded register page (account numbers masked)">
+            <Button size="sm" variant="outline" onClick={downloadRegisterCsv} disabled={isPending || !activePeriod || recordsPage.total === 0} className="h-9 rounded-xl text-xs gap-1.5" title="Download the register of this cycle for the current filters (account numbers masked)">
               <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
               Register CSV
             </Button>
@@ -565,13 +572,13 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
             </form>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1 p-1 rounded-xl bg-muted/60 border border-border/60 text-xs" role="group" aria-label="Filter loaded page by employment type">
+              <div className="flex items-center gap-1 p-1 rounded-xl bg-muted/60 border border-border/60 text-xs" role="group" aria-label="Filter by employment type">
                 {(["ALL", "INTERN", "FULL_TIME"] as const).map((tp) => (
                   <button
                     key={tp}
                     type="button"
                     aria-pressed={typeFilter === tp}
-                    onClick={() => setTypeFilter(tp)}
+                    onClick={() => navigate(buildHref({ type: tp === "ALL" ? null : tp, page: null }))}
                     className={`px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer ${
                       typeFilter === tp ? "bg-background text-foreground shadow-2xs font-semibold" : "text-muted-foreground hover:text-foreground"
                     }`}
@@ -602,9 +609,8 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    setTypeFilter("ALL");
                     setSearchInput("");
-                    navigate(buildHref({ status: null, q: null, page: null }));
+                    navigate(buildHref({ status: null, q: null, type: null, page: null }));
                   }}
                   className="text-xs text-muted-foreground hover:text-foreground h-9 px-2.5"
                 >
@@ -627,7 +633,7 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60">
-                  {visibleRecords.length === 0 ? (
+                  {data.records.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="py-12 text-center text-muted-foreground">
                         <div className="flex flex-col items-center justify-center gap-2">
@@ -637,7 +643,7 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
                             {!activePeriod
                               ? "Create a payroll cycle with 'New Cycle' to start recording disbursements."
                               : hasRecordFilters
-                                ? "Try adjusting search or status filters."
+                                ? "Try adjusting search, type or status filters."
                                 : "Configure employees as Paid in the Directory, then use 'Enroll Paid Workforce' on a draft cycle."}
                           </p>
                           {activePeriod && activePeriod.status === "DRAFT" && !hasRecordFilters && (
@@ -649,7 +655,7 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
                       </td>
                     </tr>
                   ) : (
-                    visibleRecords.map((req) => (
+                    data.records.map((req) => (
                       <tr key={req.id} className="hover:bg-muted/30 transition-colors group">
                         <td className="py-3.5 px-4">
                           <div className="min-w-0">
@@ -981,7 +987,7 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
         </div>
       )}
 
-      {/* ══════════════ TAB 4: REGISTER EXPORT (MASKED, LOADED PAGE) ══════════════ */}
+      {/* ══════════════ TAB 4: REGISTER EXPORT (MASKED, FILTERED CYCLE) ══════════════ */}
       {activeTab === "export" && (
         <Card className="rounded-2xl border border-border/80 bg-card p-6 shadow-2xs space-y-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-border/60">
@@ -991,10 +997,10 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
                 Payroll Register Export
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Exports the loaded register page ({visibleRecords.length} of {recordsPage.total} records). Account numbers are masked. A bank upload file format has not been approved yet (OD-008).
+                Exports every record of this cycle that matches the register filters ({recordsPage.total} records, at most {PAYROLL_EXPORT_MAX_ROWS.toLocaleString("en-IN")} per file). Account numbers are masked. A bank upload file format has not been approved yet (OD-008).
               </p>
             </div>
-            <Button onClick={downloadRegisterCsv} disabled={visibleRecords.length === 0} className="gap-2 text-xs rounded-xl bg-primary text-primary-foreground shadow-2xs">
+            <Button onClick={downloadRegisterCsv} disabled={isPending || !activePeriod || recordsPage.total === 0} className="gap-2 text-xs rounded-xl bg-primary text-primary-foreground shadow-2xs">
               <Download className="h-4 w-4" />
               Download Register CSV
             </Button>
@@ -1002,8 +1008,8 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
-              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Register Entries (page)</span>
-              <div className="text-2xl font-bold font-mono text-foreground mt-1">{visibleRecords.length}</div>
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Register Entries (filtered)</span>
+              <div className="text-2xl font-bold font-mono text-foreground mt-1">{recordsPage.total}</div>
             </div>
             <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
               <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Disbursed Total (cycle)</span>

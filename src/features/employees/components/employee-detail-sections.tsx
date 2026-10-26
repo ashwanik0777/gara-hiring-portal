@@ -266,6 +266,8 @@ export async function EmployeeAdministrationSection({
       employeeId={employee.id}
       currentStatus={employee.status}
       currentManagerId={employee.manager?.id}
+      // Same "Name (CODE)" label as the picker; the manager may be outside the preloaded options.
+      currentManagerLabel={employee.manager ? `${employee.manager.name} (${employee.manager.employeeCode})` : null}
       allStaff={managers.map((m) => ({ id: m.id, employeeCode: m.employeeCode, name: m.name }))}
       initialTab={openExitTab && employee.status !== EmployeeStatus.EXITED ? "EXIT" : "STATUS"}
     />

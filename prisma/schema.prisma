@@ -17,6 +17,8 @@ model User {
   emailVerified Boolean   @default(false)
   image         String?
   mustChangePassword Boolean @default(false)
+  // Every password sign-in asks for an emailed one-time code (product-owner decision 2026-10-26)
+  twoFactorEnabled Boolean @default(true)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -54,10 +56,29 @@ model User {
   subAdminPermission           SubAdminPermission?
   conversionReviewsConducted   ConversionReview[]         @relation("ConversionReviewers")
   interviewBookingRequests     InterviewBookingRequest[]  @relation("InterviewBookingInterviewer")
+  twoFactors                   TwoFactor[]
+  updatedPayoutProfiles        EmployeePayoutProfile[]    @relation("PayoutProfileEditors")
 
   @@index([createdAt])
 
   @@map("users")
+}
+
+/// Better Auth two-factor state. Sign-in codes are emailed one-time codes; the row keeps the
+/// account-level lockout counters (the TOTP secret and backup codes are unused placeholders).
+model TwoFactor {
+  id                      String    @id @default(uuid())
+  secret                  String
+  backupCodes             String
+  userId                  String
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verified                Boolean   @default(true)
+  failedVerificationCount Int       @default(0)
+  lockedUntil             DateTime?
+
+  @@index([userId])
+  @@index([secret])
+  @@map("two_factors")
 }
 
 model Session {
@@ -194,6 +215,8 @@ model CandidateProfile {
 
   applications        Application[]
 
+  @@index([careerInterest])
+  @@index([createdAt])
   @@map("candidate_profiles")
 }
 
@@ -252,6 +275,7 @@ model Employee {
   attendanceCorrections AttendanceRegularization[]
   leaveRequests        LeaveRequest[]
   payrollRecords       PayrollRecord[]
+  payoutProfile        EmployeePayoutProfile?
 
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -261,6 +285,34 @@ model Employee {
   @@index([status])
   @@index([status, department])
   @@map("employees")
+}
+
+/// Payroll payout details for one employee (moved out of `Employee.internalNotes`, 2026-10-26).
+/// Readable and writable only through the payroll module (HR/Admin with `canPayroll`).
+/// Account number and PAN are stored encrypted (AES-256-GCM, `src/lib/security/field-encryption.ts`);
+/// only their last four characters are kept in clear for masked display.
+model EmployeePayoutProfile {
+  id                    String          @id @default(uuid())
+  employeeId            String          @unique
+  employee              Employee        @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  isPaid                Boolean
+  employmentType        EmploymentType?
+  stipendAmount         Decimal?        @db.Decimal(12, 2)
+  bankName              String?
+  accountNumberEncrypted String?
+  accountNumberLast4    String?
+  ifscCode              String?
+  accountHolderName     String?
+  panEncrypted          String?
+  panLast4              String?
+  updatedById           String?
+  updatedBy             User?           @relation("PayoutProfileEditors", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([isPaid])
+  @@index([employmentType])
+  @@map("employee_payout_profiles")
 }
 
 // -----------------------------------------------------------------------------

@@ -15,6 +15,7 @@ import {
   Globe,
   Building,
   TrendingDown,
+  UserPlus,
 } from "lucide-react";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -95,6 +96,7 @@ export type AnalyticsDashboardTab =
   | "overview"
   | "recruitment"
   | "funnel"
+  | "registrations"
   | "workforce"
   | "payroll"
   | "exports";
@@ -103,36 +105,51 @@ interface AnalyticsDashboardClientProps {
   initialData: ComprehensiveAnalyticsDashboardData;
   /** Console the dashboard is rendered in, used for filter navigation and module links. */
   basePath?: "/admin" | "/subadmin";
-  /** Tab shown first (the hiring funnel opens with `?tab=funnel`). */
+  /** Tab shown first (`?tab=funnel` / `?tab=registrations` open the server-rendered tabs). */
   initialTab?: AnalyticsDashboardTab;
   /**
    * Server-rendered hiring funnel section. It is only rendered (and queried) when the page
    * was opened on the funnel tab; otherwise the tab navigates there.
    */
   hiringFunnel?: React.ReactNode;
+  /** Server-rendered registrations section; same loading rule as the funnel. */
+  registrations?: React.ReactNode;
 }
+
+/** Tabs whose content is a server-rendered section with its own filters. */
+type ServerTab = "funnel" | "registrations";
 
 export function AnalyticsDashboardClient({
   initialData,
   basePath = "/admin",
   initialTab = "overview",
   hiringFunnel,
+  registrations,
 }: AnalyticsDashboardClientProps) {
   const reportsPath = `${basePath}/reports`;
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const serverTabContent: Record<ServerTab, React.ReactNode> = {
+    funnel: hiringFunnel,
+    registrations,
+  };
   const [activeTab, setActiveTab] = useState<AnalyticsDashboardTab>(
-    initialTab === "funnel" && !hiringFunnel ? "overview" : initialTab
+    (initialTab === "funnel" || initialTab === "registrations") && !serverTabContent[initialTab]
+      ? "overview"
+      : initialTab
   );
+  // The server-rendered tabs have their own filters and figures (no dashboard presets/KPIs).
+  const showsDashboardFilters = activeTab !== "funnel" && activeTab !== "registrations";
 
-  const openFunnelTab = () => {
-    if (hiringFunnel) {
-      setActiveTab("funnel");
+  /** Opens a server-rendered tab: in place when it was rendered, otherwise by navigating. */
+  const openServerTab = (tab: ServerTab) => {
+    if (serverTabContent[tab]) {
+      setActiveTab(tab);
       return;
     }
     const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", "funnel");
+    params.set("tab", tab);
     router.push(`${reportsPath}?${params.toString()}`);
   };
 
@@ -222,7 +239,7 @@ export function AnalyticsDashboardClient({
 
           <button
             type="button"
-            onClick={openFunnelTab}
+            onClick={() => openServerTab("funnel")}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
               activeTab === "funnel"
                 ? "bg-background text-foreground shadow-2xs border border-border/60"
@@ -231,6 +248,19 @@ export function AnalyticsDashboardClient({
           >
             <TrendingDown className="h-3.5 w-3.5" aria-hidden="true" />
             Hiring Funnel
+          </button>
+
+          <button
+            type="button"
+            onClick={() => openServerTab("registrations")}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+              activeTab === "registrations"
+                ? "bg-background text-foreground shadow-2xs border border-border/60"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
+            Registrations
           </button>
 
           <button
@@ -272,8 +302,8 @@ export function AnalyticsDashboardClient({
           </button>
         </div>
 
-        {/* Date Filter Presets (the funnel tab has its own filters) */}
-        {activeTab !== "funnel" && (
+        {/* Date Filter Presets (the funnel and registrations tabs have their own filters) */}
+        {showsDashboardFilters && (
         <div className="flex flex-wrap items-center gap-1.5 shrink-0">
           <Button
             size="sm"
@@ -321,7 +351,7 @@ export function AnalyticsDashboardClient({
       </div>
 
       {/* ─── Collapsible Custom Filter Drawer ─── */}
-      {showCustomFilter && activeTab !== "funnel" && (
+      {showCustomFilter && showsDashboardFilters && (
         <Card className="rounded-2xl border border-border/80 p-4 shadow-2xs animate-in fade-in duration-150">
           <form onSubmit={handleApplyFilter} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
             <div className="space-y-1">
@@ -384,8 +414,8 @@ export function AnalyticsDashboardClient({
         </Card>
       )}
 
-      {/* ─── 5 EXECUTIVE KPI CARDS (not on the funnel tab, which has its own figures) ─── */}
-      {activeTab !== "funnel" && (
+      {/* ─── 5 EXECUTIVE KPI CARDS (not on the server-rendered tabs, which have their own figures) ─── */}
+      {showsDashboardFilters && (
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
         {/* 1. Applications & Talent Funnel */}
         <div className="bg-card border border-border/80 border-l-4 border-l-blue-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
@@ -505,6 +535,11 @@ export function AnalyticsDashboardClient({
           TAB: HIRING FUNNEL (server-rendered section, streamed in Suspense)
           ══════════════════════════════════════════════════════════════════ */}
       {activeTab === "funnel" && hiringFunnel}
+
+      {/* ══════════════════════════════════════════════════════════════════
+          TAB: REGISTRATIONS (server-rendered section, streamed in Suspense)
+          ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === "registrations" && registrations}
 
       {/* ══════════════════════════════════════════════════════════════════
           TAB 1: OVERVIEW & SYSTEM HEALTH (RICH GRAPHS FIRST)

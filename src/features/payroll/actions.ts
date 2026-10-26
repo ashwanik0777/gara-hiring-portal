@@ -12,14 +12,16 @@ import {
   BulkDisbursementSchema,
   UpdateEmployeePayoutProfileSchema,
   GeneratePayrollRecordsSchema,
+  ExportPayrollRegisterSchema,
   type CreatePayrollPeriodInput,
   type RecordDisbursementInput,
   type UpdatePayrollPeriodStatusInput,
   type BulkDisbursementInput,
   type UpdateEmployeePayoutProfileInput,
   type GeneratePayrollRecordsInput,
+  type ExportPayrollRegisterInput,
 } from "./schemas";
-import type { PayrollPeriodItem } from "./types";
+import type { PayrollPeriodItem, PayrollRegisterExport } from "./types";
 
 // Every action authenticates here, validates its (untrusted) input with zod, and the
 // service enforces role + `canPayroll` (ADMIN always passes) before any read or write.
@@ -157,5 +159,23 @@ export async function updateEmployeePayoutProfileAction(
       success: false,
       error: toActionError(err, "Failed to update employee payout profile."),
     };
+  }
+}
+
+/** Register CSV of one period with the current filters, built on the server (masked). */
+export async function exportPayrollRegisterAction(
+  rawInput: ExportPayrollRegisterInput
+): Promise<ActionResult<PayrollRegisterExport>> {
+  try {
+    const user = await requireAuth();
+    const parsed = ExportPayrollRegisterSchema.safeParse(rawInput);
+    if (!parsed.success) {
+      return { success: false, error: validationMessage(parsed.error) };
+    }
+
+    const result = await payrollService.exportPayrollRegister(user, parsed.data);
+    return { success: true, data: result };
+  } catch (err: unknown) {
+    return { success: false, error: toActionError(err, "Failed to export the payroll register.") };
   }
 }

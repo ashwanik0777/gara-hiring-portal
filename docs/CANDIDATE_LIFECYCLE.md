@@ -7,7 +7,7 @@
 
 | Stage | How a person gets there | Role | Home |
 |---|---|---|---|
-| `CANDIDATE` | Public signup (choosing job, internship or both) or Google sign-in | none (treated as CANDIDATE) | `/candidate/dashboard` |
+| `CANDIDATE` | Public signup (choosing job, internship or both; email verified with an emailed code) or Google sign-in | none (treated as CANDIDATE) | `/candidate/dashboard` |
 | `EVALUATION` | Staff select an internship application for the 7-working-day evaluation (an enrollment exists, status PENDING_TRIGGER → PASSED) | none | `/candidate/dashboard` (+ evaluation workspace) |
 | `INTERN` | Evaluation PASSED, then HR **Mark as joined** | `INTERN` | `/intern/dashboard` |
 | `EMPLOYEE` | Offer accepted, then HR **Mark as joined** | `EMPLOYEE` | `/hrms` |
@@ -75,6 +75,8 @@ Administrators use `/admin`. Every other staff role lands on `/subadmin`, whose 
 | Mentor | Interns they supervise with checkpoints, task submissions and progress reports waiting for review |
 
 All staff with a non-exited employee record also see their own check-in and leave on the overview. Navigation and the "Your modules" list show only modules the person can open: the permission plus the role the module requires (applications and interviews need a recruitment role, payroll needs HR), so a mentor is never offered a page that refuses them.
+
+Registrations are visible to staff with the reports permission on the **Registrations** tab of Reports (and a summary card on the admin overview): sign-ups by what people chose (job, internship, both, not chosen), verified or not, applied or not yet, daily and monthly trends, sign-up → first application conversion. The candidate profile, including the choice, is created when the account is created, so people who never verify their email are counted too. Names and emails are shown only to administrators and HR.
 
 ## 8. Open questions
 

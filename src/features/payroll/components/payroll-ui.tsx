@@ -2,23 +2,9 @@ import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, Lock, Clock } from "lucide-react";
 import type { PayrollStatus } from "../types";
+import { NOT_CONFIGURED } from "../format";
 
-export const NOT_CONFIGURED = "Not configured";
-
-/** Neutralises spreadsheet formula injection and quotes a CSV cell. */
-export function csvCell(value: string | number | null | undefined): string {
-  let text = value === null || value === undefined ? "" : String(value);
-  if (/^[=+\-@\t\r]/.test(text)) {
-    text = `'${text}`;
-  }
-  return `"${text.replace(/"/g, '""')}"`;
-}
-
-export function employmentLabel(type: "INTERN" | "FULL_TIME" | null): string {
-  if (type === "INTERN") return "Intern";
-  if (type === "FULL_TIME") return "Full-Time";
-  return "Type not configured";
-}
+export { NOT_CONFIGURED, employmentLabel } from "../format";
 
 export function formatDate(isoStr?: string | null): string {
   if (!isoStr) return "—";

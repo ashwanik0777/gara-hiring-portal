@@ -357,7 +357,7 @@
 11. **Overlapping payroll periods (OD-008):** period creation only enforces a unique code; two periods with overlapping dates could each enrol and pay the same employee. Should overlaps be rejected?
 12. **Per-record payroll voiding (OD-008):** a FINALIZED period cannot complete if an employee is switched to Unpaid before disbursement. Should staff be able to void a single record?
 13. **Attendance regularization (OD-006):** request/review service methods exist but no action or screen exposes them; correction and approval rules are undecided.
-14. **Payout data model (OD-008):** payout details still live in a reserved block inside `Employee.internalNotes`. A dedicated, encrypted payout table is recommended once the payroll scope is approved.
+14. ~~**Payout data model (OD-008):** payout details still live in a reserved block inside `Employee.internalNotes`.~~ → **Resolved 2026-10-26:** dedicated `EmployeePayoutProfile` table with account number and PAN encrypted (AES-256-GCM, `PAYOUT_ENCRYPTION_KEY`). Still open: key rotation/backup policy, whether staff may clear a stored account number or PAN from the dialog, and the bank upload file format.
 15. **MANAGER scope (OD-019):** managers with `canApplications` still read every application; interviewer scoping was applied because `docs/SECURITY.md` defines it, but no equivalent rule exists for managers.
 
 ### Resolved by the product owner (2026-10-24)
@@ -445,3 +445,11 @@ Calendar invites (.ics), interview self-scheduling, offer letter PDF with electr
 25. **Report CSV limit:** report exports stop at 10,000 rows with a "narrow the filters" message.
 26. **Reporting-manager picker:** lists at most 100 employees; a searchable picker is needed if the workforce grows beyond that.
 27. **Interview board window:** shows sessions from 30 days ago to 60 days ahead by default (UX constants in `src/features/recruitment/types.ts`); "Show all sessions" lists everything.
+
+### Resolved by the product owner (2026-10-26)
+
+- **Item 22 — session cookie cache:** stays **off**; revocation (password reset, staff removal) must apply immediately.
+- **Item 23 — payout profile storage:** payout details move to a dedicated table (`EmployeePayoutProfile`), with account number and PAN encrypted at rest. Paid/unpaid counts, the employment-type filter and the payroll export are computed in SQL.
+- **Item 26 — reporting-manager picker:** replaced by a searchable picker (no visible row cap).
+- **Email OTP:** a new email/password account verifies its email with a 6-digit emailed code before use, and **every password sign-in** asks for a fresh emailed code, for every role (candidates, interns, employees, all staff, administrators). There is no "trust this device" option. Google sign-in is not asked for a code because Google already verifies the person. Consequence: sign-in depends on working SMTP delivery.
+- **Registration analytics:** staff with the reports permission see how many people register, split by what they registered for (job, internship, both, not chosen), whether they verified their email and whether they have applied; the list of registrants (names and emails) is limited to administrators and HR.

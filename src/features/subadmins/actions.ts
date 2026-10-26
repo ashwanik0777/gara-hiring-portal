@@ -84,6 +84,18 @@ export async function createSubAdminAction(formData: z.infer<typeof createSubAdm
           email: email.toLowerCase().trim(),
           emailVerified: true,
           mustChangePassword: true,
+          // Every password sign-in asks for an emailed code (decision 2026-10-26).
+          twoFactorEnabled: true,
+        },
+      });
+
+      // Two-factor row so the account lockout for wrong sign-in codes applies. Same unused
+      // placeholder secret/backup codes as databaseHooks.user.create in src/lib/auth/auth.ts.
+      await tx.twoFactor.create({
+        data: {
+          userId,
+          secret: crypto.randomBytes(32).toString("base64url"),
+          backupCodes: "[]",
         },
       });
 

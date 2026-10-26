@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { defineConfig, devices } from "@playwright/test";
 import { resolveE2EDatabaseUrl } from "./tests/e2e/support/database-guard";
+import { E2E_FIXED_OTP } from "./tests/e2e/support/fixtures";
 
 /**
  * End-to-end tests (tests/e2e).
@@ -100,6 +101,11 @@ export default defineConfig({
     stderr: "pipe",
     env: {
       DATABASE_URL: e2eDatabaseUrl ?? NO_DATABASE_URL,
+      // Test-only fixed one-time code for the journeys. The server ignores it unless it runs
+      // outside production on this same dedicated test database (resolveFixedTestOtp in
+      // src/lib/auth/auth.ts); without a test database it is cleared.
+      E2E_DATABASE_URL: e2eDatabaseUrl ?? "",
+      E2E_FIXED_OTP: e2eDatabaseUrl ? E2E_FIXED_OTP : "",
       BETTER_AUTH_URL: baseURL,
       // Outbound email must never leave a test run.
       SMTP_HOST: "127.0.0.1",

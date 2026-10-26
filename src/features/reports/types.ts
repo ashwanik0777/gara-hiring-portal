@@ -1,3 +1,5 @@
+import type { LifecycleStage } from "@/features/lifecycle/types";
+
 export type ReportType =
   | "RECRUITMENT_PIPELINE"
   | "INTERNSHIP_LIFECYCLE"
@@ -289,4 +291,104 @@ export interface HiringFunnelCsvExportResult {
   rowCount: number;
   generatedAt: Date;
   filters: HiringFunnelFilters;
+}
+
+// ─── Registration Analytics (candidate sign-ups, separate from applications) ─────
+
+/** What a registrant signed up for (`CandidateProfile.careerInterest`; null = NOT_CHOSEN). */
+export type RegistrationInterest = "JOB" | "INTERNSHIP" | "BOTH" | "NOT_CHOSEN";
+
+/** Validated filters of the registrations tab; the range is in the business time zone. */
+export interface RegistrationFilters {
+  /** Inclusive first sign-up day (YYYY-MM-DD). */
+  startDate: string;
+  /** Inclusive last sign-up day (YYYY-MM-DD). */
+  endDate: string;
+  interest: RegistrationInterest | null;
+}
+
+/** Sign-up figures for one interest bucket (or for everyone). */
+export interface RegistrationBreakdownRow {
+  interest: RegistrationInterest | "ALL";
+  label: string;
+  registrations: number;
+  emailVerified: number;
+  emailNotVerified: number;
+  /** Registrants with at least one non-draft application. */
+  applied: number;
+  /** Registrants without any non-draft application yet. */
+  notApplied: number;
+  /** applied / registrations (0–100, one decimal); null without registrations. */
+  conversionPct: number | null;
+  /** Median days from sign-up to the first non-draft application; null when nobody applied. */
+  medianDaysToFirstApplication: number | null;
+  /** Registrants who later joined (hold the INTERN or EMPLOYEE role). */
+  joined: number;
+}
+
+/** Sign-ups in one day or month bucket (business time zone). */
+export interface RegistrationTrendPoint {
+  /** YYYY-MM-DD (daily) or YYYY-MM (monthly). */
+  key: string;
+  label: string;
+  total: number;
+  byInterest: Record<RegistrationInterest, number>;
+}
+
+export interface RegistrationAnalyticsReport {
+  generatedAt: Date;
+  filters: RegistrationFilters;
+  periodLabel: string;
+  timeZone: string;
+  /** Every registrant ever (interest filter applied, date range not applied). */
+  allTimeRegistrations: number;
+  /** Cohort = registrants who signed up in the range (and match the interest filter). */
+  totals: RegistrationBreakdownRow;
+  byInterest: RegistrationBreakdownRow[];
+  daily: RegistrationTrendPoint[];
+  /** The last 12 months including the current one (interest filter applied). */
+  monthly: RegistrationTrendPoint[];
+  /** True for ADMIN and for HR holding canReports: they may open the registrant list. */
+  canViewRegistrants: boolean;
+}
+
+/** Filters of the registrant list (the tab filters plus list-only narrowing). */
+export interface RegistrantListFilters extends RegistrationFilters {
+  emailVerified: boolean | null;
+  applied: boolean | null;
+  search: string | null;
+}
+
+export interface RegistrantListItem {
+  /** CandidateProfile id. */
+  id: string;
+  name: string;
+  email: string;
+  interest: RegistrationInterest;
+  signedUpAt: Date;
+  /** Sign-up day in the business time zone (YYYY-MM-DD). */
+  signedUpDate: string;
+  emailVerified: boolean;
+  /** Non-draft applications. */
+  applicationCount: number;
+  /** Lifecycle stage (candidate, evaluation, intern, employee, alumni). */
+  stage: LifecycleStage;
+  stageLabel: string;
+}
+
+export interface RegistrantListPage {
+  items: RegistrantListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  filters: RegistrantListFilters;
+}
+
+export interface RegistrantCsvExportResult {
+  fileName: string;
+  csvContent: string;
+  rowCount: number;
+  truncated: boolean;
+  generatedAt: Date;
 }

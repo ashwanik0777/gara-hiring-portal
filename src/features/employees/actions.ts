@@ -3,7 +3,7 @@
 import { Role } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import type { ZodError } from "zod";
+import { z, type ZodError } from "zod";
 import { requireAuth, requirePermission } from "@/lib/auth/guards";
 import { toActionError, ValidationError } from "@/lib/errors";
 import { getClientIpHash } from "@/lib/security/client-ip";
@@ -12,7 +12,7 @@ import { revalidateEvaluationViews } from "@/features/internship-evaluation/reva
 import { offerService } from "./services/offer-service";
 import { employeeService } from "./services/employee-service";
 import { conversionService } from "./services/conversion-service";
-import type { ConversionResponseResult, ReviewOutcomeResult } from "./types";
+import type { ConversionResponseResult, ReportingManagerOption, ReviewOutcomeResult } from "./types";
 import {
   ConversionOfferResponseSchema,
   RecordReviewOutcomeSchema,
@@ -372,6 +372,55 @@ export async function assignEmployeeManagerAction(
     return { success: true, data: null };
   } catch (err: unknown) {
     return { success: false, error: toActionError(err, "We couldn't update the reporting manager. Please try again.") };
+  }
+}
+
+/** Options returned per search of the reporting-manager picker. */
+const REPORTING_MANAGER_SEARCH_LIMIT = 20;
+/** Shortest search term sent to the database (an empty term lists the first options). */
+const REPORTING_MANAGER_MIN_QUERY = 2;
+
+const ReportingManagerSearchSchema = z.object({
+  query: z
+    .string("Type a name, employee code or designation.")
+    .trim()
+    .max(100, "Search with at most 100 characters.")
+    .refine(
+      (value) => value.length === 0 || value.length >= REPORTING_MANAGER_MIN_QUERY,
+      `Type at least ${REPORTING_MANAGER_MIN_QUERY} characters to search.`
+    ),
+  excludeEmployeeId: z.string().uuid("Invalid employee ID").nullable().optional(),
+});
+
+/**
+ * Searchable reporting-manager picker: active employees matching the name, employee code
+ * or designation (at most 20), never the employee being edited. Same access rule as
+ * assigning a manager (HR / Admin with canEmployees); the assign action still validates
+ * the chosen manager on the server.
+ */
+export async function searchReportingManagersAction(
+  input: unknown
+): Promise<EmployeeActionResult<ReportingManagerOption[]>> {
+  try {
+    const user = await requirePermission("canEmployees", { roles: EMPLOYEE_ADMIN_ROLES });
+
+    const validated = ReportingManagerSearchSchema.safeParse(input);
+    if (!validated.success) {
+      return {
+        success: false,
+        error: validated.error.issues[0]?.message ?? CHECK_FIELDS_MESSAGE,
+        fieldErrors: toFieldErrors(validated.error),
+      };
+    }
+
+    const options = await employeeService.listReportingManagerOptions(user, {
+      search: validated.data.query || undefined,
+      excludeEmployeeId: validated.data.excludeEmployeeId ?? undefined,
+      take: REPORTING_MANAGER_SEARCH_LIMIT,
+    });
+    return { success: true, data: options };
+  } catch (err: unknown) {
+    return { success: false, error: toActionError(err, "We couldn't search for managers. Please try again.") };
   }
 }
 

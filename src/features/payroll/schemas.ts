@@ -99,18 +99,30 @@ export const GeneratePayrollRecordsSchema = z.object({
   periodId: PayrollPeriodIdSchema,
 });
 
+const employmentCategory = z.enum(["INTERN", "FULL_TIME"]);
+
+/** Register export of one period with the register's filters (applied in SQL). */
+export const ExportPayrollRegisterSchema = z.object({
+  periodId: PayrollPeriodIdSchema,
+  status: z.enum(["DRAFT", "FINALIZED", "PAID", "VOID"]).optional(),
+  search: z.string().trim().max(100).optional(),
+  type: employmentCategory.optional(),
+});
+
 export type CreatePayrollPeriodInput = z.input<typeof CreatePayrollPeriodSchema>;
 export type RecordDisbursementInput = z.input<typeof RecordDisbursementSchema>;
 export type UpdatePayrollPeriodStatusInput = z.input<typeof UpdatePayrollPeriodStatusSchema>;
 export type BulkDisbursementInput = z.input<typeof BulkDisbursementSchema>;
 export type UpdateEmployeePayoutProfileInput = z.input<typeof UpdateEmployeePayoutProfileSchema>;
 export type GeneratePayrollRecordsInput = z.input<typeof GeneratePayrollRecordsSchema>;
+export type ExportPayrollRegisterInput = z.input<typeof ExportPayrollRegisterSchema>;
 
 export type CreatePayrollPeriodData = z.output<typeof CreatePayrollPeriodSchema>;
 export type RecordDisbursementData = z.output<typeof RecordDisbursementSchema>;
 export type UpdatePayrollPeriodStatusData = z.output<typeof UpdatePayrollPeriodStatusSchema>;
 export type BulkDisbursementData = z.output<typeof BulkDisbursementSchema>;
 export type UpdateEmployeePayoutProfileData = z.output<typeof UpdateEmployeePayoutProfileSchema>;
+export type ExportPayrollRegisterData = z.output<typeof ExportPayrollRegisterSchema>;
 
 // ---------------------------------------------------------------------------
 // Read-side query parameters (URL search params are untrusted input)
@@ -122,6 +134,8 @@ export const PAYROLL_RECORDS_PAGE_SIZE = 25;
 export const PAYROLL_PERIODS_PAGE_SIZE = 12;
 export const PAYROLL_DIRECTORY_PAGE_SIZE = 12;
 export const MY_PAYROLL_PAGE_SIZE = 12;
+/** Rows in one register CSV; larger registers are cut off and flagged `truncated`. */
+export const PAYROLL_EXPORT_MAX_ROWS = 5000;
 
 const pageNumber = z.coerce.number().int().min(1).max(100000).optional().catch(undefined);
 const searchText = z.string().trim().min(1).max(100).optional().catch(undefined);
@@ -131,6 +145,8 @@ export const PayrollDashboardQuerySchema = z.object({
   period: z.string().uuid().optional().catch(undefined),
   status: z.enum(["DRAFT", "FINALIZED", "PAID", "VOID"]).optional().catch(undefined),
   q: searchText,
+  /** Register filter by the employment category of the payout profile. */
+  type: employmentCategory.optional().catch(undefined),
   page: pageNumber,
   /** Periods tab page. */
   ppage: pageNumber,

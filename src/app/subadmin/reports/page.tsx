@@ -11,7 +11,7 @@ export const instant = false;
 export const metadata = {
   title: "Analytics & Reports — SubAdmin Console",
   description:
-    "Recruitment funnel, workforce headcount, attendance, and payroll reporting.",
+    "Recruitment funnel, registrations, workforce headcount, attendance, and payroll reporting.",
 };
 
 interface SubAdminReportsPageProps {
@@ -25,6 +25,13 @@ interface SubAdminReportsPageProps {
     funnelEnd?: string;
     funnelType?: string;
     funnelOpening?: string;
+    regStart?: string;
+    regEnd?: string;
+    regInterest?: string;
+    regVerified?: string;
+    regApplied?: string;
+    regQ?: string;
+    regPage?: string;
   }>;
 }
 

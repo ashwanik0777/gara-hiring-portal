@@ -66,6 +66,16 @@ The GARA platform handles sensitive data across multiple user types. Key threat 
 - **Rate limits**: Better Auth endpoints use database-backed storage (`rate_limits`); application code uses the advisory-locked Postgres limiter (`RATE_LIMIT_POLICIES`).
 - **OAuth tokens** are encrypted at rest (`encryptOAuthTokens`).
 
+### Email One-Time Codes (2026-10-26, product-owner decision)
+
+- **Sign-up:** a new email/password account must enter a 6-digit code emailed to it (`email-otp` plugin, `overrideDefaultEmailVerification`). `requireEmailVerification` blocks password sign-in until then; a sign-in attempt by an unverified account re-sends a code and shows the same verification step. Entering the code signs the person in (`autoSignInAfterVerification`).
+- **Every password sign-in:** after a correct password, the session is withheld and a fresh 6-digit code is emailed (`two-factor` plugin, OTP only). This applies to every account (`User.twoFactorEnabled` defaults to true and is forced on creation). There is no trusted-device option: requests carrying `trustDevice` are rejected. Google sign-in is not asked for a code; Google is never linked to an email/password account that has not verified its email (`requireLocalEmailVerified`).
+- **Codes:** 6 digits, valid 10 minutes, stored hashed (SHA-256), at most 5 attempts per code; 10 consecutive failures lock second-step sign-in for 15 minutes (`two_factors` lockout row per user). Codes are never logged and are sent directly by SMTP after the response, so responses do not reveal whether an account exists.
+- **Rate limits** (database-backed, production): sending a code 3 per 60 s and verifying 10 per 60 s per IP, on top of the per-code attempt counter.
+- **Disabled endpoints** (404): passwordless `/sign-in/email-otp`, email-OTP password reset and email change, `/email-otp/check-verification-otp`, `/two-factor/enable|disable`, TOTP and backup-code endpoints, and the link-based `/send-verification-email` and `/verify-email`. Password reset keeps the emailed single-use link.
+- **Dependency:** sign-in now requires working SMTP delivery for every role, administrators included.
+- **Test seam:** `E2E_FIXED_OTP` makes codes predictable only when `NODE_ENV` is not production, the app is not on Vercel, and `E2E_DATABASE_URL` equals `DATABASE_URL` and names a test database (`resolveFixedTestOtp` in `src/lib/auth/auth.ts`). It is never set in deployed environments.
+
 ---
 
 ## 3. Authorization

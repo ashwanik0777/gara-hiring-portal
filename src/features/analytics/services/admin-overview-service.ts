@@ -8,7 +8,9 @@ import {
   Role,
 } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { logger } from "@/lib/logging/logger";
+import { registrationAnalyticsService } from "@/features/reports/services/registration-analytics-service";
 import { getUniqueVisitorCount } from "./visitor-service";
 
 /*
@@ -294,3 +296,38 @@ export const getRecentActivityOverview = cache(async (): Promise<RecentActivityO
     totalVisitors,
   };
 });
+
+// ─── Registrations ────────────────────────────────────────────────────────────
+
+export interface RegistrationOverview {
+  /** Candidate accounts ever created (staff accounts are never counted). */
+  total: number;
+  job: number;
+  internship: number;
+  both: number;
+  notChosen: number;
+  /** Registrants without a submitted (non-draft) application yet. */
+  notApplied: number;
+  /** Signed up today or in the previous 6 days (business time). */
+  newLastSevenDays: number;
+}
+
+/**
+ * Sign-up figures for the overview card: one grouped query, gated by `canReports` in the
+ * service (ADMIN always passes). A failure reads "unavailable", never 0.
+ */
+export const getRegistrationOverview = cache(
+  async (user: AuthenticatedUser): Promise<RegistrationOverview | typeof UNAVAILABLE> =>
+    loadOverviewMetric("registrations", async () => {
+      const summary = await registrationAnalyticsService.getRegistrationSummary(user);
+      return {
+        total: summary.total,
+        job: summary.byInterest.JOB,
+        internship: summary.byInterest.INTERNSHIP,
+        both: summary.byInterest.BOTH,
+        notChosen: summary.byInterest.NOT_CHOSEN,
+        notApplied: summary.notApplied,
+        newLastSevenDays: summary.newLastSevenDays,
+      };
+    })
+);

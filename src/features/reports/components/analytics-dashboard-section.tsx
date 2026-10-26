@@ -9,6 +9,11 @@ import {
   HiringFunnelSkeleton,
   readHiringFunnelParams,
 } from "./hiring-funnel-section";
+import {
+  RegistrationsSection,
+  RegistrationsSkeleton,
+  readRegistrationParams,
+} from "./registrations-section";
 
 type SearchParamValue = string | string[] | undefined;
 
@@ -28,7 +33,8 @@ function firstValue(value: SearchParamValue): string | undefined {
 /**
  * Streams the analytics dashboard for a reports page (the caller has already checked
  * `canReports`). The payroll figures are omitted by the service unless the viewer also
- * holds `canPayroll`; the hiring funnel streams in its own boundary.
+ * holds `canPayroll`; the hiring funnel and the registrations tab stream in their own
+ * boundaries and are only queried when the page is opened on that tab.
  */
 export async function AnalyticsDashboardSection({
   user,
@@ -63,22 +69,36 @@ export async function AnalyticsDashboardSection({
     const value = firstValue(searchParams[key]);
     if (value) preservedParams[key] = value;
   }
-  const showFunnel = firstValue(searchParams.tab) === "funnel";
+  const requestedTab = firstValue(searchParams.tab);
+  const showFunnel = requestedTab === "funnel";
+  const showRegistrations = requestedTab === "registrations";
   const reportsPath = `${basePath}/reports`;
 
   return (
     <AnalyticsDashboardClient
-      // Remount when switching to/from the funnel tab so the requested tab opens.
-      key={showFunnel ? "funnel" : "dashboard"}
+      // Remount when switching to/from a server-rendered tab so the requested tab opens.
+      key={showFunnel ? "funnel" : showRegistrations ? "registrations" : "dashboard"}
       initialData={analyticsData}
       basePath={basePath}
-      initialTab={showFunnel ? "funnel" : "overview"}
+      initialTab={showFunnel ? "funnel" : showRegistrations ? "registrations" : "overview"}
       hiringFunnel={
         showFunnel ? (
           <Suspense fallback={<HiringFunnelSkeleton />}>
             <HiringFunnelSection
               user={user}
               filters={readHiringFunnelParams(searchParams)}
+              reportsPath={reportsPath}
+              preservedParams={preservedParams}
+            />
+          </Suspense>
+        ) : undefined
+      }
+      registrations={
+        showRegistrations ? (
+          <Suspense fallback={<RegistrationsSkeleton />}>
+            <RegistrationsSection
+              user={user}
+              params={readRegistrationParams(searchParams)}
               reportsPath={reportsPath}
               preservedParams={preservedParams}
             />

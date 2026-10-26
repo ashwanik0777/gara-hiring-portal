@@ -19,13 +19,49 @@ import {
   MailCheck,
 } from "lucide-react";
 import { getPostLoginRedirectAction } from "@/features/auth/password-actions";
-import { saveCareerInterestAction } from "@/features/lifecycle/actions";
 import { CareerInterestPicker } from "@/features/lifecycle/components/career-interest-picker";
 import type { CareerInterest } from "@/types/enums";
 import { sanitizeCallbackPath } from "@/lib/auth/redirects";
+import { OtpCodeStep } from "./otp-code-step";
+import {
+  describeGoogleSignInError,
+  describeOtpError,
+  describeSignInError,
+  describeSignUpError,
+  isTwoFactorRedirect,
+  toOtpFailure,
+  type OtpResult,
+} from "./otp-helpers";
 
 interface AuthSplitScreenProps {
   initialMode: "login" | "register" | "forgot";
+}
+
+/**
+ * The emailed-code step that replaces the login or register form:
+ * - "verify-email": after sign-up, or when sign-in reports EMAIL_NOT_VERIFIED (the server
+ *   has just emailed a code); verifying signs the user in.
+ * - "sign-in": the second step of every password sign-in (two-factor code).
+ */
+type OtpChallenge = {
+  id: number;
+  kind: "verify-email" | "sign-in";
+  origin: "login" | "register";
+  email: string;
+  codeSent: boolean;
+  initialError: string | null;
+};
+
+/** Runs an auth client call and reduces its outcome; thrown errors count as network failures. */
+async function runOtpCall(
+  call: () => Promise<{ error: { code?: string | null; status?: number | null } | null }>
+): Promise<OtpResult> {
+  try {
+    const { error } = await call();
+    return error ? { ok: false, failure: toOtpFailure(error) } : { ok: true };
+  } catch {
+    return { ok: false, failure: { network: true } };
+  }
 }
 
 export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
@@ -39,6 +75,8 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const isNavigatingRef = useRef(false);
 
   const [mode, setMode] = useState<"login" | "register" | "forgot">(initialMode);
+  const [otpChallenge, setOtpChallenge] = useState<OtpChallenge | null>(null);
+  const challengeCounterRef = useRef(0);
 
   // If already authenticated on the client, replace route immediately to prevent viewing auth screens
   const { data: session, isPending: sessionPending } = authClient.useSession();
@@ -50,12 +88,17 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
   // Navigates once, straight to the right portal (or the requested page).
   const navigateAfterAuth = useCallback(async () => {
-    const { redirectTo, mustChangePassword } = await getPostLoginRedirectAction();
-    const target = mustChangePassword
-      ? "/set-password"
-      : hasExplicitCallback
-        ? callbackUrl
-        : redirectTo ?? callbackUrl;
+    let target = callbackUrl;
+    try {
+      const { redirectTo, mustChangePassword } = await getPostLoginRedirectAction();
+      target = mustChangePassword
+        ? "/set-password"
+        : hasExplicitCallback
+          ? callbackUrl
+          : redirectTo ?? callbackUrl;
+    } catch {
+      // The session exists; the /dashboard hub (or the requested page) routes from here.
+    }
     router.replace(target);
   }, [callbackUrl, hasExplicitCallback, router]);
 
@@ -63,6 +106,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   useEffect(() => {
     function handlePopState() {
       const path = window.location.pathname;
+      setOtpChallenge(null);
       if (path.includes("/register")) {
         setMode("register");
       } else if (path.includes("/forgot-password")) {
@@ -77,6 +121,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
   const switchMode = useCallback(
     (newMode: "login" | "register" | "forgot") => {
+      setOtpChallenge(null);
       setMode(newMode);
       const query = window.location.search;
       const targetUrl =
@@ -97,7 +142,10 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const [rememberMe, setRememberMe] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginGoogleLoading, setLoginGoogleLoading] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
+  // A failed Google sign-in returns here with `?error=<code>`; only mapped text is shown.
+  const [loginError, setLoginError] = useState<string | null>(() =>
+    describeGoogleSignInError(searchParams.get("error"))
+  );
 
   // ─── REGISTER STATE ───
   const [regName, setRegName] = useState("");
@@ -128,30 +176,101 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const strengthColor = ["", "bg-red-500", "bg-amber-500", "bg-blue-500", "bg-emerald-500"][strength];
   const strengthTextColor = ["", "text-red-500", "text-amber-500", "text-blue-500", "text-emerald-500"][strength];
 
+  // ─── EMAILED CODE STEP ───
+  const openOtpChallenge = useCallback((challenge: Omit<OtpChallenge, "id">) => {
+    challengeCounterRef.current += 1;
+    setOtpChallenge({ ...challenge, id: challengeCounterRef.current });
+  }, []);
+
+  const requestSignInCode = useCallback(
+    () => runOtpCall(() => authClient.twoFactor.sendOtp()),
+    []
+  );
+
+  const handleOtpVerify = async (code: string): Promise<OtpResult> => {
+    if (!otpChallenge) {
+      return { ok: false, failure: {} };
+    }
+    // Verifying creates the session; the session listener must not navigate as well.
+    isNavigatingRef.current = true;
+    const result =
+      otpChallenge.kind === "sign-in"
+        ? await runOtpCall(() => authClient.twoFactor.verifyOtp({ code }))
+        : await runOtpCall(() => authClient.emailOtp.verifyEmail({ email: otpChallenge.email, otp: code }));
+    if (!result.ok) {
+      isNavigatingRef.current = false;
+      return result;
+    }
+    await navigateAfterAuth();
+    return result;
+  };
+
+  const handleOtpResend = (): Promise<OtpResult> => {
+    if (!otpChallenge) {
+      return Promise.resolve({ ok: false, failure: {} });
+    }
+    if (otpChallenge.kind === "sign-in") {
+      return requestSignInCode();
+    }
+    const email = otpChallenge.email;
+    return runOtpCall(() =>
+      authClient.emailOtp.sendVerificationOtp({ email, type: "email-verification" })
+    );
+  };
+
+  const handleOtpBack = () => {
+    if (otpChallenge?.origin === "login") {
+      setLoginPassword("");
+    }
+    isNavigatingRef.current = false;
+    setOtpChallenge(null);
+  };
+
   // ─── LOGIN HANDLER ───
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
     setLoginLoading(true);
     isNavigatingRef.current = true;
+    const email = loginEmail.trim().toLowerCase();
 
     try {
-      const { error } = await authClient.signIn.email({
-        email: loginEmail,
+      const { data, error } = await authClient.signIn.email({
+        email,
         password: loginPassword,
       });
 
       if (error) {
         isNavigatingRef.current = false;
-        setLoginError(error.message || "Invalid email or password. Please try again.");
         setLoginLoading(false);
+        if (error.code === "EMAIL_NOT_VERIFIED") {
+          // The password was right; the server has just emailed a verification code.
+          openOtpChallenge({ kind: "verify-email", origin: "login", email, codeSent: true, initialError: null });
+          return;
+        }
+        setLoginError(describeSignInError(toOtpFailure(error)));
+        return;
+      }
+
+      if (isTwoFactorRedirect(data)) {
+        // Password accepted; no session yet. Email the sign-in code and ask for it.
+        isNavigatingRef.current = false;
+        const sent = await requestSignInCode();
+        setLoginLoading(false);
+        openOtpChallenge({
+          kind: "sign-in",
+          origin: "login",
+          email,
+          codeSent: sent.ok,
+          initialError: sent.ok ? null : describeOtpError(sent.failure, "resend"),
+        });
         return;
       }
 
       await navigateAfterAuth();
     } catch {
       isNavigatingRef.current = false;
-      setLoginError("An unexpected authentication error occurred. Please try again.");
+      setLoginError(describeSignInError({ network: true }));
       setLoginLoading(false);
     }
   };
@@ -163,6 +282,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
       await authClient.signIn.social({
         provider: "google",
         callbackURL: callbackUrl,
+        errorCallbackURL: "/login",
       });
     } catch {
       setLoginError("Google Sign-In failed or is not configured yet in this environment.");
@@ -191,29 +311,25 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
     }
 
     setRegLoading(true);
-    isNavigatingRef.current = true;
+    const email = regEmail.trim().toLowerCase();
 
     try {
-      const { error } = await authClient.signUp.email({
-        name: regName,
-        email: regEmail,
-        password: regPassword,
-      });
+      // `careerInterest` is an extra body field, not a user column: the server validates it
+      // and stores it on the candidate profile when the account is created.
+      const signUpBody = { name: regName, email, password: regPassword, careerInterest: regInterest };
+      const { error } = await authClient.signUp.email(signUpBody);
 
+      setRegLoading(false);
       if (error) {
-        isNavigatingRef.current = false;
-        setRegError(error.message || "Failed to create account. Email may already be registered.");
-        setRegLoading(false);
+        setRegError(describeSignUpError(toOtpFailure(error)));
         return;
       }
 
-      // The new account is signed in; store what the candidate is looking for.
-      // A failure here is not fatal: the dashboard asks again.
-      await saveCareerInterestAction({ careerInterest: regInterest }).catch(() => null);
-      await navigateAfterAuth();
+      // No session yet: the email must be verified with the emailed code first. The answer
+      // is the same for an already registered email, so the step never reveals accounts.
+      openOtpChallenge({ kind: "verify-email", origin: "register", email, codeSent: true, initialError: null });
     } catch {
-      isNavigatingRef.current = false;
-      setRegError("An unexpected registration error occurred. Please try again.");
+      setRegError(describeSignUpError({ network: true }));
       setRegLoading(false);
     }
   };
@@ -225,6 +341,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
       await authClient.signIn.social({
         provider: "google",
         callbackURL: callbackUrl,
+        errorCallbackURL: "/login",
       });
     } catch {
       setRegError("Google Sign-In failed or is not configured yet in this environment.");
@@ -257,6 +374,29 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
       setForgotLoading(false);
       setForgotError("An unexpected error occurred while resetting password. Please try again.");
     }
+  };
+
+  // The same step renders in the desktop panel and the mobile layout (one is hidden by CSS),
+  // so each copy gets its own ids.
+  const renderOtpStep = (origin: OtpChallenge["origin"], idPrefix: string, compact: boolean) => {
+    if (!otpChallenge || otpChallenge.origin !== origin) {
+      return null;
+    }
+    return (
+      <OtpCodeStep
+        key={`${idPrefix}-${otpChallenge.id}`}
+        idPrefix={idPrefix}
+        purpose={otpChallenge.kind}
+        email={otpChallenge.email}
+        codeJustSent={otpChallenge.codeSent}
+        initialError={otpChallenge.initialError}
+        compact={compact}
+        onVerify={handleOtpVerify}
+        onResend={handleOtpResend}
+        onBack={handleOtpBack}
+        backLabel={origin === "login" ? "Back to sign in" : "Use a different email"}
+      />
+    );
   };
 
   const isHeroOnLeft = mode === "login" || mode === "forgot";
@@ -418,6 +558,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                   : "opacity-0 pointer-events-none transform -translate-y-4 absolute inset-0"
               }`}
             >
+              {renderOtpStep("login", "auth-split-screen-login-otp", false) ?? (
               <div className="space-y-6">
                 {/* Title */}
                 <div className="text-center space-y-1.5">
@@ -571,7 +712,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                 {/* Security Tag */}
                 <p className="text-[11px] text-center text-muted-foreground flex items-center justify-center gap-1.5 pt-1">
                   <ShieldCheck className="h-3.5 w-3.5 text-blue-500" />
-                  Protected with optional two-factor authentication
+                  Every password sign-in is confirmed with a code sent to your email
                 </p>
 
                 {/* Switch to Signup */}
@@ -588,6 +729,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                   </p>
                 </div>
               </div>
+              )}
             </div>
 
             {/* ─── 2. REGISTER FORM (Visible when mode === "register") ─── */}
@@ -599,6 +741,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                   : "opacity-0 pointer-events-none transform translate-y-4 absolute inset-0"
               }`}
             >
+              {renderOtpStep("register", "auth-split-screen-register-otp", false) ?? (
               <div className="space-y-6">
                 {/* Title (Free trial tagline completely removed as requested) */}
                 <div className="text-center space-y-1.5">
@@ -805,6 +948,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                   </p>
                 </div>
               </div>
+              )}
             </div>
 
             {/* ─── 3. FORGOT PASSWORD FORM (Inlined in place of Login) ─── */}
@@ -985,6 +1129,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
         {/* Form Container Card */}
         <div className="w-full max-w-md rounded-3xl bg-card border border-border/80 p-6 sm:p-8 shadow-xl shadow-black/5">
           {mode === "login" ? (
+            renderOtpStep("login", "auth-split-screen-login-otp-mobile", true) ?? (
             <div className="space-y-5">
               <div className="text-center space-y-1">
                 <h2 className="text-xl font-bold text-foreground">Welcome back</h2>
@@ -1041,7 +1186,9 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                 </button>
               </form>
             </div>
+            )
           ) : mode === "register" ? (
+            renderOtpStep("register", "auth-split-screen-register-otp-mobile", true) ?? (
             <div className="space-y-5">
               <div className="text-center space-y-1">
                 <h2 className="text-xl font-bold text-foreground">Create account</h2>
@@ -1125,6 +1272,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                 </button>
               </form>
             </div>
+            )
           ) : (
             <div className="space-y-5">
               <div className="text-center space-y-1">
