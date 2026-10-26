@@ -240,3 +240,16 @@ Until the organisation runs its own server, keep `DOCUMENT_STORAGE_MODE=link`. T
 - Portal layouts render the auth-dependent shell inside `<Suspense>` with `DashboardShellSkeleton`, so the prerendered static shell paints immediately and the session streams in.
 - Every dashboard route has a `loading.tsx` that mirrors its layout (`src/components/feedback/page-skeletons.tsx`); public and auth routes have matching skeletons. Skeleton blocks pulse only when the user allows motion (`motion-safe`) and each region announces its loading state to screen readers.
 - After sign-in the client navigates once, straight to the user's portal (`getHomePathForUser`), instead of bouncing through `/dashboard`.
+- Public and auth routes (`/careers`, `/careers/<slug>`, `/help`, `/verify`, sign-in screens) have their own `loading.tsx`; a thin top progress bar (`src/components/navigation/navigation-progress.tsx`) appears when a navigation takes longer than 120 ms.
+
+### 6.4 Bounded queries and pagination (2026-10-26)
+- Every staff list loads one page from the database (`skip`/`take`, at most 50 rows, total from a `count` in the same `Promise.all`); filters, page, month and tab travel in the URL. This covers the application queue, interview board (default window: 30 days back to 60 days ahead, `?range=all` for everything), employee directory, evaluation list, intern review board, intern tasks, leave, attendance (one business month at a time), payroll and sub-admins.
+- Reports and the admin overview aggregate in PostgreSQL (`groupBy`, `count`, `aggregate`, parameterised `$queryRaw`); no report loads whole tables. CSV exports stop at 10,000 rows and say so.
+- Heavy dialogs (leave, attendance, payroll, sub-admin, evaluation, intern-task and review dialogs) and the report charts are loaded on demand (`next/dynamic` / `React.lazy`), so the first page load ships less JavaScript.
+- Migration `20261028000000_performance_indexes` adds the composite indexes these queries use (applied to Neon on 2026-10-26).
+
+### 6.5 Caching of public data
+- `getPublicOpenings`, `getPublicOpeningBySlug` and the sitemap slug list use `"use cache"` (`src/features/openings/services/opening-service.ts`): refreshed in the background every 5 minutes, served stale for at most a day, tags `openings:public`, `opening:slug:<slug>`, `opening:id:<id>`.
+- Opening Server Actions (create, status change, form publish) call `updateTag` for those tags, so staff changes are visible on the next request. A future action that edits an opening must call `revalidateOpeningCaches` too.
+- Nothing private is cached: apply pages, portals and certificate verification (`/verify`, revocation must apply immediately) always read the database.
+- On Vercel the default cache store is per instance. If the hit rate is low, switch the three functions to `"use cache: remote"`.

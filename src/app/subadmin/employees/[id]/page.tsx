@@ -5,6 +5,7 @@ import { STAFF_ROLES } from "@/lib/auth/permissions";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { employeeService } from "@/features/employees/services/employee-service";
+import type { EmployeeDetailCore } from "@/features/employees/types";
 import { EmployeeDetailView } from "@/features/employees/components/employee-detail-view";
 
 interface SubAdminEmployeeDetailPageProps {
@@ -39,9 +40,10 @@ export default async function SubAdminEmployeeDetailPage({
 
   const { id } = await params;
   const { tab } = await searchParams;
-  let employee;
+  let employee: EmployeeDetailCore;
   try {
-    employee = await employeeService.getEmployeeDetail(user, id);
+    // Only the core record is awaited here; documents, periods and history stream in the view.
+    employee = await employeeService.getEmployeeDetailCore(user, id);
   } catch (err: unknown) {
     if (err instanceof ForbiddenError) {
       return <UnauthorizedState message="You are not authorized to view this employee record." />;
@@ -55,7 +57,6 @@ export default async function SubAdminEmployeeDetailPage({
   const isStaffAdmin =
     (user.roles.includes("ADMIN") || user.roles.includes("HR")) &&
     (await hasPermission(user, "canEmployees"));
-  const allStaff = isStaffAdmin ? await employeeService.getEmployeeDirectory(user) : [];
   const isSelf = employee.email === user.email;
   // The originating application opens in the sub-admin workspace, which enforces its own
   // `canApplications` guard.
@@ -64,9 +65,9 @@ export default async function SubAdminEmployeeDetailPage({
   return (
     <EmployeeDetailView
       employee={employee}
+      user={user}
       isStaffAdmin={isStaffAdmin}
       isSelf={isSelf}
-      allStaff={allStaff.map((s) => ({ id: s.id, employeeCode: s.employeeCode, name: s.name }))}
       openExitTab={tab === "exit"}
       applicationHrefBase={canOpenApplications ? "/subadmin/applications" : null}
     />

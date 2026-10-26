@@ -6,6 +6,8 @@
  * `setUTCHours` are never mixed.
  */
 
+import { businessDateKey } from "@/lib/time/business-time";
+
 export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** Returns the UTC calendar day (00:00:00.000Z) that contains `value`. */
@@ -35,4 +37,21 @@ export function listUtcDays(start: Date, end: Date): Date[] {
     days.push(new Date(ms));
   }
   return days;
+}
+
+/** `YYYY-MM` of the instant in the business time zone (what staff mean by "this month"). */
+export function currentBusinessMonthKey(now: Date = new Date()): string {
+  return businessDateKey(now).slice(0, 7);
+}
+
+/**
+ * UTC day window `[start, endExclusive)` covering the calendar month `YYYY-MM`.
+ * Attendance rows are UTC calendar days, so the window is built in UTC.
+ */
+export function utcMonthWindow(monthKey: string): { start: Date; endExclusive: Date } {
+  const [year, month] = monthKey.split("-").map(Number);
+  return {
+    start: new Date(Date.UTC(year, month - 1, 1)),
+    endExclusive: new Date(Date.UTC(year, month, 1)),
+  };
 }

@@ -20,7 +20,7 @@ import type {
   TimeToHireRow,
   TopOpeningRow,
 } from "../types";
-import { escapeCsvCell } from "./report-service";
+import { escapeCsvCell, toUtcTimestampLiteral } from "./report-service";
 
 /**
  * Funnel stages in pipeline order. The pipeline branches after INTERVIEWED (internships go
@@ -287,11 +287,6 @@ export function buildHiringFunnelCsv(report: HiringFunnelReport): { csvContent: 
 function nextDateKey(dateKey: string): string {
   const [year, month, day] = dateKey.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
-}
-
-/** Timestamp literal for the `timestamp(3)` columns, which store UTC wall-clock time. */
-function toUtcTimestampLiteral(instant: Date): string {
-  return instant.toISOString().replace("T", " ").replace("Z", "");
 }
 
 function describePeriod(startDate: string | null, endDate: string | null): string {

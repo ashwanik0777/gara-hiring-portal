@@ -148,6 +148,8 @@ Commands run against the working tree after all fixes (no database was touched; 
 
 Re-run on 2026-10-25 after rounds 3–4: TypeScript 0 errors, ESLint 0 errors, Vitest 27 files / 887 tests passed, `npm audit --omit=dev` 0 vulnerabilities, production build passed (74 routes). Migrations `20261026000000_employment_periods_jobs` and `20261027000000_scheduling_esign_sources` were applied to Neon after a schema-drift check and a data backup; the post-deploy diff is empty.
 
+Re-run on 2026-10-26 after the performance round: TypeScript 0 errors, ESLint 0 errors, Vitest 30 files / 1002 tests passed, `npm audit --omit=dev` 0 vulnerabilities, production build passed, Playwright public suite 43 passed / 21 skipped (database journeys) / 0 failed. Migration `20261028000000_performance_indexes` (19 indexes, no other statements) applied to Neon after a drift check and a data backup; the post-deploy diff is empty.
+
 What this does **not** prove:
 - End-to-end tests exist since 2026-10-25, but database behaviour (row locks, advisory locks, conditional updates) is still verified only against mocks (ENG-07).
 - Migrations were applied to the Neon database and verified with a schema diff (OPS-05); application behaviour against it has not been exercised yet.

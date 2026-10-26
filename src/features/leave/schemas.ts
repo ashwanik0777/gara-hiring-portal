@@ -70,3 +70,35 @@ export type CreateLeaveRequestInput = z.infer<typeof CreateLeaveRequestSchema>;
 export type ReviewLeaveRequestInput = z.infer<typeof ReviewLeaveRequestSchema>;
 export type CreateLeaveTypeInput = z.infer<typeof CreateLeaveTypeSchema>;
 export type ToggleLeaveTypeInput = z.infer<typeof ToggleLeaveTypeSchema>;
+
+// ---------------------------------------------------------------------------
+// Read-side query parameters (URL search params are untrusted input)
+// ---------------------------------------------------------------------------
+
+/** Upper bound of one page of leave requests. */
+export const LEAVE_MAX_PAGE_SIZE = 50;
+export const LEAVE_DEFAULT_PAGE_SIZE = 20;
+
+const LEAVE_LIST_STATUSES = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"] as const;
+const LEAVE_TABS = ["requests", "calendar", "types", "apply"] as const;
+
+/** Invalid or unknown values fall back to the default instead of failing the page. */
+export const LeaveListQuerySchema = z.object({
+  status: z.enum(LEAVE_LIST_STATUSES).optional().catch(undefined),
+  type: z.string().uuid().optional().catch(undefined),
+  q: z.string().trim().min(1).max(100).optional().catch(undefined),
+  page: z.coerce.number().int().min(1).max(100000).optional().catch(undefined),
+  tab: z.enum(LEAVE_TABS).optional().catch(undefined),
+});
+
+export type LeaveListQuery = z.infer<typeof LeaveListQuerySchema>;
+
+/** Employee picker search (on-behalf leave form). */
+export const EmployeeOptionSearchSchema = z.object({
+  query: z.string().trim().max(100),
+});
+
+export const EmployeeLeaveSummarySchema = z.object({
+  employeeId: z.string().uuid("Invalid employee ID"),
+  excludeRequestId: z.string().uuid().optional(),
+});

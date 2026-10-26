@@ -69,6 +69,8 @@ export interface ReportCsvExportResult {
   fileName: string;
   csvContent: string;
   rowCount: number;
+  /** True when more rows matched than the export limit; only the first rows are included. */
+  truncated: boolean;
   generatedAt: Date;
   appliedFilters: AppliedReportMetadata["filters"];
 }

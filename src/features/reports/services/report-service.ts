@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { locatePayoutProfileBlock } from "@/features/payroll/payout-notes";
+import { PAYROLL_PROFILE_MARKER, locatePayoutProfileBlock } from "@/features/payroll/payout-notes";
 import { assertPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { getUserPermissions } from "@/lib/auth/permissions";
 import {
@@ -50,6 +50,52 @@ export function escapeCsvCell(value: string | number | boolean | null | undefine
   return safeStr;
 }
 
+/** Timestamp literal for the `timestamp(3)` columns, which store UTC wall-clock time. */
+export function toUtcTimestampLiteral(instant: Date): string {
+  return instant.toISOString().replace("T", " ").replace("Z", "");
+}
+
+/**
+ * Rows returned by one CSV export. Larger result sets are cut off at this limit and the
+ * result is flagged `truncated`, so an export can never load an unbounded table.
+ */
+export const MAX_EXPORT_ROWS = 10_000;
+
+const CHART_MONTHS = 6;
+const CHART_DAYS = 7;
+const RECENT_PAYROLL_CYCLES = 5;
+/** Payout profiles live in a text column (OD-008), so they are scanned in bounded pages. */
+const PAYOUT_PROFILE_PAGE_SIZE = 500;
+const MAX_PAYOUT_PROFILE_PAGES = 200;
+
+/** Statuses counted as "Interviews & Evals" in the monthly recruitment trend. */
+const INTERVIEW_STAGE_STATUSES: readonly string[] = [
+  "INTERVIEW_SCHEDULED",
+  "INTERVIEWED",
+  "EVALUATION_SELECTED",
+];
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DEPARTMENT_COLORS = [
+  "#3b82f6",
+  "#8b5cf6",
+  "#10b981",
+  "#f59e0b",
+  "#06b6d4",
+  "#ec4899",
+  "#6366f1",
+  "#14b8a6",
+];
+
+/** Employees whose designation or department marks them as interns. */
+const INTERN_EMPLOYEE_WHERE: Prisma.EmployeeWhereInput = {
+  OR: [
+    { designation: { contains: "intern", mode: "insensitive" } },
+    { department: { contains: "intern", mode: "insensitive" } },
+  ],
+};
+
 interface RecordedPayoutProfile {
   isPaid: boolean | null;
   stipendAmount: number | null;
@@ -84,30 +130,149 @@ export function readRecordedPayoutProfile(
   }
 }
 
+// ─── Aggregate row shapes (what PostgreSQL returns; never individual records) ──────
+
+interface StatusGroup<TStatus extends string = string> {
+  status: TStatus;
+  _count: { _all: number };
+}
+
+interface PayrollRecordGroup {
+  payrollPeriodId: string;
+  status: string;
+  _count: { _all: number };
+  _sum: { disbursedAmount: Prisma.Decimal | null };
+}
+
+interface PayrollMissingAmountGroup {
+  payrollPeriodId: string;
+  _count: { _all: number };
+}
+
+interface MonthlyApplicationRow {
+  /** `YYYY-MM` of the UTC month the applications were created in. */
+  month: string;
+  applications: number;
+  interviews: number;
+  hired: number;
+}
+
+interface DailyLeaveRow {
+  /** Index into the day windows passed to the query (oldest day first). */
+  idx: number;
+  onLeave: number;
+}
+
+interface PayrollCycleSummary {
+  totalEnrolled: number;
+  paid: number;
+  unpaid: number;
+  disbursed: number;
+  paidWithoutRecordedAmount: number;
+}
+
+interface PayrollSnapshot {
+  periods: Array<{ id: string; code: string; status: string }>;
+  summaries: Map<string, PayrollCycleSummary>;
+}
+
+interface DayWindow {
+  start: Date;
+  end: Date;
+  day: string;
+  dateStr: string;
+}
+
+interface MonthBucket {
+  key: string;
+  year: number;
+  month: string;
+  label: string;
+}
+
+/** Converts a Decimal aggregate (or a plain number from a mock) to a number. */
+function decimalToNumber(value: Prisma.Decimal | number | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  const parsed = typeof value === "number" ? value : Number(value.toString());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sumCounts(groups: ReadonlyArray<{ _count: { _all: number } }>): number {
+  return groups.reduce((sum, group) => sum + group._count._all, 0);
+}
+
+function countsByKey<TKey extends string>(groups: ReadonlyArray<StatusGroup<TKey>>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const group of groups) {
+    counts[group.status] = (counts[group.status] ?? 0) + group._count._all;
+  }
+  return counts;
+}
+
 /**
- * Sums the amounts snapshotted at disbursement for PAID records; records without a
- * recorded amount are counted, never guessed from the current payout profile.
+ * Sums the amounts snapshotted at disbursement for PAID records of one period; PAID
+ * records without a recorded amount are counted, never guessed from the payout profile.
  */
-function summarisePaidRecords(
-  records: Array<{ status: string; disbursedAmount: { toNumber(): number } | null }>
-): { disbursed: number; paid: number; unpaid: number; paidWithoutRecordedAmount: number } {
-  let disbursed = 0;
-  let paid = 0;
-  let unpaid = 0;
-  let paidWithoutRecordedAmount = 0;
-  for (const rec of records) {
-    if (rec.status !== "PAID") {
-      unpaid++;
-      continue;
-    }
-    paid++;
-    if (rec.disbursedAmount == null) {
-      paidWithoutRecordedAmount++;
+function summarisePayrollGroups(
+  periodId: string,
+  statusGroups: ReadonlyArray<PayrollRecordGroup>,
+  missingAmountGroups: ReadonlyArray<PayrollMissingAmountGroup>
+): PayrollCycleSummary {
+  const summary: PayrollCycleSummary = {
+    totalEnrolled: 0,
+    paid: 0,
+    unpaid: 0,
+    disbursed: 0,
+    paidWithoutRecordedAmount: 0,
+  };
+  for (const group of statusGroups) {
+    if (group.payrollPeriodId !== periodId) continue;
+    summary.totalEnrolled += group._count._all;
+    if (group.status === "PAID") {
+      summary.paid += group._count._all;
+      summary.disbursed += decimalToNumber(group._sum.disbursedAmount);
     } else {
-      disbursed += rec.disbursedAmount.toNumber();
+      summary.unpaid += group._count._all;
     }
   }
-  return { disbursed, paid, unpaid, paidWithoutRecordedAmount };
+  for (const group of missingAmountGroups) {
+    if (group.payrollPeriodId === periodId) {
+      summary.paidWithoutRecordedAmount += group._count._all;
+    }
+  }
+  return summary;
+}
+
+/** The last `count` calendar days ending today (oldest first) as inclusive windows. */
+function recentDayWindows(now: Date, count: number): DayWindow[] {
+  const windows: DayWindow[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    windows.push({
+      start: new Date(target.getFullYear(), target.getMonth(), target.getDate(), 0, 0, 0, 0),
+      end: new Date(target.getFullYear(), target.getMonth(), target.getDate(), 23, 59, 59, 999),
+      day: DAY_NAMES[target.getDay()],
+      dateStr: `${MONTH_NAMES[target.getMonth()]} ${target.getDate()}`,
+    });
+  }
+  return windows;
+}
+
+/** The last `count` UTC months ending with the current one (oldest first). */
+function recentMonthBuckets(now: Date, count: number): MonthBucket[] {
+  const buckets: MonthBucket[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const first = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const year = first.getUTCFullYear();
+    const monthIndex = first.getUTCMonth();
+    buckets.push({
+      key: `${year}-${String(monthIndex + 1).padStart(2, "0")}`,
+      year,
+      month: MONTH_NAMES[monthIndex],
+      label: `${MONTH_NAMES[monthIndex]} ${year}`,
+    });
+  }
+  return buckets;
 }
 
 export class ReportService {
@@ -149,6 +314,11 @@ export class ReportService {
     return this.buildOperationsReport(user, rawFilters);
   }
 
+  /**
+   * Recruitment, internship and headcount figures for the filters. Everything is grouped
+   * or counted in PostgreSQL: the rows read into memory are bounded by the number of
+   * statuses, openings and departments, never by the number of applications or employees.
+   */
   private async buildOperationsReport(
     user: AuthenticatedUser,
     rawFilters: ReportFilterInput
@@ -189,7 +359,6 @@ export class ReportService {
           }
         : undefined;
 
-    // 1. Recruitment Funnel Query (Real DB Data, sanitized fields)
     const applicationWhere: Prisma.ApplicationWhereInput = {
       ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
       ...(openingId ? { openingId } : {}),
@@ -202,67 +371,6 @@ export class ReportService {
         : {}),
     };
 
-    const applications = await prisma.application.findMany({
-      where: applicationWhere,
-      select: {
-        id: true,
-        status: true,
-        isArchived: true,
-        openingId: true,
-        opening: {
-          select: {
-            id: true,
-            title: true,
-            department: true,
-            type: true,
-          },
-        },
-      },
-    });
-
-    const byStatus: Record<string, number> = {};
-    const openingMap = new Map<
-      string,
-      {
-        openingId: string;
-        title: string;
-        department: string;
-        type: string;
-        applicationCount: number;
-      }
-    >();
-    let archivedApplications = 0;
-
-    for (const app of applications) {
-      byStatus[app.status] = (byStatus[app.status] ?? 0) + 1;
-      if (app.isArchived) {
-        archivedApplications += 1;
-      }
-      const existing = openingMap.get(app.openingId);
-      if (existing) {
-        existing.applicationCount += 1;
-      } else {
-        openingMap.set(app.openingId, {
-          openingId: app.opening.id,
-          title: app.opening.title,
-          department: app.opening.department,
-          type: app.opening.type,
-          applicationCount: 1,
-        });
-      }
-    }
-
-    const recruitment: RecruitmentFunnelReport = {
-      metadata,
-      totalApplications: applications.length,
-      archivedApplications,
-      byStatus,
-      byOpening: Array.from(openingMap.values()).sort(
-        (a, b) => b.applicationCount - a.applicationCount
-      ),
-    };
-
-    // 2. Internship Lifecycle Query
     const enrollmentWhere: Prisma.InternshipEnrollmentWhereInput = {
       ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
       ...(openingId || department
@@ -281,50 +389,7 @@ export class ReportService {
         : {}),
     };
 
-    const enrollments = await prisma.internshipEnrollment.findMany({
-      where: enrollmentWhere,
-      select: {
-        id: true,
-        status: true,
-        onboarding: { select: { status: true } },
-        idCard: { select: { status: true } },
-        certificate: { select: { status: true } },
-      },
-    });
-
-    const byEvaluationStatus: Record<string, number> = {};
-    let onboardingCompletedCount = 0;
-    let idCardsIssuedCount = 0;
-    let certificatesActiveCount = 0;
-    let certificatesRevokedCount = 0;
-
-    for (const enr of enrollments) {
-      byEvaluationStatus[enr.status] = (byEvaluationStatus[enr.status] ?? 0) + 1;
-      if (enr.onboarding?.status === OnboardingStatus.COMPLETED) {
-        onboardingCompletedCount += 1;
-      }
-      if (enr.idCard?.status === IdCardStatus.ISSUED) {
-        idCardsIssuedCount += 1;
-      }
-      if (enr.certificate?.status === CertificateStatus.ACTIVE) {
-        certificatesActiveCount += 1;
-      }
-      if (enr.certificate?.status === CertificateStatus.REVOKED) {
-        certificatesRevokedCount += 1;
-      }
-    }
-
-    const internship: InternshipLifecycleReport = {
-      metadata,
-      totalEnrollments: enrollments.length,
-      byEvaluationStatus,
-      onboardingCompletedCount,
-      idCardsIssuedCount,
-      certificatesActiveCount,
-      certificatesRevokedCount,
-    };
-
-    // 3. Employee Headcount Query (Strictly excludes confidential fields)
+    // Headcount strictly excludes confidential fields: only status and department are grouped.
     const employeeWhere: Prisma.EmployeeWhereInput = {
       ...(createdAtFilter ? { joiningDate: createdAtFilter } : {}),
       ...(department
@@ -332,30 +397,111 @@ export class ReportService {
         : {}),
     };
 
-    const employees = await prisma.employee.findMany({
-      where: employeeWhere,
-      select: {
-        id: true,
-        status: true,
-        department: true,
-      },
-    });
+    const [
+      applicationStatusGroups,
+      archivedApplications,
+      applicationOpeningGroups,
+      enrollmentStatusGroups,
+      onboardingCompletedCount,
+      idCardsIssuedCount,
+      certificatesActiveCount,
+      certificatesRevokedCount,
+      employeeGroups,
+    ] = await Promise.all([
+      prisma.application.groupBy({
+        by: ["status"],
+        where: applicationWhere,
+        _count: { _all: true },
+      }),
+      prisma.application.count({ where: { ...applicationWhere, isArchived: true } }),
+      prisma.application.groupBy({
+        by: ["openingId"],
+        where: applicationWhere,
+        _count: { _all: true },
+        orderBy: { _count: { openingId: "desc" } },
+      }),
+      prisma.internshipEnrollment.groupBy({
+        by: ["status"],
+        where: enrollmentWhere,
+        _count: { _all: true },
+      }),
+      prisma.internshipEnrollment.count({
+        where: { ...enrollmentWhere, onboarding: { status: OnboardingStatus.COMPLETED } },
+      }),
+      prisma.internshipEnrollment.count({
+        where: { ...enrollmentWhere, idCard: { status: IdCardStatus.ISSUED } },
+      }),
+      prisma.internshipEnrollment.count({
+        where: { ...enrollmentWhere, certificate: { status: CertificateStatus.ACTIVE } },
+      }),
+      prisma.internshipEnrollment.count({
+        where: { ...enrollmentWhere, certificate: { status: CertificateStatus.REVOKED } },
+      }),
+      prisma.employee.groupBy({
+        by: ["status", "department"],
+        where: employeeWhere,
+        _count: { _all: true },
+      }),
+    ]);
 
+    // 1. Recruitment funnel: status counts plus the per-opening volume (title lookup by id).
+    const openingIds = applicationOpeningGroups.map((group) => group.openingId);
+    const openings =
+      openingIds.length > 0
+        ? await prisma.opening.findMany({
+            where: { id: { in: openingIds } },
+            select: { id: true, title: true, department: true, type: true },
+          })
+        : [];
+    const openingById = new Map(openings.map((opening) => [opening.id, opening]));
+
+    const byOpening = applicationOpeningGroups
+      .map((group) => {
+        const opening = openingById.get(group.openingId);
+        return {
+          openingId: group.openingId,
+          title: opening?.title ?? "Unknown opening",
+          department: opening?.department ?? "",
+          type: opening?.type ?? "",
+          applicationCount: group._count._all,
+        };
+      })
+      .sort((a, b) => b.applicationCount - a.applicationCount || a.title.localeCompare(b.title));
+
+    const recruitment: RecruitmentFunnelReport = {
+      metadata,
+      totalApplications: sumCounts(applicationStatusGroups),
+      archivedApplications,
+      byStatus: countsByKey(applicationStatusGroups),
+      byOpening,
+    };
+
+    // 2. Internship lifecycle
+    const internship: InternshipLifecycleReport = {
+      metadata,
+      totalEnrollments: sumCounts(enrollmentStatusGroups),
+      byEvaluationStatus: countsByKey(enrollmentStatusGroups),
+      onboardingCompletedCount,
+      idCardsIssuedCount,
+      certificatesActiveCount,
+      certificatesRevokedCount,
+    };
+
+    // 3. Employee headcount
     const empByStatus: Record<string, number> = {};
     const deptCounts = new Map<string, number>();
-
-    for (const emp of employees) {
-      empByStatus[emp.status] = (empByStatus[emp.status] ?? 0) + 1;
-      deptCounts.set(emp.department, (deptCounts.get(emp.department) ?? 0) + 1);
+    for (const group of employeeGroups) {
+      empByStatus[group.status] = (empByStatus[group.status] ?? 0) + group._count._all;
+      deptCounts.set(group.department, (deptCounts.get(group.department) ?? 0) + group._count._all);
     }
 
     const employeesReport: EmployeeHeadcountReport = {
       metadata,
-      totalEmployees: employees.length,
+      totalEmployees: sumCounts(employeeGroups),
       byStatus: empByStatus,
       byDepartment: Array.from(deptCounts.entries())
         .map(([dept, count]) => ({ department: dept, count }))
-        .sort((a, b) => b.count - a.count),
+        .sort((a, b) => b.count - a.count || a.department.localeCompare(b.department)),
     };
 
     return {
@@ -380,83 +526,65 @@ export class ReportService {
     const opsReport = await this.buildOperationsReport(user, rawFilters);
 
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    const days = recentDayWindows(now, CHART_DAYS);
+    const today = days[days.length - 1];
+    const months = recentMonthBuckets(now, CHART_MONTHS);
+    const monthsStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (CHART_MONTHS - 1), 1));
 
     const [
       activeOpeningsCount,
-      allAttendanceLogs,
+      attendanceStatusGroups,
+      presentByDay,
       pendingRegCount,
-      allLeaves,
-      latestPayrollPeriod,
-      allEmployees,
+      leaveStatusGroups,
+      leaveTypeGroups,
+      leaveByDay,
+      workforceStatusGroups,
+      internCount,
       visitorCount,
-      allApplications,
-      allPayrollPeriods,
+      monthlyRows,
+      payrollSnapshot,
+      payoutFlags,
     ] = await Promise.all([
       prisma.opening.count({ where: { status: "PUBLISHED" } }),
-      prisma.attendanceRecord
-        .findMany({
-          select: { status: true, date: true },
-        }),
+      prisma.attendanceRecord.groupBy({ by: ["status"], _count: { _all: true } }),
+      prisma.attendanceRecord.groupBy({
+        by: ["date"],
+        where: { status: "PRESENT", date: { gte: days[0].start, lte: today.end } },
+        _count: { _all: true },
+      }),
       prisma.attendanceRegularization.count({ where: { status: "PENDING" } }),
-      prisma.leaveRequest
-        .findMany({
-          select: {
-            status: true,
-            startDate: true,
-            endDate: true,
-            leaveType: { select: { name: true } },
-          },
-        }),
-      canPayroll
-        ? prisma.payrollPeriod
-            .findFirst({
-              orderBy: { startDate: "desc" },
-              include: {
-                records: {
-                  select: {
-                    status: true,
-                    disbursedAmount: true,
-                  },
-                },
-              },
-            })
-        : Promise.resolve(null),
-      prisma.employee
-        .findMany({
-          select: {
-            designation: true,
-            department: true,
-            // Payout profiles live in internalNotes; only read them for payroll viewers.
-            internalNotes: canPayroll,
-            status: true,
-          },
-        }),
+      prisma.leaveRequest.groupBy({ by: ["status"], _count: { _all: true } }),
+      prisma.leaveRequest.groupBy({
+        by: ["leaveTypeId"],
+        _count: { _all: true },
+        orderBy: { _count: { leaveTypeId: "desc" } },
+      }),
+      this.loadApprovedLeaveByDay(days),
+      prisma.employee.groupBy({ by: ["status"], _count: { _all: true } }),
+      prisma.employee.count({ where: INTERN_EMPLOYEE_WHERE }),
       prisma.siteVisitor.count(),
-      prisma.application
-        .findMany({
-          select: {
-            createdAt: true,
-            status: true,
-          },
-        }),
-      canPayroll
-        ? prisma.payrollPeriod
-            .findMany({
-              orderBy: { startDate: "desc" },
-              take: 5,
-              include: {
-                records: {
-                  select: {
-                    status: true,
-                    disbursedAmount: true,
-                  },
-                },
-              },
-            })
-        : Promise.resolve([]),
+      prisma.$queryRaw<MonthlyApplicationRow[]>`
+        SELECT to_char(date_trunc('month', a."createdAt"), 'YYYY-MM') AS "month",
+               COUNT(*)::int AS "applications",
+               (COUNT(*) FILTER (WHERE a."status"::text IN (${Prisma.join(INTERVIEW_STAGE_STATUSES)})))::int AS "interviews",
+               (COUNT(*) FILTER (WHERE a."status"::text = 'HIRED'))::int AS "hired"
+        FROM "applications" a
+        WHERE a."createdAt" >= ${toUtcTimestampLiteral(monthsStart)}::timestamp
+        GROUP BY 1`,
+      canPayroll ? this.loadPayrollSnapshot() : Promise.resolve(null),
+      canPayroll ? this.countRecordedPayoutFlags() : Promise.resolve(null),
     ]);
+
+    const leaveTypeIds = leaveTypeGroups.map((group) => group.leaveTypeId);
+    const leaveTypes =
+      leaveTypeIds.length > 0
+        ? await prisma.leaveType.findMany({
+            where: { id: { in: leaveTypeIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+    const leaveTypeNameById = new Map(leaveTypes.map((type) => [type.id, type.name]));
 
     // 1. Funnel Stages Breakdown
     const byStatus = opsReport.recruitment.byStatus;
@@ -513,94 +641,76 @@ export class ReportService {
       },
     ];
 
-    // 2. Attendance Stats
-    const attByStatus: Record<string, number> = {};
-    let todayPresent = 0;
-    for (const att of allAttendanceLogs) {
-      attByStatus[att.status] = (attByStatus[att.status] || 0) + 1;
-      const attDate = new Date(att.date);
-      if (attDate >= todayStart && attDate <= todayEnd && att.status === "PRESENT") {
-        todayPresent++;
-      }
-    }
+    // 2. Attendance and leave per day (the last window is today)
+    const onLeaveByIndex = new Map(leaveByDay.map((row) => [row.idx, row.onLeave]));
+    const dailyFigures = days.map((window, index) => ({
+      window,
+      present: presentByDay
+        .filter((row) => row.date >= window.start && row.date <= window.end)
+        .reduce((sum, row) => sum + row._count._all, 0),
+      onLeave: onLeaveByIndex.get(index) ?? 0,
+    }));
+    const todayFigures = dailyFigures[dailyFigures.length - 1];
+    const todayPresent = todayFigures.present;
+    const todayOnLeave = todayFigures.onLeave;
 
     const attendance: AttendanceAnalytics = {
-      totalLogs: allAttendanceLogs.length,
-      byStatus: attByStatus,
+      totalLogs: sumCounts(attendanceStatusGroups),
+      byStatus: countsByKey(attendanceStatusGroups),
       pendingRegularizations: pendingRegCount,
     };
 
     // 3. Leave Stats
-    let todayOnLeave = 0;
-    let pendingLeaves = 0;
-    let approvedLeaves = 0;
-    let rejectedLeaves = 0;
-    const leaveCategoryCounts: Record<string, number> = {};
-
-    for (const lv of allLeaves) {
-      if (lv.status === "PENDING") pendingLeaves++;
-      if (lv.status === "APPROVED") approvedLeaves++;
-      if (lv.status === "REJECTED") rejectedLeaves++;
-
-      const s = new Date(lv.startDate);
-      const e = new Date(lv.endDate);
-      if (lv.status === "APPROVED" && s <= todayEnd && e >= todayStart) {
-        todayOnLeave++;
-      }
-
-      const catName = lv.leaveType?.name || "Other";
-      leaveCategoryCounts[catName] = (leaveCategoryCounts[catName] || 0) + 1;
+    const leaveCounts = countsByKey(leaveStatusGroups);
+    const pendingLeaves = leaveCounts["PENDING"] ?? 0;
+    const leaveCategoryCounts = new Map<string, number>();
+    for (const group of leaveTypeGroups) {
+      const catName = leaveTypeNameById.get(group.leaveTypeId) || "Other";
+      leaveCategoryCounts.set(catName, (leaveCategoryCounts.get(catName) ?? 0) + group._count._all);
     }
 
     const leaves: LeaveAnalytics = {
-      totalRequests: allLeaves.length,
+      totalRequests: sumCounts(leaveStatusGroups),
       pendingCount: pendingLeaves,
-      approvedCount: approvedLeaves,
-      rejectedCount: rejectedLeaves,
-      byCategory: Object.entries(leaveCategoryCounts).map(([category, count]) => ({
-        category,
-        count,
-      })),
+      approvedCount: leaveCounts["APPROVED"] ?? 0,
+      rejectedCount: leaveCounts["REJECTED"] ?? 0,
+      byCategory: Array.from(leaveCategoryCounts.entries())
+        .map(([category, count]) => ({ category, count }))
+        .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category)),
     };
 
     // 4. Workforce composition and (permission-gated) payroll analytics
-    let paidWorkforceCount = 0;
-    let unpaidWorkforceCount = 0;
-    let payoutNotConfiguredCount = 0;
-    let fullTimeCount = 0;
-    let internCount = 0;
+    const workforceCounts = countsByKey(workforceStatusGroups);
+    const workforceTotal = sumCounts(workforceStatusGroups);
+    const fullTimeCount = Math.max(workforceTotal - internCount, 0);
 
-    for (const emp of allEmployees) {
-      const isIntern =
-        emp.designation.toLowerCase().includes("intern") ||
-        emp.department.toLowerCase().includes("intern");
-      if (isIntern) internCount++;
-      else fullTimeCount++;
-
-      if (canPayroll) {
-        // Only explicit, staff-recorded payout flags are counted; nothing is assumed.
-        const { isPaid } = readRecordedPayoutProfile(emp.internalNotes);
-        if (isPaid === true) paidWorkforceCount++;
-        else if (isPaid === false) unpaidWorkforceCount++;
-        else payoutNotConfiguredCount++;
-      }
-    }
-
-    const latestSummary = summarisePaidRecords(latestPayrollPeriod?.records ?? []);
-    const totalEnrolled = latestPayrollPeriod?.records.length ?? 0;
+    const latestPeriod = payrollSnapshot?.periods[0] ?? null;
+    const latestSummary: PayrollCycleSummary = (latestPeriod &&
+      payrollSnapshot?.summaries.get(latestPeriod.id)) || {
+      totalEnrolled: 0,
+      paid: 0,
+      unpaid: 0,
+      disbursed: 0,
+      paidWithoutRecordedAmount: 0,
+    };
+    const totalEnrolled = latestSummary.totalEnrolled;
 
     const payroll: PayrollAnalytics | null = canPayroll
       ? {
-          activeCycleCode: latestPayrollPeriod?.code ?? null,
-          cycleStatus: latestPayrollPeriod?.status ?? null,
+          activeCycleCode: latestPeriod?.code ?? null,
+          cycleStatus: latestPeriod?.status ?? null,
           totalEnrolled,
           paidCount: latestSummary.paid,
           pendingCount: latestSummary.unpaid,
           disbursedAmount: latestSummary.disbursed,
           paidWithoutRecordedAmount: latestSummary.paidWithoutRecordedAmount,
-          paidWorkforce: paidWorkforceCount,
-          unpaidWorkforce: unpaidWorkforceCount,
-          payoutNotConfigured: payoutNotConfiguredCount,
+          // Only explicit, staff-recorded payout flags are counted; nothing is assumed.
+          paidWorkforce: payoutFlags?.paid ?? 0,
+          unpaidWorkforce: payoutFlags?.unpaid ?? 0,
+          payoutNotConfigured: Math.max(
+            workforceTotal - (payoutFlags?.paid ?? 0) - (payoutFlags?.unpaid ?? 0),
+            0
+          ),
         }
       : null;
 
@@ -614,15 +724,13 @@ export class ReportService {
     };
 
     // 6. KPIs
-    const activeStaff =
-      opsReport.employees.byStatus["ACTIVE"] ||
-      allEmployees.filter((e) => e.status === "ACTIVE").length;
+    const activeStaff = opsReport.employees.byStatus["ACTIVE"] || (workforceCounts["ACTIVE"] ?? 0);
 
     const kpis: ExecutiveKpiSummary = {
       totalApplications: totalApps,
       totalHired: hired,
       activeOpenings: activeOpeningsCount,
-      totalEmployees: opsReport.employees.totalEmployees || allEmployees.length,
+      totalEmployees: opsReport.employees.totalEmployees || workforceTotal,
       activeEmployees: activeStaff,
       fullTimeCount,
       internCount,
@@ -642,63 +750,25 @@ export class ReportService {
     };
 
     // 7. Time-Series and Chart Datasets
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const chartNow = new Date();
-    const pastMonths: { year: number; monthIdx: number; label: string; month: string }[] = [];
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(chartNow.getFullYear(), chartNow.getMonth() - i, 1);
-      pastMonths.push({
-        year: d.getFullYear(),
-        monthIdx: d.getMonth(),
-        month: monthNames[d.getMonth()],
-        label: `${monthNames[d.getMonth()]} ${d.getFullYear()}`,
-      });
-    }
-
-    const monthlyRecruitmentTrends: MonthlyRecruitmentTrend[] = pastMonths.map((m) => {
-      let apps = 0;
-      let interviews = 0;
-      let hiredCount = 0;
-
-      for (const app of allApplications) {
-        const appDate = new Date(app.createdAt);
-        if (appDate.getFullYear() === m.year && appDate.getMonth() === m.monthIdx) {
-          apps++;
-          if (app.status.includes("INTERVIEW") || app.status === "EVALUATION_SELECTED") {
-            interviews++;
-          }
-          if (app.status === "HIRED") {
-            hiredCount++;
-          }
-        }
-      }
-
+    const monthlyByKey = new Map(monthlyRows.map((row) => [row.month, row]));
+    const monthlyRecruitmentTrends: MonthlyRecruitmentTrend[] = months.map((bucket) => {
+      const row = monthlyByKey.get(bucket.key);
       return {
-        month: m.month,
-        year: m.year,
-        label: m.label,
-        applications: apps,
-        interviews,
-        hired: hiredCount,
+        month: bucket.month,
+        year: bucket.year,
+        label: bucket.label,
+        applications: row?.applications ?? 0,
+        interviews: row?.interviews ?? 0,
+        hired: row?.hired ?? 0,
       };
     });
 
-    const deptColors = [
-      "#3b82f6",
-      "#8b5cf6",
-      "#10b981",
-      "#f59e0b",
-      "#06b6d4",
-      "#ec4899",
-      "#6366f1",
-      "#14b8a6",
-    ];
-    const totalEmps = opsReport.employees.totalEmployees || allEmployees.length;
+    const totalEmps = opsReport.employees.totalEmployees || workforceTotal;
     const departmentDistribution: DepartmentChartData[] = opsReport.employees.byDepartment.map((d, idx) => ({
       department: d.department,
       count: d.count,
       percentage: totalEmps > 0 ? Math.round((d.count / totalEmps) * 100) : 0,
-      color: deptColors[idx % deptColors.length],
+      color: DEPARTMENT_COLORS[idx % DEPARTMENT_COLORS.length],
     }));
 
     const employmentTypeDistribution = [
@@ -716,58 +786,26 @@ export class ReportService {
       },
     ];
 
-    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const attendanceDailyTrends: AttendanceDailyTrend[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const targetDate = new Date();
-      targetDate.setDate(targetDate.getDate() - i);
-      const dayStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0);
-      const dayEnd = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
-
-      let presentCount = 0;
-      for (const log of allAttendanceLogs) {
-        const lDate = new Date(log.date);
-        if (lDate >= dayStart && lDate <= dayEnd && log.status === "PRESENT") {
-          presentCount++;
-        }
-      }
-
-      let leaveCount = 0;
-      for (const lv of allLeaves) {
-        if (lv.status === "APPROVED") {
-          const s = new Date(lv.startDate);
-          const e = new Date(lv.endDate);
-          if (s <= dayEnd && e >= dayStart) {
-            leaveCount++;
-          }
-        }
-      }
-
-      const activeTotal = activeStaff || 1;
-      const attRate = Math.min(100, Math.round((presentCount / activeTotal) * 100));
-
-      attendanceDailyTrends.push({
-        day: dayNames[targetDate.getDay()],
-        dateStr: `${monthNames[targetDate.getMonth()]} ${targetDate.getDate()}`,
-        present: presentCount,
-        onLeave: leaveCount,
-        attendanceRate: attRate,
-      });
-    }
+    const activeTotal = activeStaff || 1;
+    const attendanceDailyTrends: AttendanceDailyTrend[] = dailyFigures.map(({ window, present, onLeave }) => ({
+      day: window.day,
+      dateStr: window.dateStr,
+      present,
+      onLeave,
+      attendanceRate: Math.min(100, Math.round((present / activeTotal) * 100)),
+    }));
 
     // Only real payroll periods are charted; with no periods the chart is empty.
-    const payrollCycleTrends: PayrollCycleTrend[] = allPayrollPeriods
-      .slice(0, 5)
-      .map((p) => {
-        const summary = summarisePaidRecords(p.records);
-        return {
-          cycle: p.code,
-          disbursedAmount: summary.disbursed,
-          paidCount: summary.paid,
-          unpaidCount: summary.unpaid,
-          paidWithoutRecordedAmount: summary.paidWithoutRecordedAmount,
-        };
-      });
+    const payrollCycleTrends: PayrollCycleTrend[] = (payrollSnapshot?.periods ?? []).map((period) => {
+      const summary = payrollSnapshot?.summaries.get(period.id);
+      return {
+        cycle: period.code,
+        disbursedAmount: summary?.disbursed ?? 0,
+        paidCount: summary?.paid ?? 0,
+        unpaidCount: summary?.unpaid ?? 0,
+        paidWithoutRecordedAmount: summary?.paidWithoutRecordedAmount ?? 0,
+      };
+    });
 
     const charts: AnalyticsChartsData = {
       monthlyRecruitmentTrends,
@@ -793,9 +831,98 @@ export class ReportService {
   }
 
   /**
+   * Approved leave requests overlapping each day window, counted in PostgreSQL. The day
+   * boundaries are bound parameters; the result has one row per window.
+   */
+  private loadApprovedLeaveByDay(days: ReadonlyArray<DayWindow>): Prisma.PrismaPromise<DailyLeaveRow[]> {
+    const dayRows = Prisma.join(
+      days.map(
+        (day, index) =>
+          Prisma.sql`(${index}::int, ${toUtcTimestampLiteral(day.start)}::timestamp, ${toUtcTimestampLiteral(day.end)}::timestamp)`
+      )
+    );
+    return prisma.$queryRaw<DailyLeaveRow[]>`
+      SELECT d."idx" AS "idx", COUNT(l."id")::int AS "onLeave"
+      FROM (VALUES ${dayRows}) AS d("idx", "dayStart", "dayEnd")
+      LEFT JOIN "leave_requests" l
+        ON l."status"::text = 'APPROVED'
+       AND l."startDate" <= d."dayEnd"
+       AND l."endDate" >= d."dayStart"
+      GROUP BY d."idx"
+      ORDER BY d."idx"`;
+  }
+
+  /**
+   * The most recent payroll periods with their record totals grouped by status. Only
+   * called for `canPayroll` viewers; the first period is the current cycle.
+   */
+  private async loadPayrollSnapshot(): Promise<PayrollSnapshot> {
+    const periods = await prisma.payrollPeriod.findMany({
+      orderBy: { startDate: "desc" },
+      take: RECENT_PAYROLL_CYCLES,
+      select: { id: true, code: true, status: true },
+    });
+    if (periods.length === 0) {
+      return { periods: [], summaries: new Map() };
+    }
+
+    const periodIds = periods.map((period) => period.id);
+    const [statusGroups, missingAmountGroups] = await Promise.all([
+      prisma.payrollRecord.groupBy({
+        by: ["payrollPeriodId", "status"],
+        where: { payrollPeriodId: { in: periodIds } },
+        _count: { _all: true },
+        _sum: { disbursedAmount: true },
+      }),
+      prisma.payrollRecord.groupBy({
+        by: ["payrollPeriodId"],
+        where: { payrollPeriodId: { in: periodIds }, status: "PAID", disbursedAmount: null },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const summaries = new Map<string, PayrollCycleSummary>();
+    for (const period of periods) {
+      summaries.set(period.id, summarisePayrollGroups(period.id, statusGroups, missingAmountGroups));
+    }
+    return { periods, summaries };
+  }
+
+  /**
+   * Counts employees whose recorded payout profile says paid / unpaid. The profile is a
+   * JSON block inside `internalNotes` (OD-008), so only rows carrying the marker are read,
+   * in fixed-size pages and with no other column. Only called for `canPayroll` viewers.
+   */
+  private async countRecordedPayoutFlags(): Promise<{ paid: number; unpaid: number }> {
+    const totals = { paid: 0, unpaid: 0 };
+    let cursor: string | null = null;
+    for (let page = 0; page < MAX_PAYOUT_PROFILE_PAGES; page++) {
+      const rows: Array<{ id: string; internalNotes: string | null }> = await prisma.employee.findMany({
+        where: { internalNotes: { contains: PAYROLL_PROFILE_MARKER } },
+        select: { id: true, internalNotes: true },
+        orderBy: { id: "asc" },
+        take: PAYOUT_PROFILE_PAGE_SIZE,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      for (const row of rows) {
+        const { isPaid } = readRecordedPayoutProfile(row.internalNotes);
+        if (isPaid === true) totals.paid++;
+        else if (isPaid === false) totals.unpaid++;
+      }
+      if (rows.length < PAYOUT_PROFILE_PAGE_SIZE) {
+        return totals;
+      }
+      cursor = rows[rows.length - 1].id;
+    }
+    // Never report a partial count as the real figure.
+    throw new Error("Payout profile scan exceeded the maximum number of pages.");
+  }
+
+  /**
    * Generates a sanitized CSV export for the requested report type and records
    * an immutable AuditLog entry (`EXPORT_REPORT`).
    * Strictly omits private fields (personalPhone, emergencyContact, internalNotes, resumeStorageKey, etc.).
+   * At most `MAX_EXPORT_ROWS` rows are exported; the result says when the limit was hit.
    */
   public async exportReportCsv(
     user: AuthenticatedUser,
@@ -826,6 +953,9 @@ export class ReportService {
             ...(end ? { lte: end } : {}),
           }
         : undefined;
+
+    // One row more than the limit tells us whether the export was cut off.
+    const exportTake = MAX_EXPORT_ROWS + 1;
 
     let headers: string[] = [];
     let rows: string[][] = [];
@@ -867,6 +997,7 @@ export class ReportService {
           },
         },
         orderBy: { createdAt: "desc" },
+        take: exportTake,
       });
 
       headers = [
@@ -936,6 +1067,7 @@ export class ReportService {
           certificate: { select: { status: true } },
         },
         orderBy: { createdAt: "desc" },
+        take: exportTake,
       });
 
       headers = [
@@ -991,6 +1123,7 @@ export class ReportService {
           },
         },
         orderBy: { employeeCode: "asc" },
+        take: exportTake,
       });
 
       headers = [
@@ -1012,6 +1145,11 @@ export class ReportService {
         escapeCsvCell(emp.joiningDate.toISOString().slice(0, 10)),
         escapeCsvCell(emp.manager?.user.name ?? ""),
       ]);
+    }
+
+    const truncated = rows.length > MAX_EXPORT_ROWS;
+    if (truncated) {
+      rows = rows.slice(0, MAX_EXPORT_ROWS);
     }
 
     const csvLines = [
@@ -1039,6 +1177,7 @@ export class ReportService {
         diffPayload: {
           reportType,
           rowCount: rows.length,
+          truncated,
           filters: appliedFilters,
         },
       },
@@ -1050,6 +1189,7 @@ export class ReportService {
       fileName: `gara-${reportType.toLowerCase().replace(/_/g, "-")}-${dateStamp}.csv`,
       csvContent,
       rowCount: rows.length,
+      truncated,
       generatedAt,
       appliedFilters,
     };

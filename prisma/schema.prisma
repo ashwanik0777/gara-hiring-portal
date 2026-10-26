@@ -55,6 +55,8 @@ model User {
   conversionReviewsConducted   ConversionReview[]         @relation("ConversionReviewers")
   interviewBookingRequests     InterviewBookingRequest[]  @relation("InterviewBookingInterviewer")
 
+  @@index([createdAt])
+
   @@map("users")
 }
 
@@ -141,6 +143,7 @@ model UserRole {
   assignedBy String?
 
   @@unique([userId, role])
+  @@index([role])
   @@map("user_roles")
 }
 
@@ -256,6 +259,7 @@ model Employee {
   @@index([managerId])
   @@index([department])
   @@index([status])
+  @@index([status, department])
   @@map("employees")
 }
 
@@ -343,6 +347,8 @@ model Opening {
   formVersions        OpeningFormVersion[]
   applications        Application[]
 
+  @@index([status])
+
   @@map("openings")
 }
 
@@ -421,6 +427,8 @@ model Application {
   @@index([status])
   @@index([createdAt])
   @@index([assignedRecruiterId])
+  @@index([isArchived, createdAt])
+  @@index([isArchived, status, createdAt])
   @@map("applications")
 }
 
@@ -485,6 +493,8 @@ model InterviewSchedule {
   @@index([applicationId])
   @@index([interviewerId])
   @@index([status, scheduledAt])
+  @@index([scheduledAt])
+  @@index([interviewerId, scheduledAt])
   @@map("interview_schedules")
 }
 
@@ -499,6 +509,8 @@ model InterviewFeedback {
   summaryNotes    String                  // Confidential internal evaluation notes
   submittedAt     DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
+
+  @@index([interviewerId, recommendation])
 
   @@map("interview_feedbacks")
 }
@@ -567,6 +579,7 @@ model InternshipEnrollment {
   @@index([userId])
   @@index([supervisorId])
   @@index([status])
+  @@index([supervisorId, status])
   @@map("internship_enrollments")
 }
 
@@ -859,6 +872,7 @@ model EmploymentHistory {
   createdAt     DateTime  @default(now())
 
   @@index([employeeId])
+  @@index([employeeId, effectiveDate])
   @@map("employment_histories")
 }
 
@@ -877,6 +891,7 @@ model EmployeeDocument {
   uploadedAt     DateTime  @default(now())
 
   @@index([employeeId])
+  @@index([employeeId, uploadedAt])
   @@map("employee_documents")
 }
 
@@ -1006,6 +1021,7 @@ model ConversionReview {
 
   @@index([status, scheduledFor])
   @@index([employeeId])
+  @@index([status, decidedAt])
   @@map("conversion_reviews")
 }
 
@@ -1046,6 +1062,8 @@ model AttendanceRecord {
   @@unique([employeeId, date])
   @@index([employeeId])
   @@index([date])
+  @@index([status, date])
+  @@index([date, status])
   @@map("attendance_records")
 }
 
@@ -1122,6 +1140,8 @@ model LeaveRequest {
   @@index([employeeId])
   @@index([leaveTypeId])
   @@index([status, startDate])
+  @@index([createdAt])
+  @@index([employeeId, createdAt])
   @@map("leave_requests")
 }
 
@@ -1144,6 +1164,8 @@ model PayrollPeriod {
   updatedAt DateTime        @updatedAt
 
   records   PayrollRecord[]
+
+  @@index([startDate])
 
   @@map("payroll_periods")
 }
@@ -1168,6 +1190,7 @@ model PayrollRecord {
   @@unique([payrollPeriodId, employeeId])
   @@index([employeeId])
   @@index([payrollPeriodId])
+  @@index([payrollPeriodId, status])
   @@map("payroll_records")
 }
 

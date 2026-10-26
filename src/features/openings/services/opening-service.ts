@@ -1,3 +1,4 @@
+import { cacheLife, cacheTag } from "next/cache";
 import { prisma } from "@/lib/db";
 import {
   OpeningStatus,
@@ -51,8 +52,56 @@ function isUniqueConstraintViolation(error: unknown): boolean {
   );
 }
 
+// -----------------------------------------------------------------------------
+// Public reads (served through "use cache")
+// -----------------------------------------------------------------------------
+
 /**
- * Public Query: Lists all currently published openings.
+ * Cache tags of the public opening reads. Every entry carries the list tag; a single
+ * opening also carries a slug tag and an id tag, so the Server Actions can expire the right
+ * entries whether they know the slug (status changes) or only the id (form publishing).
+ * These functions never read headers, cookies or the session: they are shared by everyone.
+ */
+export const PUBLIC_OPENINGS_TAG = "openings:public";
+
+export function publicOpeningSlugTag(slug: string): string {
+  return `opening:slug:${slug}`;
+}
+
+export function publicOpeningIdTag(id: string): string {
+  return `opening:id:${id}`;
+}
+
+/**
+ * Openings change rarely and every change expires the tags, so time-based revalidation is
+ * only a safety net: refresh in the background every 5 minutes, serve a stale entry for up
+ * to a day when nothing has asked for it, and let the client router reuse it for 5 minutes.
+ */
+const PUBLIC_OPENING_CACHE_LIFE = { stale: 300, revalidate: 300, expire: 86_400 } as const;
+
+/** A missing or unpublished slug is cached briefly; publishing expires it immediately. */
+const MISSING_OPENING_CACHE_LIFE = { stale: 60, revalidate: 60, expire: 600 } as const;
+
+/** Columns the careers pages, the apply page, the metadata and the JobPosting JSON-LD render. */
+const publicOpeningSelect = {
+  id: true,
+  title: true,
+  slug: true,
+  department: true,
+  type: true,
+  location: true,
+  workplaceType: true,
+  description: true,
+  requirements: true,
+  responsibilities: true,
+  status: true,
+  activeFormVersionId: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.OpeningSelect;
+
+/**
+ * Public Query (cached): Lists all currently published openings.
  * Draft, paused, and closed vacancies are strictly hidden from candidate queries.
  */
 export async function getPublicOpenings(filters?: {
@@ -61,6 +110,10 @@ export async function getPublicOpenings(filters?: {
   workplaceType?: WorkplaceType;
   search?: string;
 }) {
+  "use cache";
+  cacheTag(PUBLIC_OPENINGS_TAG);
+  cacheLife(PUBLIC_OPENING_CACHE_LIFE);
+
   const where: Record<string, unknown> = {
     status: OpeningStatus.PUBLISHED,
   };
@@ -104,28 +157,56 @@ export async function getPublicOpenings(filters?: {
 }
 
 /**
- * Public Query: Fetches a single published opening by slug with its active form version.
+ * Public Query (cached): slugs and update times of the PUBLISHED openings for sitemap.xml.
+ * Shares the list tag, so publishing or closing an opening refreshes the sitemap as well.
  */
-export async function getPublicOpeningBySlug(slug: string) {
+export async function listPublishedOpeningSlugs(limit: number) {
+  "use cache";
+  cacheTag(PUBLIC_OPENINGS_TAG);
+  cacheLife(PUBLIC_OPENING_CACHE_LIFE);
+
+  return prisma.opening.findMany({
+    where: { status: OpeningStatus.PUBLISHED },
+    select: { slug: true, updatedAt: true },
+    orderBy: { updatedAt: "desc" },
+    take: limit,
+  });
+}
+
+/**
+ * Cached read behind getPublicOpeningBySlug. It returns null instead of throwing so a miss
+ * is cached (briefly) and tagged with the slug too; the caller turns null into NotFoundError.
+ */
+async function loadPublicOpeningBySlug(slug: string) {
+  "use cache";
+  cacheTag(PUBLIC_OPENINGS_TAG, publicOpeningSlugTag(slug));
+
   const opening = await prisma.opening.findUnique({
     where: { slug },
-    include: {
+    select: {
+      ...publicOpeningSelect,
       formVersions: {
         where: { isPublished: true },
         orderBy: { versionNumber: "desc" },
         take: 1,
+        select: { id: true, versionNumber: true, schemaDefinition: true },
       },
     },
   });
 
   if (!opening || opening.status !== OpeningStatus.PUBLISHED) {
-    throw new NotFoundError(`Opening with slug "${slug}" was not found or is no longer accepting applications.`);
+    cacheLife(MISSING_OPENING_CACHE_LIFE);
+    return null;
   }
 
-  const activeForm = opening.formVersions[0] ?? null;
+  cacheTag(publicOpeningIdTag(opening.id));
+  cacheLife(PUBLIC_OPENING_CACHE_LIFE);
+
+  const { formVersions, ...publicOpening } = opening;
+  const activeForm = formVersions[0] ?? null;
 
   return {
-    ...opening,
+    ...publicOpening,
     activeForm: activeForm
       ? {
           id: activeForm.id,
@@ -135,6 +216,23 @@ export async function getPublicOpeningBySlug(slug: string) {
       : null,
   };
 }
+
+/**
+ * Public Query (cached): Fetches a single published opening by slug with its active form version.
+ */
+export async function getPublicOpeningBySlug(slug: string) {
+  const opening = await loadPublicOpeningBySlug(slug);
+  if (!opening) {
+    throw new NotFoundError(`Opening with slug "${slug}" was not found or is no longer accepting applications.`);
+  }
+  return opening;
+}
+
+export type PublicOpening = Awaited<ReturnType<typeof getPublicOpeningBySlug>>;
+
+// -----------------------------------------------------------------------------
+// Staff reads and mutations (never cached)
+// -----------------------------------------------------------------------------
 
 /**
  * Administrative Query: Lists all openings across all lifecycle statuses.

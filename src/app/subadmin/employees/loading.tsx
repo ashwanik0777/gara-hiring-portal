@@ -1,5 +1,5 @@
-import { ListPageSkeleton } from "@/components/feedback/page-skeletons";
+import { EmployeeDirectorySkeleton } from "@/features/employees/components/employee-directory-section";
 
 export default function Loading() {
-  return <ListPageSkeleton label="Loading employees" />;
+  return <EmployeeDirectorySkeleton label="Loading employees" />;
 }

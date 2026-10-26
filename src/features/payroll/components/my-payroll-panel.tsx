@@ -2,6 +2,7 @@ import React from "react";
 import { CreditCard, Building } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { PaginationNav } from "@/components/ui/pagination-nav";
 import type { MyPayrollOverview } from "../types";
 
 const NOT_CONFIGURED = "Not configured";
@@ -29,7 +30,14 @@ function formatAmount(amount: number | null): string {
  * Read-only self-service payroll view. Receives only the signed-in employee's own
  * records with account number and PAN already masked on the server.
  */
-export function MyPayrollPanel({ overview }: { overview: MyPayrollOverview }) {
+export function MyPayrollPanel({
+  overview,
+  basePath,
+}: {
+  overview: MyPayrollOverview;
+  /** Route of the page, used for the record pagination links. */
+  basePath: string;
+}) {
   if (!overview.employee) {
     return (
       <Card className="rounded-2xl border border-border/80 p-6 text-center">
@@ -42,7 +50,7 @@ export function MyPayrollPanel({ overview }: { overview: MyPayrollOverview }) {
     );
   }
 
-  const { employee, payout, records } = overview;
+  const { employee, payout, records, page } = overview;
   const payoutStatus =
     payout?.isPaid === true ? "Paid" : payout?.isPaid === false ? "Unpaid" : NOT_CONFIGURED;
 
@@ -109,7 +117,8 @@ export function MyPayrollPanel({ overview }: { overview: MyPayrollOverview }) {
               No payroll records have been recorded for you yet.
             </p>
           ) : (
-            <table className="w-full text-left text-xs">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-left text-xs">
               <thead>
                 <tr className="border-b border-border/80 bg-muted/40 text-muted-foreground">
                   <th scope="col" className="py-2.5 px-4">Cycle</th>
@@ -135,9 +144,19 @@ export function MyPayrollPanel({ overview }: { overview: MyPayrollOverview }) {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </CardContent>
       </Card>
+
+      <PaginationNav
+        page={page.page}
+        pageCount={page.pageCount}
+        total={page.total}
+        hrefFor={(target) => (target > 1 ? `${basePath}?page=${target}` : basePath)}
+        label="Payroll record pages"
+        itemLabel="records"
+      />
     </div>
   );
 }

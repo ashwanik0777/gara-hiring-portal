@@ -53,6 +53,29 @@ export interface ProgressReportItem {
   reviewedAt?: Date | null;
 }
 
+/** 1-based page and rows per page (bounded by the service). */
+export interface ListPageQuery {
+  page?: number;
+  pageSize?: number;
+}
+
+export interface InternTaskPage {
+  items: InternTaskDetail[];
+  /** Tasks of the enrollment across all pages. */
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
+export interface ProgressReportPage {
+  items: ProgressReportItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
 export interface CreateTaskInput {
   enrollmentId: string;
   title: string;

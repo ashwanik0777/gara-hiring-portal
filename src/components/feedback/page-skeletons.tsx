@@ -523,3 +523,264 @@ export function AuthScreenSkeleton({ label = "Loading sign in" }: { label?: stri
     </SkeletonRegion>
   );
 }
+
+// -----------------------------------------------------------------------------
+// Public site: careers, help centre, certificate verification, auth cards
+// -----------------------------------------------------------------------------
+
+/** Careers index: navbar, centred heading and the openings grid. */
+export function CareersPageSkeleton({ label = "Loading openings" }: { label?: string }) {
+  return (
+    <SkeletonRegion label={label} className="flex min-h-screen flex-col bg-background">
+      <NavbarSkeleton />
+      <div className="mx-auto w-full max-w-7xl flex-1 px-4 py-12 sm:px-6 md:py-16 lg:px-8">
+        <div className="mx-auto mb-12 max-w-6xl space-y-3 text-center">
+          <Skeleton className="mx-auto h-10 w-full max-w-2xl" />
+        </div>
+        <CardGridSkeleton />
+      </div>
+    </SkeletonRegion>
+  );
+}
+
+/** Body of the opening detail page: badges, title, apply button and the content sections. */
+function OpeningDetailBodySkeleton() {
+  return (
+    <>
+      <div className="mb-8 space-y-4 border-b border-border/70 pb-8">
+        <div className="flex flex-wrap items-center gap-2">
+          <Skeleton className="h-5 w-28 rounded-full" />
+          <Skeleton className="h-5 w-20 rounded-full" />
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-28" />
+        </div>
+        <Skeleton className="h-9 w-4/5 max-w-xl" />
+        <div className="pt-2">
+          <Skeleton className="h-11 w-44 rounded-xl" />
+        </div>
+      </div>
+      <div className="space-y-10">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="space-y-3">
+            <Skeleton className="h-6 w-48" />
+            <SkeletonCard className="space-y-3 rounded-xl p-6">
+              {[100, 92, 96, 70].map((w, line) => (
+                <Skeleton key={line} className="h-3.5" style={{ width: `${w}%` }} />
+              ))}
+            </SkeletonCard>
+          </div>
+        ))}
+        <div className="flex items-center justify-between gap-4 border-t border-border/60 pt-6">
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-3 w-56 max-w-full" />
+          </div>
+          <Skeleton className="h-10 w-28 rounded-xl" />
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Opening detail page. With `withNavbar` it mirrors the whole route (loading.tsx); without
+ * it, only the streamed detail below the back link (in-page Suspense fallback).
+ */
+export function OpeningDetailSkeleton({
+  label = "Loading opening",
+  withNavbar = false,
+}: {
+  label?: string;
+  withNavbar?: boolean;
+}) {
+  if (!withNavbar) {
+    return (
+      <SkeletonRegion label={label}>
+        <OpeningDetailBodySkeleton />
+      </SkeletonRegion>
+    );
+  }
+  return (
+    <SkeletonRegion label={label} className="flex min-h-screen flex-col bg-background">
+      <NavbarSkeleton />
+      <div className="mx-auto w-full max-w-4xl flex-1 px-4 py-10 sm:px-6 md:py-14 lg:px-8">
+        <Skeleton className="mb-6 h-4 w-40" />
+        <OpeningDetailBodySkeleton />
+      </div>
+    </SkeletonRegion>
+  );
+}
+
+/** Embedded portal assistant panel (600px like the widget): header, messages and composer. */
+export function ChatPanelSkeleton({ label }: { label?: string }) {
+  const panel = (
+    <div className="flex h-[600px] flex-col overflow-hidden rounded-3xl border border-border/80 bg-card">
+      <div className="flex items-center gap-3 border-b border-border/60 px-5 py-4">
+        <Skeleton className="h-9 w-9 rounded-xl" />
+        <div className="space-y-1.5">
+          <Skeleton className="h-4 w-44" />
+          <Skeleton className="h-3 w-64 max-w-full" />
+        </div>
+      </div>
+      <div className="flex-1 space-y-4 p-5">
+        <Skeleton className="h-20 w-full rounded-2xl" />
+        <div className="flex flex-wrap gap-2">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-7 w-40 max-w-full rounded-full" />
+          ))}
+        </div>
+      </div>
+      <div className="border-t border-border/60 p-4">
+        <Skeleton className="h-11 w-full rounded-xl" />
+      </div>
+    </div>
+  );
+  return label ? <SkeletonRegion label={label}>{panel}</SkeletonRegion> : panel;
+}
+
+/** Help centre: navbar, header, assistant panel, FAQ grid and the privacy card. */
+export function HelpPageSkeleton({ label = "Loading help center" }: { label?: string }) {
+  return (
+    <SkeletonRegion label={label} className="flex min-h-screen flex-col bg-background">
+      <NavbarSkeleton />
+      <div className="mx-auto w-full max-w-6xl flex-1 space-y-10 px-4 py-10 sm:px-6 lg:px-8">
+        <div className="border-b border-border/70 pb-6">
+          <Skeleton className="h-9 w-full max-w-lg" />
+        </div>
+        <ChatPanelSkeleton />
+        <div className="space-y-4">
+          <Skeleton className="h-6 w-80 max-w-full" />
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {Array.from({ length: 6 }, (_, i) => (
+              <SkeletonCard key={i} className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Skeleton className="h-4 w-24 rounded-full" />
+                  <Skeleton className="h-3 w-12" />
+                </div>
+                <Skeleton className="h-4 w-11/12" />
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-4/5" />
+              </SkeletonCard>
+            ))}
+          </div>
+        </div>
+        <SkeletonCard className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-3.5 w-40 max-w-full" />
+              <Skeleton className="h-3 w-full" />
+              <Skeleton className="h-3 w-5/6" />
+            </div>
+          ))}
+        </SkeletonCard>
+      </div>
+    </SkeletonRegion>
+  );
+}
+
+/** Certificate verification index: title, search console and the three trust pillars. */
+export function VerifyPageSkeleton({
+  label = "Loading credential verification",
+}: {
+  label?: string;
+}) {
+  return (
+    <SkeletonRegion label={label} className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div className="mb-10 space-y-3 text-center">
+        <Skeleton className="mx-auto h-6 w-44 rounded-full" />
+        <Skeleton className="mx-auto h-10 w-72 max-w-full" />
+      </div>
+      <div className="mx-auto mb-12 max-w-3xl">
+        <SkeletonCard className="space-y-4 p-6 sm:p-8">
+          <Skeleton className="h-3.5 w-56" />
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Skeleton className="h-12 flex-1 rounded-xl" />
+            <Skeleton className="h-12 w-full rounded-xl sm:w-36" />
+          </div>
+        </SkeletonCard>
+      </div>
+      <div className="my-12 grid grid-cols-1 gap-6 md:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <SkeletonCard key={i} className="space-y-3 p-6">
+            <Skeleton className="h-10 w-10 rounded-xl" />
+            <Skeleton className="h-4 w-36" />
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-5/6" />
+          </SkeletonCard>
+        ))}
+      </div>
+      <SkeletonCard className="flex flex-col items-center justify-between gap-4 p-6 sm:flex-row">
+        <div className="w-full space-y-2 sm:w-auto">
+          <Skeleton className="h-3.5 w-64 max-w-full" />
+          <Skeleton className="h-3 w-80 max-w-full" />
+        </div>
+        <Skeleton className="h-9 w-40 rounded-xl" />
+      </SkeletonCard>
+    </SkeletonRegion>
+  );
+}
+
+/** Verification result page: title, result card (seal, recipient, details, code) and actions. */
+export function VerifyResultSkeleton({ label = "Verifying credential" }: { label?: string }) {
+  return (
+    <SkeletonRegion label={label} className="mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8">
+      <div className="mb-8 space-y-3 text-center">
+        <Skeleton className="mx-auto h-6 w-44 rounded-full" />
+        <Skeleton className="mx-auto h-10 w-80 max-w-full" />
+      </div>
+      <SkeletonCard className="space-y-6 p-6 sm:p-10">
+        <div className="space-y-3 border-b border-border pb-6 text-center">
+          <Skeleton className="mx-auto h-14 w-14 rounded-2xl" />
+          <Skeleton className="mx-auto h-5 w-44 rounded-full" />
+          <Skeleton className="mx-auto h-6 w-56" />
+        </div>
+        <SkeletonCard className="space-y-2 text-center">
+          <Skeleton className="mx-auto h-3 w-24" />
+          <Skeleton className="mx-auto h-9 w-72 max-w-full" />
+        </SkeletonCard>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {[0, 1, 2, 3].map((i) => (
+            <SkeletonCard key={i} className="space-y-2 rounded-xl p-4">
+              <Skeleton className="h-3 w-32" />
+              <Skeleton className="h-4 w-40 max-w-full" />
+            </SkeletonCard>
+          ))}
+        </div>
+        <Skeleton className="h-14 w-full rounded-xl" />
+        <Skeleton className="h-20 w-full rounded-xl" />
+      </SkeletonCard>
+      <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+        <Skeleton className="h-10 w-48 rounded-xl" />
+        <Skeleton className="h-10 w-24 rounded-xl" />
+      </div>
+    </SkeletonRegion>
+  );
+}
+
+/** Centred single-card auth screens (password reset, first-sign-in password). */
+export function AuthCardSkeleton({ label = "Loading" }: { label?: string }) {
+  return (
+    <SkeletonRegion
+      label={label}
+      className="flex min-h-screen w-full items-center justify-center bg-background p-4 sm:p-6"
+    >
+      <div className="w-full max-w-md space-y-6 rounded-3xl border border-border/80 bg-card p-6 sm:p-8">
+        <div className="space-y-3 text-center">
+          <Skeleton className="mx-auto h-12 w-12 rounded-2xl" />
+          <Skeleton className="mx-auto h-7 w-56 max-w-full" />
+          <Skeleton className="mx-auto h-3 w-64 max-w-full" />
+        </div>
+        <div className="space-y-4">
+          {[0, 1].map((i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-3 w-28" />
+              <Skeleton className="h-11 w-full rounded-xl" />
+            </div>
+          ))}
+          <Skeleton className="h-1.5 w-full rounded-full" />
+          <Skeleton className="h-11 w-full rounded-xl" />
+        </div>
+      </div>
+    </SkeletonRegion>
+  );
+}

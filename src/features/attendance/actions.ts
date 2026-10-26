@@ -4,8 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireAuth } from "@/lib/auth/guards";
 import { toActionError } from "@/lib/errors";
 import { attendanceService } from "./services/attendance-service";
-import { LogAttendanceSchema } from "./schemas";
-import type { AttendanceRecordView } from "./types";
+import { AttendanceEmployeeSearchSchema, LogAttendanceSchema } from "./schemas";
+import type { AttendanceEmployeeOption, AttendanceRecordView } from "./types";
 
 type AttendanceActionResult =
   | { success: true; record: AttendanceRecordView }
@@ -64,5 +64,30 @@ export async function selfCheckOutAction(): Promise<AttendanceActionResult> {
     return { success: true, record };
   } catch (error) {
     return { success: false, error: toActionError(error, "Check-out failed.") };
+  }
+}
+
+/**
+ * Employee picker search for the staff entry form (requires `canAttendance`, enforced by
+ * the service). Returns at most one bounded page of non-exited employees.
+ */
+export async function searchAttendanceEmployeeOptionsAction(
+  rawInput: unknown
+): Promise<
+  | { success: true; data: { options: AttendanceEmployeeOption[]; total: number } }
+  | { success: false; error: string }
+> {
+  try {
+    const user = await requireAuth();
+
+    const parsed = AttendanceEmployeeSearchSchema.safeParse(rawInput);
+    if (!parsed.success) {
+      return { success: false, error: parsed.error.issues[0]?.message || "Invalid input data" };
+    }
+
+    const data = await attendanceService.getEmployeeOptions(user, { search: parsed.data.query });
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: toActionError(error, "Failed to search employees.") };
   }
 }

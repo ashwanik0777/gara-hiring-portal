@@ -1,5 +1,5 @@
-import { ListPageSkeleton } from "@/components/feedback/page-skeletons";
+import { InterviewBoardSkeleton } from "@/features/recruitment/components/recruitment-skeletons";
 
 export default function Loading() {
-  return <ListPageSkeleton withStats label="Loading interviews" />;
+  return <InterviewBoardSkeleton label="Loading interviews" />;
 }

@@ -1,13 +1,9 @@
 "use client";
 
-import React, { useState, useTransition, useMemo, useEffect } from "react";
-import type {
-  LeavePageData,
-  LeaveRequestItem,
-  LeaveTypeItem,
-  LeaveStats,
-  LeaveRequestStatus,
-} from "../types";
+import React, { useCallback, useEffect, useState, useTransition } from "react";
+import dynamic from "next/dynamic";
+import { usePathname, useRouter } from "next/navigation";
+import type { LeavePageData, LeaveRequestItem, LeaveTab } from "../types";
 import {
   reviewLeaveRequestAction,
   createLeaveRequestAction,
@@ -19,238 +15,163 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PaginationNav } from "@/components/ui/pagination-nav";
+import { DialogFallback } from "@/components/ui/dialog-fallback";
 import {
   Calendar,
-  Clock,
   CheckCircle2,
-  XCircle,
   AlertCircle,
   PlusCircle,
   Search,
   FileText,
-  ShieldCheck,
   X,
-  Loader2,
   Check,
-  Info,
   CalendarRange,
   Users,
   Settings2,
   Eye,
-  PieChart,
-  CalendarCheck,
 } from "lucide-react";
+import { formatDisplayDate, LeaveStatusBadge, LeaveTypeBadge } from "./leave-ui";
+import type { ApplyLeaveValues } from "./apply-leave-form";
+import type { LeaveTypeDraft } from "./dialogs/leave-type-dialog";
+
+// Dialogs and the apply form are loaded on first use so the list paints with less JS.
+const LeaveReviewDialog = dynamic(
+  () => import("./dialogs/leave-review-dialog").then((m) => m.LeaveReviewDialog),
+  { ssr: false, loading: () => <DialogFallback label="Loading review dialog" /> }
+);
+const LeaveDetailsDialog = dynamic(
+  () => import("./dialogs/leave-details-dialog").then((m) => m.LeaveDetailsDialog),
+  { ssr: false, loading: () => <DialogFallback label="Loading leave details" /> }
+);
+const LeaveTypeDialog = dynamic(
+  () => import("./dialogs/leave-type-dialog").then((m) => m.LeaveTypeDialog),
+  { ssr: false, loading: () => <DialogFallback label="Loading category form" /> }
+);
+const ApplyLeaveForm = dynamic(
+  () => import("./apply-leave-form").then((m) => m.ApplyLeaveForm),
+  {
+    loading: () => (
+      <div role="status" aria-live="polite" aria-busy="true" className="rounded-2xl border border-border/80 bg-card p-6">
+        <span className="sr-only">Loading leave form</span>
+        <div className="h-48 rounded-xl bg-border/70 motion-safe:animate-pulse" aria-hidden="true" />
+      </div>
+    ),
+  }
+);
 
 interface LeaveManagementClientProps {
   pageData: Exclude<LeavePageData, { view: "forbidden" }>;
+  /** Tab from the URL (`?tab=`), so links and the back button restore it. */
+  initialTab?: LeaveTab;
+  /** Server-rendered summary cards. */
+  statsSlot: React.ReactNode;
 }
 
-/** `YYYY-MM-DD` of today's UTC calendar day (leave dates are stored as UTC days). */
-function todayUtcKey(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+type StatusPill = "ALL" | "PENDING" | "APPROVED" | "REJECTED";
 
-function utcKeyPlusDays(days: number): string {
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-}
-
-export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) {
+export function LeaveManagementClient({ pageData, initialTab, statsSlot }: LeaveManagementClientProps) {
+  const router = useRouter();
+  const pathname = usePathname();
   const isTeamView = pageData.view === "team";
   const canManageTypes = pageData.view === "team" && pageData.canManageTypes;
   const canSeedDefaultTypes = pageData.view === "team" && pageData.canSeedDefaultTypes;
-  const employees = pageData.employees;
-  const initialRequests = pageData.requests;
-  const initialLeaveTypes = pageData.leaveTypes;
-  const initialStats = pageData.stats;
+  const { requests, page, filters, calendar, leaveTypes, stats, employees, employeesTotal } = pageData;
 
-  const [requests, setRequests] = useState<LeaveRequestItem[]>(initialRequests);
-  const [leaveTypes, setLeaveTypes] = useState<LeaveTypeItem[]>(initialLeaveTypes);
-  const [stats, setStats] = useState<LeaveStats>(initialStats);
   const [isPending, startTransition] = useTransition();
+  const [activeTab, setActiveTab] = useState<LeaveTab>(initialTab ?? "requests");
+  const [searchInput, setSearchInput] = useState(filters.search ?? "");
 
-  // Active Tab: "requests" | "calendar" | "types" | "apply"
-  const [activeTab, setActiveTab] = useState<"requests" | "calendar" | "types" | "apply">("requests");
-
-  // Filters & Search
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("ALL");
-  const [typeFilter, setTypeFilter] = useState<string>("ALL");
-
-  // Modal States
   const [reviewModal, setReviewModal] = useState<{
-    isOpen: boolean;
-    target: LeaveRequestItem | null;
+    target: LeaveRequestItem;
     action: "APPROVED" | "REJECTED";
-    notes: string;
-  }>({
-    isOpen: false,
-    target: null,
-    action: "APPROVED",
-    notes: "",
-  });
-
-  const [detailsModal, setDetailsModal] = useState<{
-    isOpen: boolean;
-    target: LeaveRequestItem | null;
-  }>({
-    isOpen: false,
-    target: null,
-  });
-
-  const [newTypeModal, setNewTypeModal] = useState<{
-    isOpen: boolean;
-    code: string;
-    name: string;
-    description: string;
-    isPaid: boolean;
-    requiresApproval: boolean;
-  }>({
-    isOpen: false,
-    code: "",
-    name: "",
-    description: "",
-    isPaid: true,
-    requiresApproval: true,
-  });
-
-  // Apply Leave Form State
-  const firstActiveTypeId = leaveTypes.find((t) => t.isActive)?.id || "";
-  const [applyForm, setApplyForm] = useState({
-    employeeId: employees[0]?.id || "",
-    leaveTypeId: firstActiveTypeId,
-    startDate: todayUtcKey(),
-    endDate: todayUtcKey(),
-    reason: "",
-  });
-
-  // Feedback Toast
-  const [feedback, setFeedback] = useState<{
-    type: "success" | "error";
-    message: string;
   } | null>(null);
+  const [detailsTarget, setDetailsTarget] = useState<LeaveRequestItem | null>(null);
+  const [typeDialogOpen, setTypeDialogOpen] = useState(false);
 
-  const showFeedback = (type: "success" | "error", message: string) => {
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const showFeedback = useCallback((type: "success" | "error", message: string) => {
     setFeedback({ type, message });
-    setTimeout(() => setFeedback(null), 5000);
+    window.setTimeout(() => setFeedback(null), 6000);
+  }, []);
+
+  // Every filter and the page live in the URL so links, reloads and the back button work.
+  const buildHref = useCallback(
+    (overrides: {
+      status?: string | null;
+      type?: string | null;
+      q?: string | null;
+      page?: number | null;
+      tab?: LeaveTab | null;
+    } = {}) => {
+      const params = new URLSearchParams();
+      const status = overrides.status === undefined ? filters.status : overrides.status;
+      const type = overrides.type === undefined ? filters.leaveTypeId : overrides.type;
+      const q = overrides.q === undefined ? filters.search : overrides.q;
+      const target = overrides.page === undefined ? page.page : overrides.page;
+      const tab = overrides.tab === undefined ? activeTab : overrides.tab;
+      if (status) params.set("status", status);
+      if (type) params.set("type", type);
+      if (q) params.set("q", q);
+      if (target && target > 1) params.set("page", String(target));
+      if (tab && tab !== "requests") params.set("tab", tab);
+      const query = params.toString();
+      return query ? `${pathname}?${query}` : pathname;
+    },
+    [filters, page.page, activeTab, pathname]
+  );
+
+  const navigate = (href: string) => {
+    startTransition(() => {
+      router.push(href, { scroll: false });
+    });
   };
+
+  const switchTab = useCallback(
+    (tab: LeaveTab) => {
+      setActiveTab(tab);
+      // Reflect the tab in the URL without a server round trip.
+      const params = new URLSearchParams(window.location.search);
+      if (tab === "requests") params.delete("tab");
+      else params.set("tab", tab);
+      const query = params.toString();
+      window.history.replaceState(null, "", query ? `${pathname}?${query}` : pathname);
+    },
+    [pathname]
+  );
 
   // Listen to navbar action buttons
   useEffect(() => {
     const handleCategoryEvent = () => {
-      if (!canManageTypes) return;
-      setNewTypeModal({
-        isOpen: true,
-        code: "",
-        name: "",
-        description: "",
-        isPaid: true,
-        requiresApproval: true,
-      });
+      if (canManageTypes) setTypeDialogOpen(true);
     };
-    const handleApplyEvent = () => {
-      setActiveTab("apply");
-    };
+    const handleApplyEvent = () => switchTab("apply");
 
     window.addEventListener("open-leave-category-modal", handleCategoryEvent);
     window.addEventListener("open-apply-leave-tab", handleApplyEvent);
     window.addEventListener("request-leave", handleApplyEvent);
-
     return () => {
       window.removeEventListener("open-leave-category-modal", handleCategoryEvent);
       window.removeEventListener("open-apply-leave-tab", handleApplyEvent);
       window.removeEventListener("request-leave", handleApplyEvent);
     };
-  }, [canManageTypes]);
-
-  // Filtered requests computation
-  const filteredRequests = useMemo(() => {
-    return requests.filter((r) => {
-      // Status filter
-      if (statusFilter !== "ALL" && r.status !== statusFilter) {
-        return false;
-      }
-      // Leave type filter
-      if (typeFilter !== "ALL" && r.leaveTypeId !== typeFilter) {
-        return false;
-      }
-      // Search query
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchesName = r.employeeName.toLowerCase().includes(q);
-        const matchesCode = r.employeeCode.toLowerCase().includes(q);
-        const matchesDept = r.employeeDepartment.toLowerCase().includes(q);
-        const matchesReason = r.reason.toLowerCase().includes(q);
-        const matchesType = r.leaveTypeName.toLowerCase().includes(q);
-        return matchesName || matchesCode || matchesDept || matchesReason || matchesType;
-      }
-      return true;
-    });
-  }, [requests, statusFilter, typeFilter, searchQuery]);
-
-  // People currently on leave today (UTC calendar days, matching storage)
-  const currentlyOnLeave = useMemo(() => {
-    const todayKey = todayUtcKey();
-    return requests.filter((r) => {
-      if (r.status !== "APPROVED") return false;
-      return r.startDate.slice(0, 10) <= todayKey && r.endDate.slice(0, 10) >= todayKey;
-    });
-  }, [requests]);
-
-  // Upcoming approved leaves (next 14 days)
-  const upcomingLeaves = useMemo(() => {
-    const todayKey = todayUtcKey();
-    const limitKey = utcKeyPlusDays(14);
-    return requests.filter((r) => {
-      if (r.status !== "APPROVED") return false;
-      const startKey = r.startDate.slice(0, 10);
-      return startKey > todayKey && startKey <= limitKey;
-    });
-  }, [requests]);
+  }, [canManageTypes, switchTab]);
 
   // ---------------------------------------------------------------------------
-  // Handlers
+  // Handlers (the server re-renders stats and rows after each successful action)
   // ---------------------------------------------------------------------------
 
-  const handleReviewSubmit = () => {
-    if (!reviewModal.target) return;
-    const { target, action, notes } = reviewModal;
-
+  const handleReviewConfirm = (notes: string) => {
+    if (!reviewModal) return;
+    const { target, action } = reviewModal;
     startTransition(async () => {
-      const res = await reviewLeaveRequestAction({
-        requestId: target.id,
-        status: action,
-        reviewNotes: notes,
-      });
-
+      const res = await reviewLeaveRequestAction({ requestId: target.id, status: action, reviewNotes: notes });
       if (!res.success) {
         showFeedback("error", res.error);
         return;
       }
       const { skippedDates, attendanceDaysMarked } = res.data;
-
-      // Optimistic update
-      setRequests((prev) =>
-        prev.map((r) =>
-          r.id === target.id
-            ? {
-                ...r,
-                status: action,
-                reviewNotes: notes.trim() || null,
-                reviewedAt: new Date().toISOString(),
-              }
-            : r
-        )
-      );
-
-      // Update stats
-      setStats((prev) => ({
-        ...prev,
-        pendingCount: Math.max(0, prev.pendingCount - 1),
-        approvedCount: action === "APPROVED" ? prev.approvedCount + 1 : prev.approvedCount,
-        rejectedCount: action === "REJECTED" ? prev.rejectedCount + 1 : prev.rejectedCount,
-      }));
-
-      setReviewModal({ isOpen: false, target: null, action: "APPROVED", notes: "" });
+      setReviewModal(null);
       let message = `Leave request for ${target.employeeName} has been ${action.toLowerCase()}.`;
       if (action === "APPROVED") {
         message += ` ${attendanceDaysMarked} attendance ${attendanceDaysMarked === 1 ? "day" : "days"} marked on leave.`;
@@ -259,110 +180,62 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
         }
       }
       showFeedback("success", message);
+      router.refresh();
     });
   };
 
-  const handleApplyLeaveSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!applyForm.employeeId || !applyForm.leaveTypeId || !applyForm.reason.trim()) {
-      showFeedback("error", "Please fill in all required fields.");
-      return;
-    }
-    if (applyForm.endDate < applyForm.startDate) {
-      showFeedback("error", "End date cannot precede start date.");
-      return;
-    }
-
+  const handleApplyLeaveSubmit = (values: ApplyLeaveValues) => {
     startTransition(async () => {
       // Dates are UTC calendar days; the server re-validates range, overlap and leave type.
       const res = await createLeaveRequestAction({
-        employeeId: applyForm.employeeId,
-        leaveTypeId: applyForm.leaveTypeId,
-        startDate: `${applyForm.startDate}T00:00:00.000Z`,
-        endDate: `${applyForm.endDate}T00:00:00.000Z`,
-        reason: applyForm.reason,
+        employeeId: values.employeeId,
+        leaveTypeId: values.leaveTypeId,
+        startDate: `${values.startDate}T00:00:00.000Z`,
+        endDate: `${values.endDate}T00:00:00.000Z`,
+        reason: values.reason,
       });
-
       if (!res.success) {
         showFeedback("error", res.error);
         return;
       }
-
-      const created = res.data;
-      setRequests((prev) => [created, ...prev]);
-      setStats((prev) => ({
-        ...prev,
-        totalRequests: prev.totalRequests + 1,
-        pendingCount: prev.pendingCount + 1,
-      }));
-
-      setApplyForm({
-        employeeId: employees[0]?.id || "",
-        leaveTypeId: firstActiveTypeId,
-        startDate: todayUtcKey(),
-        endDate: todayUtcKey(),
-        reason: "",
-      });
-
-      setActiveTab("requests");
+      switchTab("requests");
       showFeedback("success", "Leave request submitted successfully for approval.");
+      router.refresh();
     });
   };
 
-  const handleCreateTypeSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTypeModal.code.trim() || !newTypeModal.name.trim()) {
+  const handleCreateType = (draft: LeaveTypeDraft) => {
+    if (!draft.code.trim() || !draft.name.trim()) {
       showFeedback("error", "Code and Name are required.");
       return;
     }
-
     startTransition(async () => {
       const res = await createLeaveTypeAction({
-        code: newTypeModal.code.trim().toUpperCase(),
-        name: newTypeModal.name.trim(),
-        description: newTypeModal.description.trim() || null,
-        isPaid: newTypeModal.isPaid,
-        requiresApproval: newTypeModal.requiresApproval,
+        code: draft.code.trim().toUpperCase(),
+        name: draft.name.trim(),
+        description: draft.description.trim() || null,
+        isPaid: draft.isPaid,
+        requiresApproval: draft.requiresApproval,
       });
-
       if (!res.success) {
         showFeedback("error", res.error);
         return;
       }
-
-      const created = res.data;
-      setLeaveTypes((prev) => [...prev, created]);
-
-      setNewTypeModal({
-        isOpen: false,
-        code: "",
-        name: "",
-        description: "",
-        isPaid: true,
-        requiresApproval: true,
-      });
-
-      showFeedback("success", `Leave category "${newTypeModal.name}" added successfully.`);
+      setTypeDialogOpen(false);
+      showFeedback("success", `Leave category "${draft.name}" added successfully.`);
+      router.refresh();
     });
   };
 
   const handleToggleType = (typeId: string, currentActive: boolean) => {
     startTransition(async () => {
-      const res = await toggleLeaveTypeAction({
-        id: typeId,
-        isActive: !currentActive,
-      });
-
+      const res = await toggleLeaveTypeAction({ id: typeId, isActive: !currentActive });
       if (!res.success) {
         showFeedback("error", res.error);
         return;
       }
-
-      setLeaveTypes((prev) =>
-        prev.map((t) => (t.id === typeId ? { ...t, isActive: !currentActive } : t))
-      );
-
-      showFeedback("success", `Leave type status updated.`);
+      showFeedback("success", "Leave type status updated.");
+      router.refresh();
     });
   };
 
@@ -375,123 +248,31 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
       }
       showFeedback(
         "success",
-        `${res.data.created} suggested leave categories loaded. They remain pending product-owner approval (OD-007). Reload to see them.`
+        `${res.data.created} suggested leave categories loaded. They remain pending product-owner approval (OD-007).`
       );
+      router.refresh();
     });
   };
 
-  const formatDisplayDate = (isoStr: string) => {
-    try {
-      const d = new Date(isoStr);
-      return d.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-        timeZone: "UTC",
-      });
-    } catch {
-      return isoStr;
-    }
-  };
+  const canReview = (req: LeaveRequestItem) => isTeamView && req.status === "PENDING" && !req.isOwnRequest;
+  const hasActiveFilters = Boolean(filters.status || filters.leaveTypeId || filters.search);
+  const statusPill: StatusPill =
+    filters.status === "PENDING" || filters.status === "APPROVED" || filters.status === "REJECTED"
+      ? filters.status
+      : "ALL";
 
-  const getStatusBadge = (status: LeaveRequestStatus) => {
-    switch (status) {
-      case "PENDING":
-        return (
-          <Badge
-            variant="warning"
-            className="gap-1.5 bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30 px-2.5 py-0.5 text-[11px] font-semibold"
-          >
-            <Clock className="h-3 w-3 animate-pulse" /> Pending
-          </Badge>
-        );
-      case "APPROVED":
-        return (
-          <Badge
-            variant="default"
-            className="gap-1.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 px-2.5 py-0.5 text-[11px] font-semibold"
-          >
-            <CheckCircle2 className="h-3 w-3" /> Approved
-          </Badge>
-        );
-      case "REJECTED":
-        return (
-          <Badge
-            variant="destructive"
-            className="gap-1.5 bg-rose-500/15 text-rose-700 dark:text-rose-400 border-rose-500/30 px-2.5 py-0.5 text-[11px] font-semibold"
-          >
-            <XCircle className="h-3 w-3" /> Rejected
-          </Badge>
-        );
-      case "CANCELLED":
-        return (
-          <Badge variant="outline" className="gap-1 text-muted-foreground px-2.5 py-0.5 text-[11px]">
-            Cancelled
-          </Badge>
-        );
-      default:
-        return <Badge variant="outline">{status}</Badge>;
-    }
-  };
-
-  const getLeaveTypeBadge = (code: string, name: string, isPaid: boolean) => {
-    let dotColor = "bg-blue-500";
-    let colorClasses = "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20";
-    if (code.includes("SICK") || code.includes("MED")) {
-      dotColor = "bg-rose-500";
-      colorClasses = "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/20";
-    } else if (code.includes("EARN") || code.includes("PL")) {
-      dotColor = "bg-emerald-500";
-      colorClasses = "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20";
-    } else if (code.includes("PARENT") || code.includes("MATERN")) {
-      dotColor = "bg-purple-500";
-      colorClasses = "bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20";
-    } else if (code.includes("UNPAID") || code.includes("LWP") || !isPaid) {
-      dotColor = "bg-amber-500";
-      colorClasses = "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20";
-    }
-
-    return (
-      <span
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium border max-w-full truncate ${colorClasses}`}
-        title={`${name} (${isPaid ? "Paid" : "Unpaid"})`}
-      >
-        <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${dotColor}`} />
-        <span className="truncate">{name}</span>
-      </span>
-    );
-  };
-
-  // Recorded leave days for the employee currently viewed in detailsModal.
-  // Only counts what is on record: entitlements and balances are pending OD-007.
-  const selectedEmployeeLeaveSummary = useMemo(() => {
-    if (!detailsModal.target) return null;
-    const empId = detailsModal.target.employeeId;
-    const empRequests = requests.filter((r) => r.employeeId === empId);
-
-    const totalApprovedDays = empRequests
-      .filter((r) => r.status === "APPROVED")
-      .reduce((sum, r) => sum + r.durationDays, 0);
-    const totalPendingDays = empRequests
-      .filter((r) => r.status === "PENDING")
-      .reduce((sum, r) => sum + r.durationDays, 0);
-
-    return {
-      totalApprovedDays,
-      totalPendingDays,
-      allRequestsCount: empRequests.length,
-      otherRequests: empRequests.filter((r) => r.id !== detailsModal.target?.id),
-    };
-  }, [detailsModal.target, requests]);
-
-  const canReview = (req: LeaveRequestItem) =>
-    isTeamView && req.status === "PENDING" && !req.isOwnRequest;
+  const tabClass = (tab: LeaveTab) =>
+    `flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+      activeTab === tab
+        ? "bg-background text-foreground shadow-xs border border-border/60"
+        : "text-muted-foreground hover:text-foreground"
+    }`;
 
   return (
     <div className="space-y-6">
-      {/* ─── Top Notification / Feedback Banner ─── */}
       {feedback && (
         <div
+          role={feedback.type === "error" ? "alert" : "status"}
           className={`p-4 rounded-2xl flex items-center justify-between border shadow-sm transition-all duration-300 ${
             feedback.type === "success"
               ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400"
@@ -507,125 +288,25 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
             <span className="text-sm font-medium">{feedback.message}</span>
           </div>
           <button
+            type="button"
             onClick={() => setFeedback(null)}
             className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+            aria-label="Dismiss message"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
       )}
 
-      {/* ─── Metric Cards Grid ─── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
-        {/* 1. Pending Requests */}
-        <div className="bg-card border border-border/80 border-l-4 border-l-amber-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-amber-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Pending Requests
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
-              <Clock className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {stats.pendingCount}
-          </div>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px]">
-            {stats.pendingCount > 0 ? (
-              <span className="inline-flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-400 bg-amber-500/15 px-2 py-0.5 rounded-md">
-                <AlertCircle className="h-3 w-3" /> {isTeamView ? "Action required" : "Awaiting review"}
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 bg-emerald-500/15 px-2 py-0.5 rounded-md font-medium">
-                <CheckCircle2 className="h-3 w-3" /> Inbox cleared
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* 2. Away Today */}
-        <div className="bg-card border border-border/80 border-l-4 border-l-blue-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-blue-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Away Today
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-              <CalendarRange className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {currentlyOnLeave.length}
-          </div>
-          <div className="mt-2 text-[11px] text-muted-foreground">
-            Active out-of-office today
-          </div>
-        </div>
-
-        {/* 3. Approved Leaves */}
-        <div className="bg-card border border-border/80 border-l-4 border-l-emerald-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-emerald-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Approved
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-              <CheckCircle2 className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {stats.approvedCount}
-          </div>
-          <div className="mt-2 text-[11px] text-muted-foreground">
-            Authorized time-off records
-          </div>
-        </div>
-
-        {/* 4. Rejected / Declined */}
-        <div className="bg-card border border-border/80 border-l-4 border-l-rose-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-rose-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Rejected
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
-              <XCircle className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {stats.rejectedCount}
-          </div>
-          <div className="mt-2 text-[11px] text-muted-foreground">
-            Denied with review notes
-          </div>
-        </div>
-
-        {/* 5. Policy Categories */}
-        <div className="col-span-2 sm:col-span-1 bg-card border border-border/80 border-l-4 border-l-purple-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-purple-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Policy Types
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
-              <FileText className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {leaveTypes.filter((t) => t.isActive).length}
-          </div>
-          <div className="mt-2 text-[11px] text-muted-foreground">
-            Active leave categories
-          </div>
-        </div>
-      </div>
+      {statsSlot}
 
       {/* ─── Navigation Tabs ─── */}
-      <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-muted/60 border border-border/60 max-w-fit">
-        <button
-          onClick={() => setActiveTab("requests")}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            activeTab === "requests"
-              ? "bg-background text-foreground shadow-xs border border-border/60"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
+      <div
+        role="tablist"
+        aria-label="Leave sections"
+        className="flex items-center gap-1.5 p-1 rounded-2xl bg-muted/60 border border-border/60 max-w-full overflow-x-auto"
+      >
+        <button type="button" role="tab" aria-selected={activeTab === "requests"} onClick={() => switchTab("requests")} className={tabClass("requests")}>
           <FileText className="h-3.5 w-3.5" />
           {isTeamView ? "Leave Applications" : "My Leave Requests"}
           <span
@@ -635,88 +316,73 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                 : "bg-muted text-muted-foreground"
             }`}
           >
-            {requests.length}
+            {page.total}
           </span>
         </button>
-
-        <button
-          onClick={() => setActiveTab("calendar")}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            activeTab === "calendar"
-              ? "bg-background text-foreground shadow-xs border border-border/60"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
+        <button type="button" role="tab" aria-selected={activeTab === "calendar"} onClick={() => switchTab("calendar")} className={tabClass("calendar")}>
           <CalendarRange className="h-3.5 w-3.5" />
           Out-of-Office & Calendar
-          {currentlyOnLeave.length > 0 && (
+          {stats.onLeaveTodayCount > 0 && (
             <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-700 dark:text-blue-400">
-              {currentlyOnLeave.length}
+              {stats.onLeaveTodayCount}
             </span>
           )}
         </button>
-
-        <button
-          onClick={() => setActiveTab("types")}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            activeTab === "types"
-              ? "bg-background text-foreground shadow-xs border border-border/60"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
+        <button type="button" role="tab" aria-selected={activeTab === "types"} onClick={() => switchTab("types")} className={tabClass("types")}>
           <Settings2 className="h-3.5 w-3.5" />
           Leave Categories ({leaveTypes.length})
         </button>
-
-        <button
-          onClick={() => setActiveTab("apply")}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            activeTab === "apply"
-              ? "bg-background text-foreground shadow-xs border border-border/60"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
+        <button type="button" role="tab" aria-selected={activeTab === "apply"} onClick={() => switchTab("apply")} className={tabClass("apply")}>
           <PlusCircle className="h-3.5 w-3.5" />
           {isTeamView ? "Apply / Grant Leave" : "Request Leave"}
         </button>
       </div>
 
-      {/* ══════════════════════════════════════════════════════════════════
-          TAB 1: LEAVE APPLICATIONS LIST & FILTERS
-          ══════════════════════════════════════════════════════════════════ */}
+      {/* ══════════════ TAB 1: LEAVE APPLICATIONS LIST & FILTERS ══════════════ */}
       {activeTab === "requests" && (
         <div className="space-y-4">
-          {/* Search & Filter Bar */}
           <div className="p-4 rounded-2xl border border-border/80 bg-card/70 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between shadow-2xs">
-            {/* Search Input */}
-            <div className="relative flex-1 max-w-md">
+            <form
+              className="relative flex-1 max-w-md"
+              onSubmit={(e) => {
+                e.preventDefault();
+                navigate(buildHref({ q: searchInput.trim() || null, page: null }));
+              }}
+            >
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
+                type="search"
+                aria-label="Search leave applications"
                 placeholder="Search by employee, code, reason or department..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
                 className="pl-9 pr-8 h-9 rounded-xl border-border/80 bg-background/80 text-xs"
               />
-              {searchQuery && (
+              {(searchInput || filters.search) && (
                 <button
-                  onClick={() => setSearchQuery("")}
+                  type="button"
+                  onClick={() => {
+                    setSearchInput("");
+                    navigate(buildHref({ q: null, page: null }));
+                  }}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               )}
-            </div>
+            </form>
 
-            {/* Filter Pills / Dropdowns */}
             <div className="flex flex-wrap items-center gap-2">
-              {/* Status Selector */}
-              <div className="flex items-center gap-1 p-1 rounded-xl bg-muted/60 border border-border/60 text-xs">
+              <div className="flex items-center gap-1 p-1 rounded-xl bg-muted/60 border border-border/60 text-xs" role="group" aria-label="Filter by status">
                 {(["ALL", "PENDING", "APPROVED", "REJECTED"] as const).map((st) => (
                   <button
                     key={st}
-                    onClick={() => setStatusFilter(st)}
+                    type="button"
+                    aria-pressed={statusPill === st}
+                    onClick={() => navigate(buildHref({ status: st === "ALL" ? null : st, page: null }))}
                     className={`px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer ${
-                      statusFilter === st
+                      statusPill === st
                         ? "bg-background text-foreground shadow-2xs font-semibold"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
@@ -731,10 +397,9 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                 ))}
               </div>
 
-              {/* Leave Type Dropdown */}
               <select
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
+                value={filters.leaveTypeId ?? "ALL"}
+                onChange={(e) => navigate(buildHref({ type: e.target.value === "ALL" ? null : e.target.value, page: null }))}
                 aria-label="Filter by leave category"
                 className="h-9 px-3 rounded-xl border border-border/80 bg-background text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
               >
@@ -746,14 +411,13 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                 ))}
               </select>
 
-              {(statusFilter !== "ALL" || typeFilter !== "ALL" || searchQuery) && (
+              {hasActiveFilters && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    setStatusFilter("ALL");
-                    setTypeFilter("ALL");
-                    setSearchQuery("");
+                    setSearchInput("");
+                    navigate(buildHref({ status: null, type: null, q: null, page: null }));
                   }}
                   className="text-xs text-muted-foreground hover:text-foreground h-9 px-2.5"
                 >
@@ -763,54 +427,41 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
             </div>
           </div>
 
-          {/* Leave Requests Table */}
-          <Card className="rounded-2xl border border-border/80 bg-card overflow-hidden shadow-2xs">
-            <div className="w-full">
-              <table className="w-full text-left text-xs border-collapse table-fixed">
+          <Card className="rounded-2xl border border-border/80 bg-card overflow-hidden shadow-2xs" aria-busy={isPending}>
+            <div className="w-full overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-xs border-collapse table-fixed">
                 <thead>
                   <tr className="border-b border-border/80 bg-muted/40 text-muted-foreground text-[11px] uppercase tracking-wider font-mono font-bold">
-                    <th className="py-3 px-4 w-[28%]">Employee</th>
-                    <th className="py-3 px-4 w-[20%]">Leave Category</th>
-                    <th className="py-3 px-4 w-[24%]">Duration & Dates</th>
-                    <th className="py-3 px-4 w-[14%] text-center">Status</th>
-                    <th className="py-3 px-4 w-[14%] text-right pr-4">Actions</th>
+                    <th scope="col" className="py-3 px-4 w-[28%]">Employee</th>
+                    <th scope="col" className="py-3 px-4 w-[20%]">Leave Category</th>
+                    <th scope="col" className="py-3 px-4 w-[24%]">Duration & Dates</th>
+                    <th scope="col" className="py-3 px-4 w-[14%] text-center">Status</th>
+                    <th scope="col" className="py-3 px-4 w-[14%] text-right pr-4">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60">
-                  {filteredRequests.length === 0 ? (
+                  {requests.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="py-12 text-center text-muted-foreground">
                         <div className="flex flex-col items-center justify-center gap-2">
                           <FileText className="h-8 w-8 text-muted-foreground/60 mb-1" />
-                          <p className="text-sm font-semibold text-foreground">
-                            No leave applications found
-                          </p>
+                          <p className="text-sm font-semibold text-foreground">No leave applications found</p>
                           <p className="text-xs text-muted-foreground max-w-sm">
-                            {searchQuery || statusFilter !== "ALL" || typeFilter !== "ALL"
+                            {hasActiveFilters
                               ? "Try adjusting your search terms or filters to view records."
                               : isTeamView
                                 ? "No employee leave requests have been submitted yet."
                                 : "You have not submitted any leave requests yet."}
                           </p>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setActiveTab("apply")}
-                            className="mt-2 text-xs rounded-xl"
-                          >
-                            <PlusCircle className="h-3.5 w-3.5 mr-1" />{" "}
-                            {isTeamView ? "Grant Leave" : "Request Leave"}
+                          <Button variant="outline" size="sm" onClick={() => switchTab("apply")} className="mt-2 text-xs rounded-xl">
+                            <PlusCircle className="h-3.5 w-3.5 mr-1" /> {isTeamView ? "Grant Leave" : "Request Leave"}
                           </Button>
                         </div>
                       </td>
                     </tr>
                   ) : (
-                    filteredRequests.map((req) => (
-                      <tr
-                        key={req.id}
-                        className="hover:bg-muted/30 transition-colors group"
-                      >
-                        {/* 1. Employee Details */}
+                    requests.map((req) => (
+                      <tr key={req.id} className="hover:bg-muted/30 transition-colors group">
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-3 min-w-0">
                             <div className="h-9 w-9 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold text-xs shrink-0 border border-blue-500/20 shadow-2xs">
@@ -842,11 +493,11 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                             </div>
                           </div>
                         </td>
-
-                        {/* 2. Leave Category */}
                         <td className="py-3.5 px-4">
                           <div className="space-y-1">
-                            <div>{getLeaveTypeBadge(req.leaveTypeCode, req.leaveTypeName, req.isPaid)}</div>
+                            <div>
+                              <LeaveTypeBadge code={req.leaveTypeCode} name={req.leaveTypeName} isPaid={req.isPaid} />
+                            </div>
                             <div className="text-[10px] text-muted-foreground/80 flex items-center gap-1.5 pl-0.5 font-medium">
                               <span className={req.isPaid ? "text-emerald-600 dark:text-emerald-400 font-semibold" : "text-amber-600 dark:text-amber-400 font-semibold"}>
                                 {req.isPaid ? "Marked paid" : "Marked unpaid"}
@@ -854,8 +505,6 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                             </div>
                           </div>
                         </td>
-
-                        {/* 3. Duration & Dates */}
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-1.5 font-medium text-foreground text-xs">
                             <Calendar className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -867,47 +516,31 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                             <span className="font-bold text-foreground font-mono bg-muted/80 border border-border/60 px-1.5 py-0.2 rounded text-[10px]">
                               {req.durationDays} {req.durationDays === 1 ? "day" : "days"}
                             </span>
-                            {req.createdAt && (
-                              <span className="text-[10px] text-muted-foreground/75 truncate">
-                                Applied {formatDisplayDate(req.createdAt)}
-                              </span>
-                            )}
+                            <span className="text-[10px] text-muted-foreground/75 truncate">
+                              Applied {formatDisplayDate(req.createdAt)}
+                            </span>
                           </div>
                         </td>
-
-                        {/* 4. Status */}
                         <td className="py-3.5 px-4 text-center whitespace-nowrap">
                           <div className="inline-flex justify-center">
-                            {getStatusBadge(req.status)}
+                            <LeaveStatusBadge status={req.status} />
                           </div>
                         </td>
-
-                        {/* 5. Actions (Clean Icon Buttons Only) */}
                         <td className="py-3.5 px-4 text-right pr-4 whitespace-nowrap">
                           <div className="flex items-center justify-end gap-2">
-                            {/* Eye Details Button */}
                             <button
                               type="button"
-                              onClick={() => setDetailsModal({ isOpen: true, target: req })}
+                              onClick={() => setDetailsTarget(req)}
                               className="h-8 w-8 rounded-lg border border-border/80 bg-background hover:bg-muted text-muted-foreground hover:text-primary transition-all flex items-center justify-center shadow-2xs cursor-pointer group/eye"
                               title="View full details"
                               aria-label="View full details"
                             >
                               <Eye className="h-4 w-4 group-hover/eye:scale-110 transition-transform" />
                             </button>
-
-                            {/* Approve Icon Button (pending requests of other employees only) */}
                             {canReview(req) && (
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setReviewModal({
-                                    isOpen: true,
-                                    target: req,
-                                    action: "APPROVED",
-                                    notes: "",
-                                  })
-                                }
+                                onClick={() => setReviewModal({ target: req, action: "APPROVED" })}
                                 className="h-8 w-8 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-600 hover:text-white dark:bg-emerald-950/50 dark:hover:bg-emerald-600 dark:text-emerald-400 dark:hover:text-white border border-emerald-500/30 hover:border-emerald-600 transition-all flex items-center justify-center shadow-2xs cursor-pointer"
                                 title="Approve Leave Application"
                                 aria-label="Approve leave application"
@@ -915,19 +548,10 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                                 <Check className="h-4 w-4 stroke-[2.5]" />
                               </button>
                             )}
-
-                            {/* Reject Icon Button (pending requests of other employees only) */}
                             {canReview(req) && (
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setReviewModal({
-                                    isOpen: true,
-                                    target: req,
-                                    action: "REJECTED",
-                                    notes: "",
-                                  })
-                                }
+                                onClick={() => setReviewModal({ target: req, action: "REJECTED" })}
                                 className="h-8 w-8 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white dark:bg-rose-950/50 dark:hover:bg-rose-600 dark:text-rose-400 dark:hover:text-white border border-rose-500/30 hover:border-rose-600 transition-all flex items-center justify-center shadow-2xs cursor-pointer"
                                 title="Reject Leave Application"
                                 aria-label="Reject leave application"
@@ -944,28 +568,34 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
               </table>
             </div>
           </Card>
+
+          <PaginationNav
+            page={page.page}
+            pageCount={page.pageCount}
+            total={page.total}
+            hrefFor={(target) => buildHref({ page: target })}
+            label="Leave application pages"
+            itemLabel="requests"
+          />
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          TAB 2: OUT-OF-OFFICE TODAY & CALENDAR OVERVIEW
-          ══════════════════════════════════════════════════════════════════ */}
+      {/* ══════════════ TAB 2: OUT-OF-OFFICE TODAY & CALENDAR OVERVIEW ══════════════ */}
       {activeTab === "calendar" && (
         <div className="space-y-6">
-          {/* Active Today Banner */}
           <Card className="rounded-2xl border-border/80 bg-card overflow-hidden">
             <CardHeader className="pb-3 border-b border-border/60 bg-muted/20">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
                   <Users className="h-4 w-4 text-primary" /> Employees Currently On Leave Today
                 </CardTitle>
                 <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
-                  {currentlyOnLeave.length} Active Absences
+                  {stats.onLeaveTodayCount} Active Absences
                 </Badge>
               </div>
             </CardHeader>
             <CardContent className="p-5">
-              {currentlyOnLeave.length === 0 ? (
+              {calendar.onLeaveToday.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <CheckCircle2 className="h-8 w-8 text-emerald-500 mx-auto mb-2" />
                   <p className="font-semibold text-foreground text-sm">Full Team Attendance Today</p>
@@ -975,23 +605,17 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {currentlyOnLeave.map((r) => (
-                    <div
-                      key={r.id}
-                      className="p-4 rounded-xl border border-border/70 bg-background/80 hover:border-primary/40 transition-all space-y-3"
-                    >
+                  {calendar.onLeaveToday.map((r) => (
+                    <div key={r.id} className="p-4 rounded-xl border border-border/70 bg-background/80 hover:border-primary/40 transition-all space-y-3">
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <div className="font-semibold text-foreground text-sm">
-                            {r.employeeName}
-                          </div>
+                          <div className="font-semibold text-foreground text-sm">{r.employeeName}</div>
                           <div className="text-xs text-muted-foreground">
                             {r.employeeCode} • {r.employeeDepartment}
                           </div>
                         </div>
-                        {getLeaveTypeBadge(r.leaveTypeCode, r.leaveTypeName, r.isPaid)}
+                        <LeaveTypeBadge code={r.leaveTypeCode} name={r.leaveTypeName} isPaid={r.isPaid} />
                       </div>
-
                       <div className="p-2.5 rounded-lg bg-muted/40 text-xs space-y-1">
                         <div className="text-muted-foreground flex items-center justify-between">
                           <span>Leave Window:</span>
@@ -1002,27 +626,28 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                         <div className="text-muted-foreground flex items-center justify-between">
                           <span>Expected Return:</span>
                           <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                            {new Date(
-                              new Date(r.endDate).getTime() + 24 * 60 * 60 * 1000
-                            ).toLocaleDateString("en-US", {
+                            {new Date(new Date(r.endDate).getTime() + 24 * 60 * 60 * 1000).toLocaleDateString("en-US", {
                               month: "short",
                               day: "numeric",
+                              timeZone: "UTC",
                             })}
                           </span>
                         </div>
                       </div>
-
-                      <p className="text-xs text-muted-foreground italic truncate">
-                        &ldquo;{r.reason}&rdquo;
-                      </p>
+                      <p className="text-xs text-muted-foreground italic truncate">&ldquo;{r.reason}&rdquo;</p>
                     </div>
                   ))}
                 </div>
               )}
+              {stats.onLeaveTodayCount > calendar.onLeaveToday.length && (
+                <p className="text-[11px] text-muted-foreground mt-4">
+                  Showing the first {calendar.onLeaveToday.length} of {stats.onLeaveTodayCount}. Use the
+                  applications list with the Approved filter to see the rest.
+                </p>
+              )}
             </CardContent>
           </Card>
 
-          {/* Upcoming Leaves in Next 14 Days */}
           <Card className="rounded-2xl border-border/80 bg-card overflow-hidden">
             <CardHeader className="pb-3 border-b border-border/60 bg-muted/20">
               <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
@@ -1030,31 +655,27 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
               </CardTitle>
             </CardHeader>
             <CardContent className="p-5">
-              {upcomingLeaves.length === 0 ? (
+              {calendar.upcoming.length === 0 ? (
                 <div className="text-center py-6 text-muted-foreground text-xs">
                   No upcoming approved leaves scheduled within the next 2 weeks.
                 </div>
               ) : (
                 <div className="divide-y divide-border/60">
-                  {upcomingLeaves.map((r) => (
-                    <div
-                      key={r.id}
-                      className="py-3 flex items-center justify-between gap-4 text-xs"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">
+                  {calendar.upcoming.map((r) => (
+                    <div key={r.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="h-8 w-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold shrink-0">
                           {r.employeeName.charAt(0)}
                         </div>
-                        <div>
-                          <div className="font-semibold text-foreground">{r.employeeName}</div>
-                          <div className="text-muted-foreground text-[11px]">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-foreground truncate">{r.employeeName}</div>
+                          <div className="text-muted-foreground text-[11px] truncate">
                             {r.employeeCode} • {r.employeeDepartment}
                           </div>
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-4">
-                        {getLeaveTypeBadge(r.leaveTypeCode, r.leaveTypeName, r.isPaid)}
+                      <div className="flex items-center gap-4 flex-wrap">
+                        <LeaveTypeBadge code={r.leaveTypeCode} name={r.leaveTypeName} isPaid={r.isPaid} />
                         <div className="text-right">
                           <div className="font-medium text-foreground">
                             {formatDisplayDate(r.startDate)} – {formatDisplayDate(r.endDate)}
@@ -1073,27 +694,19 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          TAB 3: POLICY & LEAVE CATEGORIES DIRECTORY
-          ══════════════════════════════════════════════════════════════════ */}
+      {/* ══════════════ TAB 3: POLICY & LEAVE CATEGORIES DIRECTORY ══════════════ */}
       {activeTab === "types" && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <h2 className="text-base font-semibold text-foreground">
-                Configured Leave Categories
-              </h2>
+              <h2 className="text-base font-semibold text-foreground">Configured Leave Categories</h2>
               <p className="text-xs text-muted-foreground">
                 Leave entitlements, balances, accrual and approval-chain rules are pending
                 product-owner approval (OD-007). No balances are calculated.
               </p>
             </div>
             {canManageTypes && (
-              <Button
-                size="sm"
-                onClick={() => setNewTypeModal({ isOpen: true, code: "", name: "", description: "", isPaid: true, requiresApproval: true })}
-                className="gap-1.5 rounded-xl text-xs"
-              >
+              <Button size="sm" onClick={() => setTypeDialogOpen(true)} className="gap-1.5 rounded-xl text-xs">
                 <PlusCircle className="h-3.5 w-3.5" /> Add Category
               </Button>
             )}
@@ -1108,13 +721,7 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                   : " An administrator must configure leave categories before leave can be requested."}
               </span>
               {canSeedDefaultTypes && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleSeedDefaultTypes}
-                  disabled={isPending}
-                  className="rounded-xl text-xs shrink-0"
-                >
+                <Button size="sm" variant="outline" onClick={handleSeedDefaultTypes} disabled={isPending} className="rounded-xl text-xs shrink-0">
                   Load suggested categories (pending approval)
                 </Button>
               )}
@@ -1137,19 +744,15 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                       <span className="font-mono text-xs font-bold text-primary px-2 py-0.5 rounded-md bg-primary/10">
                         {t.code}
                       </span>
-                      <h3 className="font-semibold text-foreground text-sm mt-1.5">
-                        {t.name}
-                      </h3>
+                      <h3 className="font-semibold text-foreground text-sm mt-1.5">{t.name}</h3>
                     </div>
                     <Badge variant={t.isActive ? "default" : "outline"} className="text-[10px]">
                       {t.isActive ? "Active" : "Disabled"}
                     </Badge>
                   </div>
-
                   <p className="text-xs text-muted-foreground line-clamp-2 min-h-[32px]">
                     {t.description || "No description provided for this policy type."}
                   </p>
-
                   <div className="pt-3 border-t border-border/60 flex items-center justify-between text-xs">
                     <div className="flex items-center gap-2">
                       <span
@@ -1161,14 +764,10 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
                       >
                         {t.isPaid ? "Paid Leave" : "Unpaid (LWP)"}
                       </span>
-
                       {t.requiresApproval && (
-                        <span className="text-muted-foreground text-[10px]">
-                          Approval required
-                        </span>
+                        <span className="text-muted-foreground text-[10px]">Approval required</span>
                       )}
                     </div>
-
                     {canManageTypes && (
                       <button
                         type="button"
@@ -1189,698 +788,45 @@ export function LeaveManagementClient({ pageData }: LeaveManagementClientProps) 
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          TAB 4: APPLY LEAVE ON BEHALF OF AN EMPLOYEE
-          ══════════════════════════════════════════════════════════════════ */}
+      {/* ══════════════ TAB 4: APPLY LEAVE ══════════════ */}
       {activeTab === "apply" && (
-        <Card className="rounded-2xl border-border/80 bg-card w-full shadow-xs">
-          <CardHeader className="pb-4 border-b border-border/60 bg-muted/20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <div>
-              <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-                <PlusCircle className="h-4 w-4 text-primary" />{" "}
-                {isTeamView ? "Apply / Grant Employee Leave" : "Request Leave"}
-              </CardTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {isTeamView
-                  ? "Submit a leave request on behalf of a staff member or intern. It still requires review by another authorized reviewer."
-                  : "Submit a leave request for review. No leave balance is checked or deducted (OD-007)."}
-              </p>
-            </div>
-            <span className="text-[11px] font-mono font-medium px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 w-fit">
-              {employees.length} {employees.length === 1 ? "Employee" : "Employees"} Available
-            </span>
-          </CardHeader>
-          <CardContent className="p-6">
-            <form onSubmit={handleApplyLeaveSubmit} className="space-y-5">
-              {/* Row 1: Employee and Category Selection */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Employee Selection */}
-                <div>
-                  <label htmlFor="leave-management-client-apply-leave-employee" className="block text-xs font-semibold text-foreground mb-1.5">
-                    Select Employee <span className="text-destructive">*</span>
-                  </label>
-                  {employees.length === 0 ? (
-                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-400">
-                      {isTeamView
-                        ? "No employee records found. Employee records are created in the Employees module."
-                        : "No employee record is linked to your account. Leave can be requested once HR has created it."}
-                    </div>
-                  ) : (
-                    <select
-                      id="leave-management-client-apply-leave-employee"
-                      value={applyForm.employeeId}
-                      onChange={(e) => setApplyForm({ ...applyForm, employeeId: e.target.value })}
-                      className="w-full h-10 px-3 rounded-xl border border-border/80 bg-background text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                      required
-                    >
-                      {employees.map((emp) => (
-                        <option key={emp.id} value={emp.id}>
-                          {emp.name} ({emp.employeeCode}) — {emp.department} • {emp.designation}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    Select the staff member or intern requesting time-off.
-                  </p>
-                </div>
-
-                {/* Leave Category */}
-                <div>
-                  <label htmlFor="leave-management-client-apply-leave-leave-category" className="block text-xs font-semibold text-foreground mb-1.5">
-                    Leave Category <span className="text-destructive">*</span>
-                  </label>
-                  <select
-                    id="leave-management-client-apply-leave-leave-category"
-                    value={applyForm.leaveTypeId}
-                    onChange={(e) => setApplyForm({ ...applyForm, leaveTypeId: e.target.value })}
-                    className="w-full h-10 px-3 rounded-xl border border-border/80 bg-background text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                    required
-                  >
-                    {leaveTypes
-                      .filter((t) => t.isActive)
-                      .map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name} ({t.code}) — {t.isPaid ? "Paid Leave" : "Unpaid (LWP)"}
-                        </option>
-                      ))}
-                  </select>
-                  <p className="text-[11px] text-muted-foreground mt-1">
-                    Only active leave categories are listed.
-                  </p>
-                </div>
-              </div>
-
-              {/* Row 2: Date Range & Live Duration Preview */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                <div>
-                  <label htmlFor="leave-management-client-apply-leave-start-date" className="block text-xs font-semibold text-foreground mb-1.5">
-                    Start Date <span className="text-destructive">*</span>
-                  </label>
-                  <Input
-                    id="leave-management-client-apply-leave-start-date"
-                    type="date"
-                    value={applyForm.startDate}
-                    onChange={(e) => setApplyForm({ ...applyForm, startDate: e.target.value })}
-                    className="h-10 text-xs rounded-xl"
-                    required
-                  />
-                </div>
-                <div>
-                  <label htmlFor="leave-management-client-apply-leave-end-date" className="block text-xs font-semibold text-foreground mb-1.5">
-                    End Date <span className="text-destructive">*</span>
-                  </label>
-                  <Input
-                    id="leave-management-client-apply-leave-end-date"
-                    type="date"
-                    value={applyForm.endDate}
-                    onChange={(e) => setApplyForm({ ...applyForm, endDate: e.target.value })}
-                    className="h-10 text-xs rounded-xl"
-                    required
-                  />
-                </div>
-                <div className="h-10 px-3.5 rounded-xl border border-border/70 bg-muted/30 flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground font-medium">Calendar Days:</span>
-                  <span className="font-bold text-foreground font-mono">
-                    {(() => {
-                      const s = Date.parse(`${applyForm.startDate}T00:00:00Z`);
-                      const e = Date.parse(`${applyForm.endDate}T00:00:00Z`);
-                      if (isNaN(s) || isNaN(e) || e < s) return "—";
-                      const diff = Math.round((e - s) / (1000 * 60 * 60 * 24)) + 1;
-                      return `${diff} ${diff === 1 ? "day" : "days"}`;
-                    })()}
-                  </span>
-                </div>
-              </div>
-
-              {/* Row 3: Reason for Absence */}
-              <div>
-                <label htmlFor="leave-management-client-apply-leave-reason-for-absence" className="block text-xs font-semibold text-foreground mb-1.5">
-                  Reason for Absence <span className="text-destructive">*</span>
-                </label>
-                <textarea
-                  id="leave-management-client-apply-leave-reason-for-absence"
-                  rows={4}
-                  value={applyForm.reason}
-                  onChange={(e) => setApplyForm({ ...applyForm, reason: e.target.value })}
-                  placeholder="Provide clear reason or details for this absence (minimum 5 characters)..."
-                  className="w-full p-3.5 rounded-xl border border-border/80 bg-background text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground resize-y min-h-[90px]"
-                  required
-                />
-              </div>
-
-              {/* Form Action Buttons */}
-              <div className="pt-2 border-t border-border/60 flex items-center justify-end gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setActiveTab("requests")}
-                  className="rounded-xl text-xs h-9 px-4"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={isPending || employees.length === 0 || !firstActiveTypeId}
-                  className="rounded-xl text-xs h-9 px-5 shadow-xs"
-                >
-                  {isPending ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Submitting...
-                    </>
-                  ) : (
-                    "Submit Application"
-                  )}
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
+        <ApplyLeaveForm
+          isTeamView={isTeamView}
+          employees={employees}
+          employeesTotal={employeesTotal}
+          leaveTypes={leaveTypes}
+          isPending={isPending}
+          onSubmit={handleApplyLeaveSubmit}
+          onCancel={() => switchTab("requests")}
+          onValidationError={(message) => showFeedback("error", message)}
+        />
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          MODAL: APPROVE / REJECT CONFIRMATION
-          ══════════════════════════════════════════════════════════════════ */}
-      {reviewModal.isOpen && reviewModal.target && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-card border border-border/80 rounded-2xl w-full max-w-md shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-5 border-b border-border/60 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {reviewModal.action === "APPROVED" ? (
-                  <div className="h-8 w-8 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-                    <CheckCircle2 className="h-4 w-4" />
-                  </div>
-                ) : (
-                  <div className="h-8 w-8 rounded-xl bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-center">
-                    <XCircle className="h-4 w-4" />
-                  </div>
-                )}
-                <div>
-                  <h3 className="font-semibold text-foreground text-sm">
-                    {reviewModal.action === "APPROVED" ? "Approve Leave Request" : "Reject Leave Request"}
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    For {reviewModal.target.employeeName} ({reviewModal.target.employeeCode})
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setReviewModal({ isOpen: false, target: null, action: "APPROVED", notes: "" })}
-                className="p-1 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4 text-xs">
-              {/* Summary box */}
-              <div className="p-3 rounded-xl bg-muted/40 border border-border/60 space-y-1.5">
-                <div className="flex justify-between text-muted-foreground">
-                  <span>Category:</span>
-                  <span className="font-semibold text-foreground">
-                    {reviewModal.target.leaveTypeName}
-                  </span>
-                </div>
-                <div className="flex justify-between text-muted-foreground">
-                  <span>Dates:</span>
-                  <span className="font-medium text-foreground">
-                    {formatDisplayDate(reviewModal.target.startDate)} – {formatDisplayDate(reviewModal.target.endDate)}
-                  </span>
-                </div>
-                <div className="flex justify-between text-muted-foreground">
-                  <span>Duration:</span>
-                  <span className="font-bold text-foreground">
-                    {reviewModal.target.durationDays} days
-                  </span>
-                </div>
-                <div className="pt-1.5 border-t border-border/40 text-muted-foreground">
-                  <span>Reason:</span>
-                  <p className="text-foreground italic mt-0.5">&ldquo;{reviewModal.target.reason}&rdquo;</p>
-                </div>
-              </div>
-
-              {/* Review notes textarea */}
-              <div>
-                <label htmlFor="leave-management-client-field" className="block font-semibold text-foreground mb-1">
-                  {reviewModal.action === "APPROVED" ? "Approval Notes (Optional):" : "Rejection Reason / Notes (Recommended):"}
-                </label>
-                <textarea
-                  id="leave-management-client-field"
-                  rows={3}
-                  value={reviewModal.notes}
-                  onChange={(e) => setReviewModal({ ...reviewModal, notes: e.target.value })}
-                  placeholder={
-                    reviewModal.action === "APPROVED"
-                      ? "e.g. Approved. Team coverage confirmed with department manager."
-                      : "e.g. Peak release window; please reschedule or consult manager."
-                  }
-                  className="w-full p-2.5 rounded-xl border border-border/80 bg-background text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground"
-                />
-              </div>
-
-              {reviewModal.action === "APPROVED" && (
-                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-[11px] flex items-start gap-2">
-                  <Info className="h-4 w-4 shrink-0 mt-0.5" />
-                  <span>
-                    Approving marks days in this window as <strong>ON LEAVE</strong> in Attendance where
-                    no attendance is recorded. Days with a check-in, present/half-day status or a pending
-                    correction are left unchanged and listed after approval.
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <div className="p-4 bg-muted/20 border-t border-border/60 flex items-center justify-end gap-2.5">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setReviewModal({ isOpen: false, target: null, action: "APPROVED", notes: "" })}
-                className="rounded-xl text-xs h-8"
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                variant={reviewModal.action === "APPROVED" ? "primary" : "destructive"}
-                onClick={handleReviewSubmit}
-                disabled={isPending}
-                className="rounded-xl text-xs h-8 shadow-xs"
-              >
-                {isPending ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Processing...
-                  </>
-                ) : reviewModal.action === "APPROVED" ? (
-                  "Confirm Approval"
-                ) : (
-                  "Confirm Rejection"
-                )}
-              </Button>
-            </div>
-          </div>
-        </div>
+      {reviewModal && (
+        <LeaveReviewDialog
+          target={reviewModal.target}
+          action={reviewModal.action}
+          isPending={isPending}
+          onClose={() => setReviewModal(null)}
+          onConfirm={handleReviewConfirm}
+        />
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          MODAL: FULL LEAVE DETAILS & EMPLOYEE LEAVE BALANCES
-          ══════════════════════════════════════════════════════════════════ */}
-      {detailsModal.isOpen && detailsModal.target && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-card border border-border/80 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="p-4 sm:p-5 border-b border-border/60 flex items-center justify-between bg-muted/20 shrink-0">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="h-10 w-10 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold text-sm shrink-0 border border-blue-500/20 shadow-2xs">
-                  {detailsModal.target.employeeName.charAt(0).toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-bold text-foreground text-sm sm:text-base truncate">
-                      {detailsModal.target.employeeName}
-                    </h3>
-                    <span className="font-mono text-[11px] font-semibold text-primary px-2 py-0.5 rounded-md bg-primary/10 border border-primary/20">
-                      {detailsModal.target.employeeCode}
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground truncate mt-0.5">
-                    {detailsModal.target.employeeDepartment} • {detailsModal.target.employeeDesignation}
-                    {detailsModal.target.employeeEmail && ` • ${detailsModal.target.employeeEmail}`}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDetailsModal({ isOpen: false, target: null })}
-                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors shrink-0 cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {/* Scrollable Modal Body */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5 text-xs">
-              {/* ── SECTION 1: THIS LEAVE APPLICATION DETAILS ── */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-foreground text-xs uppercase tracking-wider font-mono flex items-center gap-1.5">
-                    <FileText className="h-3.5 w-3.5 text-primary" /> Application Details
-                  </span>
-                  <div>{getStatusBadge(detailsModal.target.status)}</div>
-                </div>
-
-                {/* Info Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3.5 rounded-xl bg-muted/30 border border-border/60">
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase font-mono font-medium">Category</span>
-                    <div className="mt-1">
-                      {getLeaveTypeBadge(
-                        detailsModal.target.leaveTypeCode,
-                        detailsModal.target.leaveTypeName,
-                        detailsModal.target.isPaid
-                      )}
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground block text-[10px] uppercase font-mono font-medium">Duration</span>
-                    <span className="font-bold text-foreground block mt-1 font-mono text-xs">
-                      {detailsModal.target.durationDays} {detailsModal.target.durationDays === 1 ? "Day" : "Days"}
-                    </span>
-                  </div>
-                  <div className="col-span-2">
-                    <span className="text-muted-foreground block text-[10px] uppercase font-mono font-medium">Date Range</span>
-                    <span className="font-semibold text-foreground block mt-1">
-                      {formatDisplayDate(detailsModal.target.startDate)} – {formatDisplayDate(detailsModal.target.endDate)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Reason */}
-                <div>
-                  <span className="font-semibold text-foreground block mb-1 text-xs">
-                    Reason for Absence:
-                  </span>
-                  <div className="p-3.5 rounded-xl bg-muted/20 border border-border/60 text-foreground text-xs leading-relaxed">
-                    &ldquo;{detailsModal.target.reason}&rdquo;
-                  </div>
-                </div>
-
-                {/* Audit & Review Info */}
-                <div className="p-3.5 rounded-xl bg-muted/40 border border-border/60 space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">Submitted On:</span>
-                    <span className="text-foreground font-medium">
-                      {formatDisplayDate(detailsModal.target.createdAt)}
-                    </span>
-                  </div>
-
-                  {detailsModal.target.reviewedByName && (
-                    <div className="flex items-center justify-between text-xs pt-1.5 border-t border-border/40">
-                      <span className="text-muted-foreground">Reviewed By:</span>
-                      <span className="text-foreground font-semibold flex items-center gap-1">
-                        <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-                        {detailsModal.target.reviewedByName}
-                      </span>
-                    </div>
-                  )}
-
-                  {detailsModal.target.reviewedAt && (
-                    <div className="flex items-center justify-between text-xs pt-1.5 border-t border-border/40">
-                      <span className="text-muted-foreground">Reviewed At:</span>
-                      <span className="text-foreground font-medium">
-                        {formatDisplayDate(detailsModal.target.reviewedAt)}
-                      </span>
-                    </div>
-                  )}
-
-                  {detailsModal.target.reviewNotes && (
-                    <div className="pt-2 border-t border-border/40">
-                      <span className="text-muted-foreground block text-[11px] font-medium">Reviewer Remarks:</span>
-                      <p className="text-foreground italic mt-0.5 bg-background/60 p-2 rounded-lg border border-border/40">
-                        &ldquo;{detailsModal.target.reviewNotes}&rdquo;
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* ── SECTION 2: RECORDED LEAVE DAYS (no balances: OD-007) ── */}
-              <div className="pt-3 border-t border-border/60 space-y-3">
-                <div>
-                  <h4 className="font-bold text-foreground text-xs uppercase tracking-wider font-mono flex items-center gap-1.5">
-                    <PieChart className="h-3.5 w-3.5 text-primary" /> Recorded Leave
-                  </h4>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                    Calendar days on record for {detailsModal.target.employeeName} in the loaded requests.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2.5">
-                  <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-center">
-                    <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 uppercase font-mono block">
-                      Approved
-                    </span>
-                    <span className="text-lg sm:text-xl font-extrabold font-mono text-emerald-700 dark:text-emerald-300 block mt-0.5">
-                      {selectedEmployeeLeaveSummary?.totalApprovedDays ?? 0}{" "}
-                      <span className="text-xs font-normal">days</span>
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-center">
-                    <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase font-mono block">
-                      Pending Approvals
-                    </span>
-                    <span className="text-lg sm:text-xl font-extrabold font-mono text-amber-700 dark:text-amber-300 block mt-0.5">
-                      {selectedEmployeeLeaveSummary?.totalPendingDays ?? 0}{" "}
-                      <span className="text-xs font-normal">days</span>
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-center">
-                    <span className="text-[10px] font-bold text-blue-700 dark:text-blue-400 uppercase font-mono block">
-                      Total Applications
-                    </span>
-                    <span className="text-lg sm:text-xl font-extrabold font-mono text-blue-700 dark:text-blue-300 block mt-0.5">
-                      {selectedEmployeeLeaveSummary?.allRequestsCount ?? 0}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-2">
-                  <Info className="h-4 w-4 shrink-0 mt-0.5" />
-                  <span>Leave balance policy pending approval (OD-007). Entitlements and remaining balances are not calculated.</span>
-                </div>
-              </div>
-
-              {/* ── SECTION 3: OTHER LEAVE REQUESTS OF THIS EMPLOYEE ── */}
-              <div className="pt-3 border-t border-border/60 space-y-2.5">
-                <span className="font-bold text-foreground text-xs uppercase tracking-wider font-mono flex items-center gap-1.5">
-                  <CalendarCheck className="h-3.5 w-3.5 text-primary" /> Other Leave Applications
-                </span>
-
-                {selectedEmployeeLeaveSummary && selectedEmployeeLeaveSummary.otherRequests.length > 0 ? (
-                  <div className="space-y-2">
-                    {selectedEmployeeLeaveSummary.otherRequests.slice(0, 3).map((hist) => (
-                      <div
-                        key={hist.id}
-                        className="p-2.5 rounded-xl border border-border/60 bg-muted/20 flex items-center justify-between gap-3 text-xs"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-foreground">
-                              {formatDisplayDate(hist.startDate)} – {formatDisplayDate(hist.endDate)}
-                            </span>
-                            <span className="text-[10px] text-muted-foreground font-mono font-bold">
-                              ({hist.durationDays}d)
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-muted-foreground truncate max-w-xs mt-0.5">
-                            {hist.reason}
-                          </p>
-                        </div>
-                        <div className="shrink-0">{getStatusBadge(hist.status)}</div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="p-3 rounded-xl bg-muted/20 border border-border/50 text-[11px] text-muted-foreground">
-                    No other leave records found for this employee.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Modal Footer Actions */}
-            <div className="p-4 bg-muted/20 border-t border-border/60 flex items-center justify-between gap-2 shrink-0">
-              {/* Quick in-modal review buttons if still pending */}
-              {canReview(detailsModal.target) ? (
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      const t = detailsModal.target;
-                      setDetailsModal({ isOpen: false, target: null });
-                      if (t) {
-                        setReviewModal({
-                          isOpen: true,
-                          target: t,
-                          action: "REJECTED",
-                          notes: "",
-                        });
-                      }
-                    }}
-                    className="rounded-xl text-xs h-8 text-rose-600 border-rose-500/30 hover:bg-rose-500/10 gap-1"
-                  >
-                    <X className="h-3.5 w-3.5" /> Reject
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      const t = detailsModal.target;
-                      setDetailsModal({ isOpen: false, target: null });
-                      if (t) {
-                        setReviewModal({
-                          isOpen: true,
-                          target: t,
-                          action: "APPROVED",
-                          notes: "",
-                        });
-                      }
-                    }}
-                    className="rounded-xl text-xs h-8 bg-emerald-600 hover:bg-emerald-700 text-white gap-1 shadow-xs"
-                  >
-                    <Check className="h-3.5 w-3.5" /> Approve
-                  </Button>
-                </div>
-              ) : (
-                <div className="text-[11px] text-muted-foreground italic">
-                  Status: {detailsModal.target.status}
-                </div>
-              )}
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setDetailsModal({ isOpen: false, target: null })}
-                className="rounded-xl text-xs h-8 ml-auto"
-              >
-                Close
-              </Button>
-            </div>
-          </div>
-        </div>
+      {detailsTarget && (
+        <LeaveDetailsDialog
+          target={detailsTarget}
+          canReview={canReview(detailsTarget)}
+          onClose={() => setDetailsTarget(null)}
+          onReview={(action) => {
+            const target = detailsTarget;
+            setDetailsTarget(null);
+            setReviewModal({ target, action });
+          }}
+        />
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          MODAL: CREATE NEW LEAVE TYPE
-          ══════════════════════════════════════════════════════════════════ */}
-      {newTypeModal.isOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-card border border-border/80 rounded-2xl w-full max-w-md shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-5 border-b border-border/60 flex items-center justify-between bg-muted/20">
-              <div className="flex items-center gap-2">
-                <div className="h-8 w-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                  <Settings2 className="h-4 w-4" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-foreground text-sm">Create Leave Category</h3>
-                  <p className="text-xs text-muted-foreground">Define a new organization policy type</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setNewTypeModal({ ...newTypeModal, isOpen: false })}
-                className="p-1 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateTypeSubmit}>
-              <div className="p-5 space-y-3.5 text-xs">
-                <div>
-                  <label htmlFor="leave-management-client-create-type-category-code" className="block font-semibold text-foreground mb-1">
-                    Category Code <span className="text-destructive">*</span>
-                  </label>
-                  <Input
-                    id="leave-management-client-create-type-category-code"
-                    placeholder="e.g. COMP_OFF, STUDY, STUDY_LEAVE"
-                    value={newTypeModal.code}
-                    onChange={(e) =>
-                      setNewTypeModal({ ...newTypeModal, code: e.target.value.toUpperCase() })
-                    }
-                    className="h-9 text-xs rounded-xl font-mono uppercase"
-                    required
-                  />
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    Unique uppercase key (A-Z, numbers, underscores).
-                  </p>
-                </div>
-
-                <div>
-                  <label htmlFor="leave-management-client-create-type-display-name" className="block font-semibold text-foreground mb-1">
-                    Display Name <span className="text-destructive">*</span>
-                  </label>
-                  <Input
-                    id="leave-management-client-create-type-display-name"
-                    placeholder="e.g. Compensatory Off, Sabbatical"
-                    value={newTypeModal.name}
-                    onChange={(e) => setNewTypeModal({ ...newTypeModal, name: e.target.value })}
-                    className="h-9 text-xs rounded-xl"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="leave-management-client-create-type-policy-description" className="block font-semibold text-foreground mb-1">
-                    Policy Description
-                  </label>
-                  <textarea
-                    id="leave-management-client-create-type-policy-description"
-                    rows={2}
-                    placeholder="Eligibility, purpose, or conditions for this leave..."
-                    value={newTypeModal.description}
-                    onChange={(e) =>
-                      setNewTypeModal({ ...newTypeModal, description: e.target.value })
-                    }
-                    className="w-full p-2.5 rounded-xl border border-border/80 bg-background text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground"
-                  />
-                </div>
-
-                <div className="flex items-center gap-4 pt-1">
-                  <label className="flex items-center gap-2 cursor-pointer font-medium text-foreground">
-                    <input
-                      type="checkbox"
-                      checked={newTypeModal.isPaid}
-                      onChange={(e) =>
-                        setNewTypeModal({ ...newTypeModal, isPaid: e.target.checked })
-                      }
-                      className="rounded border-border text-primary focus:ring-primary h-4 w-4"
-                    />
-                    <span>Paid Leave</span>
-                  </label>
-
-                  <label className="flex items-center gap-2 cursor-pointer font-medium text-foreground">
-                    <input
-                      type="checkbox"
-                      checked={newTypeModal.requiresApproval}
-                      onChange={(e) =>
-                        setNewTypeModal({ ...newTypeModal, requiresApproval: e.target.checked })
-                      }
-                      className="rounded border-border text-primary focus:ring-primary h-4 w-4"
-                    />
-                    <span>Requires Approval</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="p-4 bg-muted/20 border-t border-border/60 flex items-center justify-end gap-2.5">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setNewTypeModal({ ...newTypeModal, isOpen: false })}
-                  className="rounded-xl text-xs h-8"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={isPending}
-                  size="sm"
-                  className="rounded-xl text-xs h-8 shadow-xs"
-                >
-                  {isPending ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Creating...
-                    </>
-                  ) : (
-                    "Save Category"
-                  )}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
+      {typeDialogOpen && (
+        <LeaveTypeDialog isPending={isPending} onClose={() => setTypeDialogOpen(false)} onSubmit={handleCreateType} />
       )}
     </div>
   );

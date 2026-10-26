@@ -1,5 +1,5 @@
-import { ListPageSkeleton } from "@/components/feedback/page-skeletons";
+import { ApplicationQueueSkeleton } from "@/features/recruitment/components/recruitment-skeletons";
 
 export default function Loading() {
-  return <ListPageSkeleton withStats label="Loading applications" />;
+  return <ApplicationQueueSkeleton label="Loading applications" />;
 }

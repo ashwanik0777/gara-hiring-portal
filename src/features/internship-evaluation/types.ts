@@ -84,6 +84,26 @@ export interface EvaluationEnrollmentListItem {
   joinedEmploymentType: EmploymentType | null;
 }
 
+export interface EvaluationEnrollmentListQuery {
+  status?: EvaluationStatus;
+  /** 1-based page. */
+  page?: number;
+  /** Rows per page (bounded by the service). */
+  pageSize?: number;
+}
+
+/** One page of the staff evaluation list, with per-status counts for the filter chips. */
+export interface EvaluationEnrollmentListPage {
+  items: EvaluationEnrollmentListItem[];
+  /** Enrollments matching the current filter across all pages. */
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  /** Enrollments per status within the viewer's scope (independent of the status filter). */
+  statusCounts: Partial<Record<EvaluationStatus, number>>;
+}
+
 /** Staff member who may be assigned to supervise an internship evaluation. */
 export interface SupervisorOption {
   id: string;
@@ -140,30 +160,6 @@ export interface EvaluationEnrollmentDetail {
     approvedAt?: Date | null;
     issuedAt?: Date | null;
   } | null;
-  tasks?: {
-    id: string;
-    enrollmentId: string;
-    title: string;
-    description: string;
-    priority: TaskPriority;
-    dueDate?: Date | null;
-    status: TaskStatus;
-    changeRequestNotes?: string | null;
-    assignedBy: { id: string; name: string; email: string };
-    createdAt: Date;
-    updatedAt: Date;
-    submissions: {
-      id: string;
-      versionNumber: number;
-      submissionNotes: string;
-      deliverableUrls?: string[] | null;
-      status: SubmissionReviewStatus;
-      supervisorFeedback?: string | null;
-      reviewedAt?: Date | null;
-      submittedAt: Date;
-      reviewedBy?: { id: string; name: string } | null;
-    }[];
-  }[];
   completion?: {
     id: string;
     status: CompletionStatus;

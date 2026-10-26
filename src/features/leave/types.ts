@@ -72,23 +72,77 @@ export interface LeaveReviewResult {
   skippedDates: string[];
 }
 
+/** Database-level page of a list: 1-based page, bounded page size and the total count. */
+export interface PageInfo {
+  page: number;
+  pageSize: number;
+  total: number;
+  pageCount: number;
+}
+
+/** Filters of the leave request list; every value travels in the URL. */
+export interface LeaveListFilters {
+  status?: LeaveRequestStatus;
+  leaveTypeId?: string;
+  search?: string;
+}
+
+export interface LeaveRequestPage {
+  items: LeaveRequestItem[];
+  page: PageInfo;
+}
+
+/** Approved leave overlapping today and approved leave starting in the next 14 days (bounded). */
+export interface LeaveCalendar {
+  onLeaveToday: LeaveRequestItem[];
+  upcoming: LeaveRequestItem[];
+}
+
+/** Bounded employee picker options with the total number of matching employees. */
+export interface EmployeeOptionsResult {
+  options: EmployeeOption[];
+  total: number;
+}
+
+/**
+ * Calendar days on record for one employee (no entitlements or balances: OD-007), with
+ * the most recent other requests.
+ */
+export interface EmployeeLeaveSummary {
+  approvedDays: number;
+  pendingDays: number;
+  totalRequests: number;
+  recentOther: LeaveRequestItem[];
+}
+
+export type LeaveTab = "requests" | "calendar" | "types" | "apply";
+
 /** Data for a leave page: team view for `canLeave` staff, otherwise own requests only. */
 export type LeavePageData =
   | {
       view: "team";
       requests: LeaveRequestItem[];
+      page: PageInfo;
+      filters: LeaveListFilters;
+      calendar: LeaveCalendar;
       leaveTypes: LeaveTypeItem[];
       stats: LeaveStats;
       employees: EmployeeOption[];
+      /** Total non-exited employees; the picker holds at most the first page of them. */
+      employeesTotal: number;
       canManageTypes: boolean;
       canSeedDefaultTypes: boolean;
     }
   | {
       view: "self";
       requests: LeaveRequestItem[];
+      page: PageInfo;
+      filters: LeaveListFilters;
+      calendar: LeaveCalendar;
       leaveTypes: LeaveTypeItem[];
       stats: LeaveStats;
       /** The signed-in user's own employee record, if one exists. */
       employees: EmployeeOption[];
+      employeesTotal: number;
     }
   | { view: "forbidden"; message: string };

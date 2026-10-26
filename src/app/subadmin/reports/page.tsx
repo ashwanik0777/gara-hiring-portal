@@ -1,17 +1,10 @@
-import React from "react";
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { STAFF_ROLES } from "@/lib/auth/permissions";
-import { ValidationError } from "@/lib/errors";
-import { reportService } from "@/features/reports/services/report-service";
-import { AnalyticsDashboardClient } from "@/features/reports/components/analytics-dashboard-client";
+import { AnalyticsDashboardSection } from "@/features/reports/components/analytics-dashboard-section";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
-import { Suspense } from "react";
-import {
-  HiringFunnelSection,
-  HiringFunnelSkeleton,
-  readHiringFunnelParams,
-} from "@/features/reports/components/hiring-funnel-section";
+import { ReportsPageSkeleton } from "@/components/feedback/page-skeletons";
 
 export const instant = false;
 
@@ -59,58 +52,12 @@ export default async function SubAdminReportsPage({
 
   const resolvedParams = await searchParams;
 
-  let analyticsData: Awaited<ReturnType<typeof reportService.getComprehensiveAnalytics>>;
-  try {
-    // Payroll figures are omitted by the service unless the user also holds canPayroll.
-    analyticsData = await reportService.getComprehensiveAnalytics(user, {
-      startDate: resolvedParams.startDate || undefined,
-      endDate: resolvedParams.endDate || undefined,
-      department: resolvedParams.department || undefined,
-      openingId: resolvedParams.openingId || undefined,
-    });
-  } catch (error) {
-    if (!(error instanceof ValidationError)) {
-      throw error;
-    }
-    return (
-      <div
-        role="alert"
-        className="max-w-lg mx-auto rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
-      >
-        Invalid report filters: {error.message}
-      </div>
-    );
-  }
-
-  // Dashboard filters kept when the funnel filters change (and vice versa).
-  const preservedParams: Record<string, string> = {};
-  for (const key of ["startDate", "endDate", "department", "openingId"] as const) {
-    const value = resolvedParams[key];
-    if (value) preservedParams[key] = value;
-  }
-  const showFunnel = resolvedParams.tab === "funnel";
-
   return (
     <div className="w-full">
-      <AnalyticsDashboardClient
-        // Remount when switching to/from the funnel tab so the requested tab opens.
-        key={showFunnel ? "funnel" : "dashboard"}
-        initialData={analyticsData}
-        basePath="/subadmin"
-        initialTab={showFunnel ? "funnel" : "overview"}
-        hiringFunnel={
-          showFunnel ? (
-            <Suspense fallback={<HiringFunnelSkeleton />}>
-              <HiringFunnelSection
-                user={user}
-                filters={readHiringFunnelParams(resolvedParams)}
-                reportsPath="/subadmin/reports"
-                preservedParams={preservedParams}
-              />
-            </Suspense>
-          ) : undefined
-        }
-      />
+      <Suspense fallback={<ReportsPageSkeleton label="Loading reports" />}>
+        {/* Payroll figures are omitted by the service unless the user also holds canPayroll. */}
+        <AnalyticsDashboardSection user={user} basePath="/subadmin" searchParams={resolvedParams} />
+      </Suspense>
     </div>
   );
 }

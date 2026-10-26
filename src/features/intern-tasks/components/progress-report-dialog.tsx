@@ -1,181 +1,28 @@
 "use client";
 
-import React, { useState } from "react";
-import { submitProgressReportAction } from "../actions";
-import { ProgressCadence } from "@/types/enums";
+import React, { lazy } from "react";
+import { FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { FileText, AlertCircle, CheckCircle2 } from "lucide-react";
+import { useLazyDialog } from "@/features/employees/components/use-lazy-dialog";
+import type { ProgressReportPanelProps } from "./progress-report-panel";
 
-interface ProgressReportDialogProps {
-  enrollmentId: string;
-}
+const ProgressReportPanel = lazy(() =>
+  import("./progress-report-panel").then((m) => ({ default: m.ProgressReportPanel }))
+);
 
-export function ProgressReportDialog({ enrollmentId }: ProgressReportDialogProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+export type ProgressReportDialogProps = Omit<ProgressReportPanelProps, "open" | "onClose">;
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    setError(null);
-
-    const formData = new FormData(e.currentTarget);
-    formData.append("enrollmentId", enrollmentId);
-
-    try {
-      const res = await submitProgressReportAction(formData);
-      if (!res.success) {
-        setError(res.error || "Failed to submit progress report");
-      } else {
-        setSuccess(true);
-        setTimeout(() => {
-          setIsOpen(false);
-          setSuccess(false);
-        }, 1200);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "An unexpected error occurred";
-      setError(msg);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  if (!isOpen) {
-    return (
-      <Button
-        variant="primary"
-        size="sm"
-        onClick={() => setIsOpen(true)}
-        className="gap-1.5"
-      >
-        <FileText className="h-4 w-4" />
-        Submit Progress Report
-      </Button>
-    );
-  }
+/** Trigger for the progress-report dialog; the form chunk loads on first use. */
+export function ProgressReportDialog(props: ProgressReportDialogProps) {
+  const dialog = useLazyDialog();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-xl">
-        <h3 className="text-lg font-semibold text-foreground">
-          Submit Progress Report
-        </h3>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Share your accomplishments, learnings, and any active blockers with your supervisor.
-        </p>
-
-        {error && (
-          <div className="mt-4 flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-xs text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {success && (
-          <div className="mt-4 flex items-center gap-2 rounded-lg bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>Report submitted successfully!</span>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="progress-report-dialog-reporting-cadence" className="text-xs font-medium text-foreground">
-                Reporting Cadence
-              </label>
-              <select
-                id="progress-report-dialog-reporting-cadence"
-                name="cadence"
-                defaultValue={ProgressCadence.WEEKLY}
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value={ProgressCadence.WEEKLY}>Weekly Report</option>
-                <option value={ProgressCadence.BIWEEKLY}>Bi-weekly Check-in</option>
-                <option value={ProgressCadence.MILESTONE}>Milestone Review</option>
-                <option value={ProgressCadence.CHECKPOINT}>Daily Checkpoint</option>
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="progress-report-dialog-period-milestone-title" className="text-xs font-medium text-foreground">
-                Period / Milestone Title *
-              </label>
-              <Input
-                id="progress-report-dialog-period-milestone-title"
-                name="periodIdentifier"
-                required
-                placeholder="e.g. Week 1 or Milestone A"
-                className="mt-1"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label htmlFor="progress-report-dialog-executive-summary-achievements" className="text-xs font-medium text-foreground">
-              Executive Summary & Achievements *
-            </label>
-            <textarea
-              id="progress-report-dialog-executive-summary-achievements"
-              name="summary"
-              required
-              rows={4}
-              placeholder="Summary of accomplishments, tasks completed, and progress made..."
-              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </div>
-
-          <div>
-            <label htmlFor="progress-report-dialog-key-learnings-takeaways" className="text-xs font-medium text-foreground">
-              Key Learnings & Takeaways
-            </label>
-            <textarea
-              id="progress-report-dialog-key-learnings-takeaways"
-              name="learnings"
-              rows={2}
-              placeholder="What technical skills or domain concepts did you learn this period?"
-              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </div>
-
-          <div>
-            <label htmlFor="progress-report-dialog-active-blockers-or-assistance" className="text-xs font-medium text-foreground">
-              Active Blockers or Assistance Needed
-            </label>
-            <textarea
-              id="progress-report-dialog-active-blockers-or-assistance"
-              name="blockers"
-              rows={2}
-              placeholder="Any roadblocks, environment issues, or guidance you need from your mentor..."
-              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={isSubmitting}
-              onClick={() => setIsOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? "Submitting..." : "Submit Report"}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <>
+      <Button variant="primary" size="sm" onClick={dialog.show} isLoading={dialog.isPending} className="gap-1.5">
+        <FileText className="h-4 w-4" aria-hidden="true" />
+        Submit Progress Report
+      </Button>
+      {dialog.requested && <ProgressReportPanel {...props} open={dialog.open} onClose={dialog.close} />}
+    </>
   );
 }

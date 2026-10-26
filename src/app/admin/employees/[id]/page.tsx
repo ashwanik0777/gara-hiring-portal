@@ -4,6 +4,7 @@ import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { employeeService } from "@/features/employees/services/employee-service";
+import type { EmployeeDetailCore } from "@/features/employees/types";
 import { EmployeeDetailView } from "@/features/employees/components/employee-detail-view";
 
 interface EmployeeDetailPageProps {
@@ -24,10 +25,11 @@ export default async function EmployeeDetailPage({ params, searchParams }: Emplo
 
   const { id } = await params;
   const { tab } = await searchParams;
-  let employee;
+  let employee: EmployeeDetailCore;
   try {
-    // The service allows HR/Admin with canEmployees, or the employee themselves.
-    employee = await employeeService.getEmployeeDetail(user, id);
+    // The service allows HR/Admin with canEmployees, or the employee themselves. Only the core
+    // record is awaited here; documents, periods and history stream inside the view.
+    employee = await employeeService.getEmployeeDetailCore(user, id);
   } catch (err: unknown) {
     if (err instanceof ForbiddenError) {
       return <UnauthorizedState message="You are not authorized to view this employee record." />;
@@ -41,15 +43,14 @@ export default async function EmployeeDetailPage({ params, searchParams }: Emplo
   const isStaffAdmin =
     (user.roles.includes("ADMIN") || user.roles.includes("HR")) &&
     (await hasPermission(user, "canEmployees"));
-  const allStaff = isStaffAdmin ? await employeeService.getEmployeeDirectory(user) : [];
   const isSelf = employee.email === user.email;
 
   return (
     <EmployeeDetailView
       employee={employee}
+      user={user}
       isStaffAdmin={isStaffAdmin}
       isSelf={isSelf}
-      allStaff={allStaff.map((s) => ({ id: s.id, employeeCode: s.employeeCode, name: s.name }))}
       openExitTab={tab === "exit"}
       applicationHrefBase="/admin/applications"
     />

@@ -13,7 +13,7 @@ import {
 } from "@prisma/client";
 import { enqueueJob } from "@/infrastructure/jobs/job-queue";
 import { JOB_TYPES } from "@/features/automation/job-types";
-import { atBusinessTime } from "@/lib/time/business-time";
+import { atBusinessTime, businessDateKey } from "@/lib/time/business-time";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { JOINING_INITIAL_STATUSES, type ConversionOfferResponseInput, type RecordReviewOutcomeInput } from "../schemas";
 import {
@@ -30,7 +30,9 @@ import {
 import type {
   ConversionResponseResult,
   InternReviewBoard,
+  InternReviewBoardQuery,
   InternReviewItem,
+  InternReviewView,
   ReviewOutcomeResult,
 } from "../types";
 import {
@@ -52,8 +54,15 @@ import {
 
 const REVIEW_DECISION_ROLES: Role[] = [Role.ADMIN, Role.HR];
 
-/** How many decided reviews the board shows. */
-const RECENT_DECISIONS_LIMIT = 25;
+/** Board rows per page by default; `REVIEW_BOARD_MAX_PAGE_SIZE` is the ceiling. */
+export const REVIEW_BOARD_PAGE_SIZE = 20;
+export const REVIEW_BOARD_MAX_PAGE_SIZE = 50;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
 
 type Tx = Prisma.TransactionClient;
 
@@ -307,40 +316,71 @@ export async function applyAcceptedConversion(
 
 export class ConversionService {
   /**
-   * Staff review board: scheduled reviews split into overdue / due this week / upcoming, plus
-   * recent decisions. Requires canEmployees (ADMIN always passes). Internal notes are included
-   * only for staff who may record outcomes; staff never see their own internship reviews.
+   * Staff review board, one view at a time: `due` (overdue + due within six days, default),
+   * `overdue`, `upcoming` or `decided`. Requires canEmployees (ADMIN always passes). Counts and
+   * paging run in PostgreSQL; the due boundaries mirror `classifyReviewDue` (review days are
+   * UTC-midnight calendar days, "today" is the business-time-zone date). Internal notes are
+   * included only for staff who may record outcomes; staff never see their own reviews.
    */
-  async listReviewBoard(user: AuthenticatedUser, now: Date = new Date()): Promise<InternReviewBoard> {
+  async listReviewBoard(user: AuthenticatedUser, query: InternReviewBoardQuery = {}): Promise<InternReviewBoard> {
     await assertPermission(user, "canEmployees");
     const canRecord = await canDecideReviews(user);
 
-    const [scheduled, decided] = await Promise.all([
+    const now = query.now ?? new Date();
+    const view: InternReviewView = query.view ?? "due";
+    const page = clampInt(query.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+    const pageSize = clampInt(query.pageSize ?? REVIEW_BOARD_PAGE_SIZE, 1, REVIEW_BOARD_MAX_PAGE_SIZE);
+
+    const todayStart = parseCalendarDay(businessDateKey(now));
+    // First calendar day after the six-day "due this week" window.
+    const afterThisWeek = new Date(todayStart.getTime() + 7 * DAY_MS);
+
+    const scheduledBase: Prisma.ConversionReviewWhereInput = {
+      status: ConversionReviewStatus.SCHEDULED,
+      employee: { userId: { not: user.id }, status: { not: EmployeeStatus.EXITED } },
+    };
+    const whereByView: Record<InternReviewView, Prisma.ConversionReviewWhereInput> = {
+      overdue: { ...scheduledBase, scheduledFor: { lt: todayStart } },
+      due: { ...scheduledBase, scheduledFor: { lt: afterThisWeek } },
+      upcoming: { ...scheduledBase, scheduledFor: { gte: afterThisWeek } },
+      decided: { status: ConversionReviewStatus.COMPLETED, employee: { userId: { not: user.id } } },
+    };
+    const dueThisWeekWhere: Prisma.ConversionReviewWhereInput = {
+      ...scheduledBase,
+      scheduledFor: { gte: todayStart, lt: afterThisWeek },
+    };
+
+    const [rows, overdue, dueThisWeek, upcoming, decided] = await Promise.all([
       prisma.conversionReview.findMany({
-        where: {
-          status: ConversionReviewStatus.SCHEDULED,
-          employee: { userId: { not: user.id }, status: { not: EmployeeStatus.EXITED } },
-        },
+        where: whereByView[view],
         select: reviewBoardSelect,
-        orderBy: { scheduledFor: "asc" },
+        orderBy: view === "decided" ? { decidedAt: "desc" } : { scheduledFor: "asc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
-      prisma.conversionReview.findMany({
-        where: {
-          status: ConversionReviewStatus.COMPLETED,
-          employee: { userId: { not: user.id } },
-        },
-        select: reviewBoardSelect,
-        orderBy: { decidedAt: "desc" },
-        take: RECENT_DECISIONS_LIMIT,
-      }),
+      prisma.conversionReview.count({ where: whereByView.overdue }),
+      prisma.conversionReview.count({ where: dueThisWeekWhere }),
+      prisma.conversionReview.count({ where: whereByView.upcoming }),
+      prisma.conversionReview.count({ where: whereByView.decided }),
     ]);
 
-    const scheduledItems = scheduled.map((row) => toReviewItem(row, now, canRecord));
+    const counts = { overdue, dueThisWeek, upcoming, decided };
+    const totalByView: Record<InternReviewView, number> = {
+      due: overdue + dueThisWeek,
+      overdue,
+      upcoming,
+      decided,
+    };
+    const total = totalByView[view];
+
     return {
-      overdue: scheduledItems.filter((item) => item.dueState === "OVERDUE"),
-      dueThisWeek: scheduledItems.filter((item) => item.dueState === "DUE_THIS_WEEK"),
-      upcoming: scheduledItems.filter((item) => item.dueState === "UPCOMING"),
-      recentDecisions: decided.map((row) => toReviewItem(row, now, canRecord)),
+      view,
+      items: rows.map((row) => toReviewItem(row, now, canRecord)),
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+      counts,
       canRecord,
     };
   }

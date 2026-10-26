@@ -3,6 +3,7 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import { Navbar } from "@/components/navigation/navbar";
 import { Footer } from "@/components/navigation/footer";
+import { LinkPendingReporter } from "@/components/navigation/navigation-progress";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,15 +27,18 @@ type CareersSearchParams = Promise<Record<string, string | string[] | undefined>
 export const instant = false;
 
 async function OpeningsList({ searchParams }: { searchParams: CareersSearchParams }) {
-  const openings = await getPublicOpenings();
-
   // Campaign parameters (and an external referrer host) are carried to the opening pages.
+  // They are request data, read before the openings so this component always streams at
+  // request time: the list below comes from the shared public-openings cache (not a
+  // database query per visit) and is never evaluated during the build-time prerender.
   const attribution = pickAttributionParams(await searchParams);
   if (!attribution.ref) {
     const referrerHost = externalReferrerHost((await headers()).get("referer"), getSiteUrl());
     if (referrerHost) attribution.ref = referrerHost;
   }
   const attributionQuery = toAttributionQuery(attribution);
+
+  const openings = await getPublicOpenings();
 
   if (openings.length === 0) {
     return (
@@ -80,6 +84,7 @@ async function OpeningsList({ searchParams }: { searchParams: CareersSearchParam
                 <span>View Role & Requirements</span>
                 <ArrowRight className="h-3.5 w-3.5" />
               </Button>
+              <LinkPendingReporter />
             </Link>
           </CardFooter>
         </Card>
@@ -95,15 +100,14 @@ export default function CareersPage({ searchParams }: { searchParams: CareersSea
 
       <main className="flex-1 py-12 md:py-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          {/* Page Header */}
+          {/* Page Header (part of the static shell) */}
           <div className="text-center max-w-6xl mx-auto mb-12 space-y-3">
-            
             <h1 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-foreground">
               Current Openings & Internship Cohorts
             </h1>
           </div>
 
-          {/* Openings Grid streamed inside Suspense */}
+          {/* Openings grid streamed inside Suspense (cached data, request-time attribution) */}
           <Suspense fallback={<CardGridSkeleton />}>
             <OpeningsList searchParams={searchParams} />
           </Suspense>

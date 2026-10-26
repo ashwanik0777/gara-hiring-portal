@@ -111,3 +111,33 @@ export type RecordDisbursementData = z.output<typeof RecordDisbursementSchema>;
 export type UpdatePayrollPeriodStatusData = z.output<typeof UpdatePayrollPeriodStatusSchema>;
 export type BulkDisbursementData = z.output<typeof BulkDisbursementSchema>;
 export type UpdateEmployeePayoutProfileData = z.output<typeof UpdateEmployeePayoutProfileSchema>;
+
+// ---------------------------------------------------------------------------
+// Read-side query parameters (URL search params are untrusted input)
+// ---------------------------------------------------------------------------
+
+/** Upper bound of any payroll list page. */
+export const PAYROLL_MAX_PAGE_SIZE = 50;
+export const PAYROLL_RECORDS_PAGE_SIZE = 25;
+export const PAYROLL_PERIODS_PAGE_SIZE = 12;
+export const PAYROLL_DIRECTORY_PAGE_SIZE = 12;
+export const MY_PAYROLL_PAGE_SIZE = 12;
+
+const pageNumber = z.coerce.number().int().min(1).max(100000).optional().catch(undefined);
+const searchText = z.string().trim().min(1).max(100).optional().catch(undefined);
+
+/** Invalid or unknown values fall back to the default instead of failing the page. */
+export const PayrollDashboardQuerySchema = z.object({
+  period: z.string().uuid().optional().catch(undefined),
+  status: z.enum(["DRAFT", "FINALIZED", "PAID", "VOID"]).optional().catch(undefined),
+  q: searchText,
+  page: pageNumber,
+  /** Periods tab page. */
+  ppage: pageNumber,
+  /** Payout directory page and search. */
+  dpage: pageNumber,
+  dq: searchText,
+  tab: z.enum(["records", "periods", "profiles", "export"]).optional().catch(undefined),
+});
+
+export type PayrollDashboardQuery = z.infer<typeof PayrollDashboardQuerySchema>;

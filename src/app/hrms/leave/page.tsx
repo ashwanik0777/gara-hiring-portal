@@ -1,10 +1,10 @@
-import React from "react";
+import React, { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { isStaffUser, requirePortalCapability } from "@/features/lifecycle/services/lifecycle-service";
-import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
-import { loadLeavePageData } from "@/features/leave/services/leave-page-data";
-import { LeaveManagementClient } from "@/features/leave/components/leave-management-client";
+import { LeavePageSection } from "@/features/leave/components/leave-page-section";
+import { LeavePageSkeleton } from "@/features/leave/components/leave-page-skeleton";
+import type { RawSearchParams } from "@/features/leave/services/leave-page-data";
 
 export const instant = false;
 
@@ -13,7 +13,11 @@ export const metadata = {
   description: "Request leave and review leave applications.",
 };
 
-export default async function HrmsLeavePage() {
+export default async function HrmsLeavePage({
+  searchParams,
+}: {
+  searchParams: Promise<RawSearchParams>;
+}) {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login?callbackUrl=/hrms/leave");
@@ -28,14 +32,11 @@ export default async function HrmsLeavePage() {
   }
 
   // Team view only for staff holding `canLeave`; everyone else sees only their own requests.
-  const pageData = await loadLeavePageData(user, { allowSelfView: true });
-  if (pageData.view === "forbidden") {
-    return <UnauthorizedState message={pageData.message} />;
-  }
-
   return (
     <div className="w-full">
-      <LeaveManagementClient pageData={pageData} />
+      <Suspense fallback={<LeavePageSkeleton />}>
+        <LeavePageSection user={user} searchParams={searchParams} allowSelfView />
+      </Suspense>
     </div>
   );
 }

@@ -1,7 +1,6 @@
 import type { MetadataRoute } from "next";
 import { connection } from "next/server";
-import { OpeningStatus } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import { listPublishedOpeningSlugs } from "@/features/openings/services/opening-service";
 import { absoluteUrl } from "@/lib/site-url";
 import { openingUrl } from "./careers/_lib/seo";
 
@@ -13,15 +12,12 @@ const MAX_SITEMAP_OPENINGS = 5000;
  * Draft, paused and closed openings are never listed.
  */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  // Openings change at runtime; build the sitemap per request instead of at build time.
+  // Served per request (never prerendered at build time, when no database is reachable);
+  // the opening list itself comes from the public-openings cache, which every opening
+  // change expires, so the sitemap costs no database query on a warm cache.
   await connection();
 
-  const openings = await prisma.opening.findMany({
-    where: { status: OpeningStatus.PUBLISHED },
-    select: { slug: true, updatedAt: true },
-    orderBy: { updatedAt: "desc" },
-    take: MAX_SITEMAP_OPENINGS,
-  });
+  const openings = await listPublishedOpeningSlugs(MAX_SITEMAP_OPENINGS);
 
   const latestOpeningUpdate = openings[0]?.updatedAt;
 

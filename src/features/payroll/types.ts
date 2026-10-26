@@ -88,6 +88,7 @@ export interface PayrollPeriodDetail {
   pendingRecords: number;
 }
 
+/** Counts and sums of the active period, computed in PostgreSQL. */
 export interface PayrollStats {
   totalEnrolled: number;
   draftCount: number;
@@ -104,11 +105,56 @@ export interface PayrollStats {
   totalUnconfiguredWorkforce: number;
 }
 
+/** Database-level page of a list: 1-based page, bounded page size and the total count. */
+export interface PageInfo {
+  page: number;
+  pageSize: number;
+  total: number;
+  pageCount: number;
+}
+
+/** Record filters of the payout register; every value travels in the URL. */
+export interface PayrollRecordFilters {
+  status?: PayrollStatus;
+  search?: string;
+}
+
+/** What the payout profile dialog needs; satisfied by directory entries and register rows. */
+export interface PayoutProfileTarget extends MaskedPayoutDetails {
+  employeeId: string;
+  employeeCode: string;
+  employeeName: string;
+  employeeEmail: string;
+  department: string;
+  designation: string;
+}
+
+export type PayrollTab = "records" | "periods" | "profiles" | "export";
+
+/** Read-side query of the staff console (validated from URL search params). */
+export interface PayrollDashboardQueryInput {
+  periodId?: string;
+  status?: PayrollStatus;
+  search?: string;
+  page?: number;
+  periodsPage?: number;
+  directoryPage?: number;
+  directorySearch?: string;
+}
+
 export interface PayrollDashboardData {
+  /** Latest periods (one page, newest first); always includes the active period. */
   periods: PayrollPeriodDetail[];
+  periodsPage: PageInfo;
   activePeriod: PayrollPeriodDetail | null;
+  /** One page of the active period's records. */
   records: PayrollRecordWithEmployee[];
+  recordsPage: PageInfo;
+  recordFilters: PayrollRecordFilters;
+  /** One page of the payout directory. */
   employees: EmployeePayoutProfile[];
+  employeesPage: PageInfo;
+  directorySearch?: string;
   stats: PayrollStats;
 }
 
@@ -131,5 +177,7 @@ export interface MyPayrollOverview {
     designation: string;
   } | null;
   payout: MaskedPayoutDetails | null;
+  /** One page of the employee's own records, newest period first. */
   records: MyPayrollRecord[];
+  page: PageInfo;
 }

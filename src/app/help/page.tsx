@@ -1,8 +1,10 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { Navbar } from "@/components/navigation/navbar";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { chatbotService } from "@/features/chatbot/services/chatbot-service";
 import { PortalChatbotWidget } from "@/features/chatbot/components/portal-chatbot-widget";
+import { ChatPanelSkeleton } from "@/components/feedback/page-skeletons";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -25,30 +27,36 @@ export const metadata = {
 
 export const instant = false;
 
-export default async function HelpCenterPage() {
+/*
+ * The FAQ catalogue is static, so the page shell prerenders. Only the two parts that depend
+ * on the signed-in user (navbar account menu, assistant personalisation) read the session,
+ * each behind its own Suspense boundary; getCurrentUser() is memoised per request.
+ */
+
+async function SessionNavbar() {
   const user = await getCurrentUser();
+  return <Navbar user={user} />;
+}
+
+async function HelpAssistant() {
+  const user = await getCurrentUser();
+  return <PortalChatbotWidget isAuthenticated={Boolean(user)} userName={user?.name} />;
+}
+
+export default function HelpCenterPage() {
   const faqCatalog = chatbotService.getApprovedFaqs();
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <Navbar user={user} />
+      {/* The guest navbar paints with the shell; the account menu streams in for signed-in users. */}
+      <Suspense fallback={<Navbar />}>
+        <SessionNavbar />
+      </Suspense>
 
       <main className="flex-1 py-10">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
           {/* Header */}
           <div className="space-y-3 border-b border-border/70 pb-6">
-            {/* <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary" className="text-xs gap-1.5">
-                <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-                Portal-Scoped Assistant & FAQ
-              </Badge>
-              <Badge variant="outline" className="text-xs">
-                Knowledge Base {faqCatalog.version}
-              </Badge>
-              <Badge variant="warning" className="text-xs">
-                OD-011: External AI Provider Pending Approval
-              </Badge>
-            </div> */}
             <h1 className="text-3xl font-extrabold tracking-tight">
               GARA Portal Help Center & Assistant
             </h1>
@@ -56,10 +64,9 @@ export default async function HelpCenterPage() {
 
           {/* Interactive Scoped Portal Assistant */}
           <section aria-label="Interactive Portal Assistant">
-            <PortalChatbotWidget
-              isAuthenticated={Boolean(user)}
-              userName={user?.name}
-            />
+            <Suspense fallback={<ChatPanelSkeleton label="Loading the portal assistant" />}>
+              <HelpAssistant />
+            </Suspense>
           </section>
 
           {/* Versioned Approved FAQ Knowledge Base */}

@@ -34,10 +34,16 @@ import {
 import {
   PublicEmployeeDirectoryItem,
   ConfidentialEmployeeDetail,
+  EmployeeDetailCore,
   EmployeeDirectoryFilters,
+  EmployeeDirectoryPage,
+  EmployeeDirectoryQuery,
+  EmployeeDocumentItem,
+  EmployeeHistory,
   EmergencyContact,
   OnboardingChecklistItem,
   ReportingManagerOption,
+  ReportingManagerQuery,
 } from "../types";
 import {
   ConflictError,
@@ -189,6 +195,282 @@ function rethrowJoiningConflict(error: unknown): never {
     );
   }
   throw error;
+}
+
+// -----------------------------------------------------------------------------
+// Read-path bounds, selects and projections (shared by the composite detail loader and the
+// split loaders so the confidentiality rules live in exactly one place).
+// -----------------------------------------------------------------------------
+
+/** Directory rows per page by default; `MAX_LIST_PAGE_SIZE` is the hard ceiling. */
+export const DIRECTORY_PAGE_SIZE = 25;
+export const MAX_LIST_PAGE_SIZE = 50;
+/** Reporting-manager picker ceiling; callers narrow with `search` beyond that. */
+export const REPORTING_MANAGER_OPTIONS_LIMIT = 100;
+/** Newest history rows / documents shown on a record. */
+export const EMPLOYEE_HISTORY_LIMIT = 50;
+export const EMPLOYEE_DOCUMENT_LIMIT = 50;
+/** Direct reports listed on a record (the full count is returned separately). */
+const DIRECT_REPORTS_LIMIT = 50;
+const MAX_SEARCH_LENGTH = 100;
+
+interface EmployeeReadAccess {
+  isSelf: boolean;
+  isStaffAdmin: boolean;
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/** 1-based page and bounded page size; `skip` is derived from both. */
+function normalizePaging(
+  query: { page?: number; pageSize?: number },
+  defaultPageSize: number
+): { page: number; pageSize: number; skip: number } {
+  const page = clampInt(query.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+  const pageSize = clampInt(query.pageSize ?? defaultPageSize, 1, MAX_LIST_PAGE_SIZE);
+  return { page, pageSize, skip: (page - 1) * pageSize };
+}
+
+function buildDirectoryWhere(filters: EmployeeDirectoryFilters): Prisma.EmployeeWhereInput {
+  const where: Prisma.EmployeeWhereInput = {};
+
+  if (filters.department) {
+    where.department = filters.department;
+  }
+  if (filters.status) {
+    where.status = filters.status;
+  }
+
+  const term = filters.search?.trim().slice(0, MAX_SEARCH_LENGTH);
+  if (term) {
+    where.OR = [
+      { employeeCode: { contains: term, mode: "insensitive" } },
+      { designation: { contains: term, mode: "insensitive" } },
+      { department: { contains: term, mode: "insensitive" } },
+      { user: { name: { contains: term, mode: "insensitive" } } },
+      { user: { email: { contains: term, mode: "insensitive" } } },
+    ];
+  }
+  return where;
+}
+
+const managerSelect = {
+  id: true,
+  employeeCode: true,
+  designation: true,
+  user: { select: { name: true } },
+} satisfies Prisma.EmployeeSelect;
+
+/** Directory columns only: confidential fields are never selected here. */
+const directoryItemSelect = {
+  id: true,
+  employeeCode: true,
+  department: true,
+  designation: true,
+  joiningDate: true,
+  status: true,
+  employmentType: true,
+  user: { select: { name: true, email: true, image: true } },
+  manager: { select: managerSelect },
+} satisfies Prisma.EmployeeSelect;
+
+type DirectoryRow = Prisma.EmployeeGetPayload<{ select: typeof directoryItemSelect }>;
+
+function toDirectoryItem(emp: DirectoryRow): PublicEmployeeDirectoryItem {
+  return {
+    id: emp.id,
+    employeeCode: emp.employeeCode,
+    name: emp.user.name,
+    email: emp.user.email,
+    department: emp.department,
+    designation: emp.designation,
+    joiningDate: emp.joiningDate,
+    status: emp.status,
+    employmentType: emp.employmentType,
+    avatar: emp.user.image,
+    manager: emp.manager
+      ? {
+          id: emp.manager.id,
+          employeeCode: emp.manager.employeeCode,
+          name: emp.manager.user.name,
+          designation: emp.manager.designation,
+        }
+      : null,
+  };
+}
+
+const employeeCoreSelect = {
+  ...directoryItemSelect,
+  user: { select: { id: true, name: true, email: true, image: true } },
+  personalPhone: true,
+  emergencyContact: true,
+  internalNotes: true,
+  onboardingChecklist: true,
+  directReports: {
+    select: {
+      id: true,
+      employeeCode: true,
+      designation: true,
+      department: true,
+      user: { select: { name: true } },
+    },
+    orderBy: { employeeCode: "asc" },
+    take: DIRECT_REPORTS_LIMIT,
+  },
+  _count: { select: { directReports: true } },
+  application: {
+    select: {
+      id: true,
+      referenceCode: true,
+      opening: { select: { title: true } },
+    },
+  },
+} satisfies Prisma.EmployeeSelect;
+
+type EmployeeCoreRow = Prisma.EmployeeGetPayload<{ select: typeof employeeCoreSelect }>;
+
+const employmentHistorySelect = {
+  id: true,
+  changeType: true,
+  previousValue: true,
+  newValue: true,
+  effectiveDate: true,
+  remarks: true,
+  changedBy: { select: { id: true, name: true, email: true } },
+} satisfies Prisma.EmploymentHistorySelect;
+
+const employeeDocumentSelect = {
+  id: true,
+  documentType: true,
+  title: true,
+  storageKey: true,
+  mimeType: true,
+  fileSizeBytes: true,
+  isConfidential: true,
+  uploadedAt: true,
+  uploadedBy: { select: { id: true, name: true } },
+} satisfies Prisma.EmployeeDocumentSelect;
+
+const exitRecordSelect = {
+  id: true,
+  periodId: true,
+  resignationDate: true,
+  lastWorkingDate: true,
+  reason: true,
+  clearanceChecklist: true,
+  exitInterviewNotes: true,
+  status: true,
+  processedBy: { select: { id: true, name: true } },
+} satisfies Prisma.EmployeeExitRecordSelect;
+
+const employmentPeriodSelect = {
+  id: true,
+  employmentType: true,
+  designation: true,
+  department: true,
+  startDate: true,
+  endDate: true,
+  startReason: true,
+  endReason: true,
+} satisfies Prisma.EmploymentPeriodSelect;
+
+type EmploymentHistoryRow = Prisma.EmploymentHistoryGetPayload<{ select: typeof employmentHistorySelect }>;
+type EmployeeDocumentRow = Prisma.EmployeeDocumentGetPayload<{ select: typeof employeeDocumentSelect }>;
+type ExitRecordRow = Prisma.EmployeeExitRecordGetPayload<{ select: typeof exitRecordSelect }>;
+type EmploymentPeriodRow = Prisma.EmploymentPeriodGetPayload<{ select: typeof employmentPeriodSelect }>;
+
+interface EmployeeHistoryRows {
+  employmentHistories: EmploymentHistoryRow[];
+  exitRecords: ExitRecordRow[];
+  employmentPeriods: EmploymentPeriodRow[];
+}
+
+/**
+ * Core projection. Phone and emergency contact are visible to staff admins and the person
+ * themselves (both already authorized); internal staff notes are never shown to the employee,
+ * and the payroll payout block inside them is only ever shown in the payroll module.
+ */
+function projectEmployeeCore(emp: EmployeeCoreRow, access: EmployeeReadAccess): EmployeeDetailCore {
+  const { isStaffAdmin } = access;
+  return {
+    ...toDirectoryItem(emp),
+    personalPhone: emp.personalPhone,
+    emergencyContact: (emp.emergencyContact as unknown as EmergencyContact) || null,
+    internalNotes: isStaffAdmin ? stripPayoutProfile(emp.internalNotes) : null,
+    application: emp.application
+      ? {
+          id: emp.application.id,
+          referenceCode: emp.application.referenceCode,
+          openingTitle: emp.application.opening.title,
+        }
+      : null,
+    onboardingChecklist: (emp.onboardingChecklist as unknown as OnboardingChecklistItem[]) || null,
+    directReports: emp.directReports.map((r) => ({
+      id: r.id,
+      employeeCode: r.employeeCode,
+      name: r.user.name,
+      designation: r.designation,
+      department: r.department,
+    })),
+    directReportCount: emp._count?.directReports ?? emp.directReports.length,
+  };
+}
+
+/** Exit interview notes are staff-only. */
+function projectEmployeeHistory(rows: EmployeeHistoryRows, access: EmployeeReadAccess): EmployeeHistory {
+  const { isStaffAdmin } = access;
+  return {
+    employmentHistories: rows.employmentHistories.map((h) => ({
+      id: h.id,
+      changeType: h.changeType,
+      previousValue: h.previousValue,
+      newValue: h.newValue,
+      effectiveDate: h.effectiveDate,
+      remarks: h.remarks,
+      changedBy: h.changedBy,
+    })),
+    exitRecords: rows.exitRecords.map((x) => ({
+      id: x.id,
+      periodId: x.periodId,
+      resignationDate: x.resignationDate,
+      lastWorkingDate: x.lastWorkingDate,
+      reason: x.reason,
+      clearanceChecklist: x.clearanceChecklist as Record<string, unknown> | null,
+      exitInterviewNotes: isStaffAdmin ? x.exitInterviewNotes : null,
+      status: x.status,
+      processedBy: x.processedBy,
+    })),
+    employmentPeriods: rows.employmentPeriods.map((p) => ({
+      id: p.id,
+      employmentType: p.employmentType,
+      designation: p.designation,
+      department: p.department,
+      startDate: p.startDate,
+      endDate: p.endDate,
+      startReason: p.startReason,
+      endReason: p.endReason,
+    })),
+  };
+}
+
+/** Confidential documents are staff-only, whichever query produced the rows. */
+function projectEmployeeDocuments(rows: EmployeeDocumentRow[], access: EmployeeReadAccess): EmployeeDocumentItem[] {
+  return rows
+    .filter((d) => access.isStaffAdmin || !d.isConfidential)
+    .map((d) => ({
+      id: d.id,
+      documentType: d.documentType,
+      title: d.title,
+      storageKey: d.storageKey,
+      mimeType: d.mimeType,
+      fileSizeBytes: d.fileSizeBytes,
+      isConfidential: d.isConfidential,
+      uploadedAt: d.uploadedAt,
+      uploadedBy: d.uploadedBy,
+    }));
 }
 
 export class EmployeeService {
@@ -934,99 +1216,77 @@ export class EmployeeService {
     return this.getEmployeeDetail(user, created.id);
   }
 
+  // ---------------------------------------------------------------------------
+  // Read paths. Every list is bounded and selects only rendered columns; confidential
+  // fields (personal phone, emergency contact, internal notes) never leave the detail
+  // projection below.
+  // ---------------------------------------------------------------------------
+
   /**
-   * Retrieves employee directory with strict data isolation.
-   * Requires canEmployees. Never includes confidential phone, emergency contact, or private notes.
+   * One page of the employee directory. Requires canEmployees (ADMIN always passes). Search,
+   * filters, paging and the department list all run in PostgreSQL.
    */
   async getEmployeeDirectory(
     user: AuthenticatedUser,
-    filters?: EmployeeDirectoryFilters
-  ): Promise<PublicEmployeeDirectoryItem[]> {
+    query: EmployeeDirectoryQuery = {}
+  ): Promise<EmployeeDirectoryPage> {
     // ADMIN always passes; staff need the canEmployees module permission.
     await assertPermission(user, "canEmployees");
 
-    const where: Prisma.EmployeeWhereInput = {};
+    const where = buildDirectoryWhere(query);
+    const { page, pageSize, skip } = normalizePaging(query, DIRECTORY_PAGE_SIZE);
 
-    if (filters?.department) {
-      where.department = filters.department;
-    }
+    const [rows, total, departmentRows] = await Promise.all([
+      prisma.employee.findMany({
+        where,
+        select: directoryItemSelect,
+        orderBy: { employeeCode: "asc" },
+        skip,
+        take: pageSize,
+      }),
+      prisma.employee.count({ where }),
+      prisma.employee.groupBy({ by: ["department"], orderBy: { department: "asc" } }),
+    ]);
 
-    if (filters?.status) {
-      where.status = filters.status;
-    }
-
-    if (filters?.search) {
-      const term = filters.search.trim();
-      where.OR = [
-        { employeeCode: { contains: term, mode: "insensitive" } },
-        { designation: { contains: term, mode: "insensitive" } },
-        { department: { contains: term, mode: "insensitive" } },
-        { user: { name: { contains: term, mode: "insensitive" } } },
-        { user: { email: { contains: term, mode: "insensitive" } } },
-      ];
-    }
-
-    // Confidential fields are strictly excluded from the select query
-    const employees = await prisma.employee.findMany({
-      where,
-      select: {
-        id: true,
-        employeeCode: true,
-        department: true,
-        designation: true,
-        joiningDate: true,
-        status: true,
-        employmentType: true,
-        user: {
-          select: {
-            name: true,
-            email: true,
-            image: true,
-          },
-        },
-        manager: {
-          select: {
-            id: true,
-            employeeCode: true,
-            designation: true,
-            user: { select: { name: true } },
-          },
-        },
-      },
-      orderBy: { employeeCode: "asc" },
-    });
-
-    return employees.map((emp) => ({
-      id: emp.id,
-      employeeCode: emp.employeeCode,
-      name: emp.user.name,
-      email: emp.user.email,
-      department: emp.department,
-      designation: emp.designation,
-      joiningDate: emp.joiningDate,
-      status: emp.status,
-      employmentType: emp.employmentType,
-      avatar: emp.user.image,
-      manager: emp.manager
-        ? {
-            id: emp.manager.id,
-            employeeCode: emp.manager.employeeCode,
-            name: emp.manager.user.name,
-            designation: emp.manager.designation,
-          }
-        : null,
-    }));
+    return {
+      items: rows.map(toDirectoryItem),
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+      departments: departmentRows.map((row) => row.department),
+    };
   }
 
   /**
    * Active (non-exited) employees that may be chosen as reporting manager in the joining
-   * dialogs. Gated like every joining action: HR / Admin with canEmployees.
+   * dialogs and on the employee record. Gated like every joining action: HR / Admin with
+   * canEmployees. Bounded to REPORTING_MANAGER_OPTIONS_LIMIT rows (narrow with `search`).
    */
-  async listReportingManagerOptions(user: AuthenticatedUser): Promise<ReportingManagerOption[]> {
+  async listReportingManagerOptions(
+    user: AuthenticatedUser,
+    options: ReportingManagerQuery = {}
+  ): Promise<ReportingManagerOption[]> {
     await this.assertAdminAccess(user);
 
+    const term = options.search?.trim().slice(0, MAX_SEARCH_LENGTH);
+    const where: Prisma.EmployeeWhereInput = {
+      status: { not: EmployeeStatus.EXITED },
+      ...(options.excludeEmployeeId ? { id: { not: options.excludeEmployeeId } } : {}),
+      ...(term
+        ? {
+            OR: [
+              { employeeCode: { contains: term, mode: "insensitive" } },
+              { designation: { contains: term, mode: "insensitive" } },
+              { user: { name: { contains: term, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+    };
+    const take = clampInt(options.take ?? REPORTING_MANAGER_OPTIONS_LIMIT, 1, REPORTING_MANAGER_OPTIONS_LIMIT);
+
     const managers = await prisma.employee.findMany({
-      where: { status: { not: EmployeeStatus.EXITED } },
+      where,
       select: {
         id: true,
         employeeCode: true,
@@ -1034,6 +1294,7 @@ export class EmployeeService {
         user: { select: { name: true } },
       },
       orderBy: { employeeCode: "asc" },
+      take,
     });
 
     return managers.map((m) => ({
@@ -1045,8 +1306,105 @@ export class EmployeeService {
   }
 
   /**
-   * Retrieves comprehensive employee detail with strict authorization.
-   * Only ADMIN/HR with canEmployees, or the employee themselves, can access confidential data.
+   * Who may read an employee record: HR/Admin with canEmployees, or the employee themselves.
+   * Internal notes, exit interview notes and confidential documents are staff-only.
+   */
+  private async employeeReadAccessFor(
+    user: AuthenticatedUser,
+    ownerUserId: string
+  ): Promise<EmployeeReadAccess> {
+    const isSelf = ownerUserId === user.id;
+    const isStaffAdmin = await this.isEmployeeAdmin(user);
+
+    if (!isStaffAdmin && !isSelf) {
+      throw new ForbiddenError(
+        "Access to confidential employee details requires HR, Administrator, or self authorization."
+      );
+    }
+    return { isSelf, isStaffAdmin };
+  }
+
+  /** Resolves read access for a record id (one narrow query); throws NotFound / Forbidden. */
+  private async resolveEmployeeReadAccess(
+    user: AuthenticatedUser,
+    employeeId: string
+  ): Promise<EmployeeReadAccess> {
+    const owner = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { userId: true },
+    });
+    if (!owner) {
+      throw new NotFoundError("Employee record not found.");
+    }
+    return this.employeeReadAccessFor(user, owner.userId);
+  }
+
+  /**
+   * Header and profile of one employee record in a single query (the detail page's first
+   * paint). Histories and documents stream separately through the loaders below.
+   */
+  async getEmployeeDetailCore(user: AuthenticatedUser, employeeId: string): Promise<EmployeeDetailCore> {
+    const emp = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: employeeCoreSelect,
+    });
+    if (!emp) {
+      throw new NotFoundError("Employee record not found.");
+    }
+    const access = await this.employeeReadAccessFor(user, emp.user.id);
+    return projectEmployeeCore(emp, access);
+  }
+
+  /**
+   * Employment periods, exit records and the history timeline of one record. Same access
+   * rules as the core; exit interview notes are staff-only.
+   */
+  async getEmployeeHistory(user: AuthenticatedUser, employeeId: string): Promise<EmployeeHistory> {
+    const access = await this.resolveEmployeeReadAccess(user, employeeId);
+
+    const [employmentHistories, exitRecords, employmentPeriods] = await Promise.all([
+      prisma.employmentHistory.findMany({
+        where: { employeeId },
+        select: employmentHistorySelect,
+        orderBy: { effectiveDate: "desc" },
+        take: EMPLOYEE_HISTORY_LIMIT,
+      }),
+      prisma.employeeExitRecord.findMany({
+        where: { employeeId },
+        select: exitRecordSelect,
+        orderBy: { lastWorkingDate: "desc" },
+      }),
+      prisma.employmentPeriod.findMany({
+        where: { employeeId },
+        select: employmentPeriodSelect,
+        orderBy: { startDate: "asc" },
+      }),
+    ]);
+
+    return projectEmployeeHistory({ employmentHistories, exitRecords, employmentPeriods }, access);
+  }
+
+  /**
+   * Secure document metadata of one record (newest first, bounded). Confidential documents
+   * are filtered in the query for non-staff viewers and again in the projection.
+   */
+  async getEmployeeDocuments(user: AuthenticatedUser, employeeId: string): Promise<EmployeeDocumentItem[]> {
+    const access = await this.resolveEmployeeReadAccess(user, employeeId);
+
+    const documents = await prisma.employeeDocument.findMany({
+      where: { employeeId, ...(access.isStaffAdmin ? {} : { isConfidential: false }) },
+      select: employeeDocumentSelect,
+      orderBy: { uploadedAt: "desc" },
+      take: EMPLOYEE_DOCUMENT_LIMIT,
+    });
+
+    return projectEmployeeDocuments(documents, access);
+  }
+
+  /**
+   * Complete employee record (core, documents and history) in one query. Used where the whole
+   * projection is needed at once, e.g. the record returned right after a joining. Pages prefer
+   * the split loaders above so heavy sections can stream.
    */
   async getEmployeeDetail(
     user: AuthenticatedUser,
@@ -1054,61 +1412,24 @@ export class EmployeeService {
   ): Promise<ConfidentialEmployeeDetail> {
     const emp = await prisma.employee.findUnique({
       where: { id: employeeId },
-      include: {
-        user: { select: { id: true, name: true, email: true, image: true } },
-        manager: {
-          select: {
-            id: true,
-            employeeCode: true,
-            designation: true,
-            user: { select: { name: true } },
-          },
-        },
-        directReports: {
-          select: {
-            id: true,
-            employeeCode: true,
-            designation: true,
-            department: true,
-            user: { select: { name: true } },
-          },
-        },
-        application: {
-          select: {
-            id: true,
-            referenceCode: true,
-            opening: { select: { title: true } },
-          },
-        },
+      select: {
+        ...employeeCoreSelect,
         employmentHistories: {
-          include: {
-            changedBy: { select: { id: true, name: true, email: true } },
-          },
+          select: employmentHistorySelect,
           orderBy: { effectiveDate: "desc" },
+          take: EMPLOYEE_HISTORY_LIMIT,
         },
         secureDocuments: {
-          include: {
-            uploadedBy: { select: { id: true, name: true } },
-          },
+          select: employeeDocumentSelect,
           orderBy: { uploadedAt: "desc" },
+          take: EMPLOYEE_DOCUMENT_LIMIT,
         },
         exitRecords: {
-          include: {
-            processedBy: { select: { id: true, name: true } },
-          },
+          select: exitRecordSelect,
           orderBy: { lastWorkingDate: "desc" },
         },
         employmentPeriods: {
-          select: {
-            id: true,
-            employmentType: true,
-            designation: true,
-            department: true,
-            startDate: true,
-            endDate: true,
-            startReason: true,
-            endReason: true,
-          },
+          select: employmentPeriodSelect,
           orderBy: { startDate: "asc" },
         },
       },
@@ -1118,97 +1439,12 @@ export class EmployeeService {
       throw new NotFoundError("Employee record not found.");
     }
 
-    const isSelf = emp.user.id === user.id;
-    const isStaffAdmin = await this.isEmployeeAdmin(user);
-
-    if (!isStaffAdmin && !isSelf) {
-      throw new ForbiddenError(
-        "Access to confidential employee details requires HR, Administrator, or self authorization."
-      );
-    }
+    const access = await this.employeeReadAccessFor(user, emp.user.id);
 
     return {
-      id: emp.id,
-      employeeCode: emp.employeeCode,
-      name: emp.user.name,
-      email: emp.user.email,
-      department: emp.department,
-      designation: emp.designation,
-      joiningDate: emp.joiningDate,
-      status: emp.status,
-      employmentType: emp.employmentType,
-      avatar: emp.user.image,
-      manager: emp.manager
-        ? {
-            id: emp.manager.id,
-            employeeCode: emp.manager.employeeCode,
-            name: emp.manager.user.name,
-            designation: emp.manager.designation,
-          }
-        : null,
-      personalPhone: emp.personalPhone,
-      emergencyContact: (emp.emergencyContact as unknown as EmergencyContact) || null,
-      // Internal staff notes are never visible to the employee themselves, and the payroll
-      // payout block (bank account, PAN, amount) is only ever shown inside the payroll module.
-      internalNotes: isStaffAdmin ? stripPayoutProfile(emp.internalNotes) : null,
-      application: emp.application
-        ? {
-            id: emp.application.id,
-            referenceCode: emp.application.referenceCode,
-            openingTitle: emp.application.opening.title,
-          }
-        : null,
-      onboardingChecklist: (emp.onboardingChecklist as unknown as OnboardingChecklistItem[]) || null,
-      employmentHistories: emp.employmentHistories.map((h) => ({
-        id: h.id,
-        changeType: h.changeType,
-        previousValue: h.previousValue,
-        newValue: h.newValue,
-        effectiveDate: h.effectiveDate,
-        remarks: h.remarks,
-        changedBy: h.changedBy,
-      })),
-      secureDocuments: emp.secureDocuments
-        .filter((d) => isStaffAdmin || !d.isConfidential)
-        .map((d) => ({
-        id: d.id,
-        documentType: d.documentType,
-        title: d.title,
-        storageKey: d.storageKey,
-        mimeType: d.mimeType,
-        fileSizeBytes: d.fileSizeBytes,
-        isConfidential: d.isConfidential,
-        uploadedAt: d.uploadedAt,
-        uploadedBy: d.uploadedBy,
-      })),
-      directReports: emp.directReports.map((r) => ({
-        id: r.id,
-        employeeCode: r.employeeCode,
-        name: r.user.name,
-        designation: r.designation,
-        department: r.department,
-      })),
-      exitRecords: emp.exitRecords.map((x) => ({
-        id: x.id,
-        periodId: x.periodId,
-        resignationDate: x.resignationDate,
-        lastWorkingDate: x.lastWorkingDate,
-        reason: x.reason,
-        clearanceChecklist: x.clearanceChecklist as Record<string, unknown> | null,
-        exitInterviewNotes: isStaffAdmin ? x.exitInterviewNotes : null,
-        status: x.status,
-        processedBy: x.processedBy,
-      })),
-      employmentPeriods: emp.employmentPeriods.map((p) => ({
-        id: p.id,
-        employmentType: p.employmentType,
-        designation: p.designation,
-        department: p.department,
-        startDate: p.startDate,
-        endDate: p.endDate,
-        startReason: p.startReason,
-        endReason: p.endReason,
-      })),
+      ...projectEmployeeCore(emp, access),
+      ...projectEmployeeHistory(emp, access),
+      secureDocuments: projectEmployeeDocuments(emp.secureDocuments, access),
     };
   }
 

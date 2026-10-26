@@ -1,5 +1,5 @@
-import { ListPageSkeleton } from "@/components/feedback/page-skeletons";
+import { EvaluationListPageSkeleton } from "@/features/internship-evaluation/components/evaluation-skeletons";
 
 export default function Loading() {
-  return <ListPageSkeleton withStats label="Loading evaluations" />;
+  return <EvaluationListPageSkeleton label="Loading evaluations" />;
 }

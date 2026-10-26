@@ -28,9 +28,13 @@ import {
   FileText,
   Award,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
+import {
+  ListPagination,
+  PageOutOfRange,
+  pageHref,
+  parsePageParam,
+} from "@/features/recruitment/components/list-pagination";
 
 export const instant = false;
 
@@ -41,9 +45,6 @@ interface SubAdminApplicationsPageProps {
     page?: string;
   }>;
 }
-
-/** Applications per list page; also the most a "select page" bulk action can include. */
-const PAGE_SIZE = 50;
 
 function getInitials(name?: string | null) {
   if (!name) return "CA";
@@ -159,15 +160,15 @@ export default async function SubAdminApplicationsPage({
   // authorizes the user and limits counts to the applications they may see (interviewers:
   // assigned applications only). Failures propagate to the error boundary instead of being
   // shown as zero counts.
+  // The page comes from the URL; the service pages in the database (50 per page).
+  const listQuery = { status: validStatus, search: search || undefined };
+
   let statusCounts: Awaited<ReturnType<typeof recruitmentService.getRecruitmentStatusCounts>>;
-  let applications: Awaited<ReturnType<typeof recruitmentService.getRecruitmentQueue>>;
+  let queue: Awaited<ReturnType<typeof recruitmentService.getRecruitmentQueue>>;
   try {
-    [statusCounts, applications] = await Promise.all([
+    [statusCounts, queue] = await Promise.all([
       recruitmentService.getRecruitmentStatusCounts(user),
-      recruitmentService.getRecruitmentQueue(user, {
-        status: validStatus,
-        search: search || undefined,
-      }),
+      recruitmentService.getRecruitmentQueue(user, listQuery, { page: parsePageParam(page) }),
     ]);
   } catch (error) {
     if (error instanceof ForbiddenError) {
@@ -184,24 +185,14 @@ export default async function SubAdminApplicationsPage({
   // Bulk stage changes use the single-transition rules: ADMIN/HR with canApplications.
   const canBulkAct = user.roles.some((role) => role === Role.ADMIN || role === Role.HR);
 
-  const pageCount = Math.max(1, Math.ceil(applications.length / PAGE_SIZE));
-  const currentPage = Math.min(Math.max(1, Number.parseInt(page ?? "1", 10) || 1), pageCount);
-  const pageApplications = applications.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-  const bulkItems: BulkSelectableApplication[] = pageApplications.map((app) => ({
+  // Bulk selection covers the current page only (50 rows, under the 100-application limit).
+  const bulkItems: BulkSelectableApplication[] = queue.items.map((app) => ({
     id: app.id,
     referenceCode: app.referenceCode,
     candidateName: app.candidate.fullName,
     status: app.status,
     manualTargets: getManualTransitionTargets(app.status),
   }));
-  const pageHref = (target: number) => {
-    const params = new URLSearchParams();
-    if (validStatus) params.set("status", validStatus);
-    if (search) params.set("search", search);
-    if (target > 1) params.set("page", String(target));
-    const query = params.toString();
-    return `/subadmin/applications${query ? `?${query}` : ""}`;
-  };
 
   const countByStatus = statusCounts.counts;
   const globalTotal = statusCounts.total;
@@ -467,7 +458,7 @@ export default async function SubAdminApplicationsPage({
       </div>
 
       {/* ─── Applications List ─── */}
-      {applications.length === 0 ? (
+      {queue.total === 0 ? (
         <EmptyState
           title="No applications match filters"
           description="Try broadening your search query or reset the pipeline stage filters."
@@ -477,10 +468,17 @@ export default async function SubAdminApplicationsPage({
             </Link>
           }
         />
+      ) : queue.items.length === 0 ? (
+        <PageOutOfRange
+          page={queue.page}
+          pageCount={queue.pageCount}
+          noun="application"
+          href={pageHref("/subadmin/applications", listQuery, 1)}
+        />
       ) : (
         <ApplicationListSection canBulkAct={canBulkAct} items={bulkItems}>
           <div className="grid grid-cols-1 gap-3">
-            {pageApplications.map((app) => (
+            {queue.items.map((app) => (
               <Card
                 key={app.id}
                 className="rounded-2xl border border-border/80 hover:border-primary/50 transition-all shadow-2xs hover:shadow-xs"
@@ -550,31 +548,15 @@ export default async function SubAdminApplicationsPage({
               </Card>
             ))}
           </div>
-          {pageCount > 1 && (
-            <nav aria-label="Application list pages" className="flex items-center justify-between gap-3 pt-2 text-xs">
-              <span className="text-muted-foreground font-mono">
-                Page {currentPage} of {pageCount} · {applications.length} applications
-              </span>
-              <div className="flex items-center gap-2">
-                {currentPage > 1 ? (
-                  <Link
-                    href={pageHref(currentPage - 1)}
-                    className="inline-flex items-center gap-1 rounded-xl border border-border/80 px-3 py-1.5 font-semibold text-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  >
-                    <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" /> Previous
-                  </Link>
-                ) : null}
-                {currentPage < pageCount ? (
-                  <Link
-                    href={pageHref(currentPage + 1)}
-                    className="inline-flex items-center gap-1 rounded-xl border border-border/80 px-3 py-1.5 font-semibold text-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  >
-                    Next <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-                  </Link>
-                ) : null}
-              </div>
-            </nav>
-          )}
+          <ListPagination
+            baseHref="/subadmin/applications"
+            query={listQuery}
+            page={queue.page}
+            pageCount={queue.pageCount}
+            total={queue.total}
+            noun="application"
+            label="Application list pages"
+          />
         </ApplicationListSection>
       )}
     </div>

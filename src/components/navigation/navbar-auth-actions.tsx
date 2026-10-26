@@ -7,6 +7,7 @@ import { authClient } from "@/lib/auth/auth-client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { LinkPendingReporter } from "./navigation-progress";
 import {
   Lock,
   User as UserIcon,
@@ -241,6 +242,7 @@ export function NavbarAuthActions({
                           : "My applications & hiring status"}
                     </span>
                   </div>
+                  <LinkPendingReporter />
                 </Link>
 
                 {/* 2. Profile */}
@@ -260,6 +262,7 @@ export function NavbarAuthActions({
                       Candidate details, resume & info
                     </span>
                   </div>
+                  <LinkPendingReporter />
                 </Link>
 
                 {/* 3. Careers */}
@@ -279,6 +282,7 @@ export function NavbarAuthActions({
                       Explore active internship roles
                     </span>
                   </div>
+                  <LinkPendingReporter />
                 </Link>
 
                 {/* 4. Help & FAQ */}
@@ -298,6 +302,7 @@ export function NavbarAuthActions({
                       Support and platform guidance
                     </span>
                   </div>
+                  <LinkPendingReporter />
                 </Link>
               </div>
 
@@ -333,9 +338,11 @@ export function NavbarAuthActions({
               <Lock className="hidden sm:block h-3.5 w-3.5" aria-hidden="true" />
               Sign In
             </Button>
+            <LinkPendingReporter />
           </Link>
           <Link href="/register">
             <Button size="sm">Create Account</Button>
+            <LinkPendingReporter />
           </Link>
         </div>
       )}

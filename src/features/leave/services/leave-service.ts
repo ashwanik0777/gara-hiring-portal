@@ -13,13 +13,21 @@ import {
   ReviewLeaveRequestInput,
   CreateLeaveTypeInput,
   MAX_LEAVE_REQUEST_SPAN_DAYS,
+  LEAVE_DEFAULT_PAGE_SIZE,
+  LEAVE_MAX_PAGE_SIZE,
 } from "../schemas";
 import type {
   LeaveTypeItem,
   LeaveRequestItem,
   LeaveStats,
   EmployeeOption,
+  EmployeeOptionsResult,
+  EmployeeLeaveSummary,
+  LeaveCalendar,
+  LeaveListFilters,
+  LeaveRequestPage,
   LeaveReviewResult,
+  PageInfo,
 } from "../types";
 import {
   PolicyBlockedError,
@@ -94,7 +102,19 @@ const OPEN_LEAVE_STATUSES: LeaveRequestStatus[] = [
   LeaveRequestStatus.APPROVED,
 ];
 
-const leaveRequestInclude = {
+/** Only the columns the leave screens render (no wide includes). */
+const leaveRequestSelect = {
+  id: true,
+  employeeId: true,
+  leaveTypeId: true,
+  startDate: true,
+  endDate: true,
+  reason: true,
+  status: true,
+  reviewNotes: true,
+  reviewedById: true,
+  reviewedAt: true,
+  createdAt: true,
   employee: {
     select: {
       id: true,
@@ -106,9 +126,23 @@ const leaveRequestInclude = {
   },
   leaveType: { select: { id: true, code: true, name: true, isPaid: true } },
   reviewedBy: { select: { id: true, name: true } },
-} satisfies Prisma.LeaveRequestInclude;
+} satisfies Prisma.LeaveRequestSelect;
 
-type LeaveRequestRow = Prisma.LeaveRequestGetPayload<{ include: typeof leaveRequestInclude }>;
+type LeaveRequestRow = Prisma.LeaveRequestGetPayload<{ select: typeof leaveRequestSelect }>;
+
+const employeeOptionSelect = {
+  id: true,
+  employeeCode: true,
+  department: true,
+  designation: true,
+  user: { select: { name: true, email: true } },
+} satisfies Prisma.EmployeeSelect;
+
+/** Approved leave shown on the calendar tab: at most this many rows per list. */
+const CALENDAR_LIMIT = 50;
+const UPCOMING_WINDOW_DAYS = 14;
+/** Employee picker: first page size and hard cap. */
+const EMPLOYEE_OPTION_LIMIT = 50;
 
 function toLeaveRequestItem(r: LeaveRequestRow, viewerId: string): LeaveRequestItem {
   return {
@@ -161,20 +195,74 @@ function toLeaveTypeItem(t: {
   };
 }
 
-function computeStats(requests: LeaveRequestItem[]): LeaveStats {
-  const todayKey = utcDateKey(new Date());
-  const approved = requests.filter((r) => r.status === LeaveRequestStatus.APPROVED);
+function toEmployeeOption(e: Prisma.EmployeeGetPayload<{ select: typeof employeeOptionSelect }>): EmployeeOption {
   return {
-    totalRequests: requests.length,
-    pendingCount: requests.filter((r) => r.status === LeaveRequestStatus.PENDING).length,
-    approvedCount: approved.length,
-    rejectedCount: requests.filter((r) => r.status === LeaveRequestStatus.REJECTED).length,
-    onLeaveTodayCount: approved.filter(
-      (r) => r.startDate.slice(0, 10) <= todayKey && r.endDate.slice(0, 10) >= todayKey
-    ).length,
-    paidLeavesCount: approved.filter((r) => r.isPaid).length,
+    id: e.id,
+    employeeCode: e.employeeCode,
+    name: e.user.name,
+    email: e.user.email,
+    department: e.department,
+    designation: e.designation,
   };
 }
+
+/** Clamps page / page size and returns the matching Prisma `skip` / `take`. */
+function pageArgs(page?: number, pageSize?: number) {
+  const size = Math.min(Math.max(1, Math.trunc(pageSize ?? LEAVE_DEFAULT_PAGE_SIZE)), LEAVE_MAX_PAGE_SIZE);
+  const current = Math.max(1, Math.trunc(page ?? 1));
+  return { skip: (current - 1) * size, take: size, page: current, pageSize: size };
+}
+
+function toPageInfo(page: number, pageSize: number, total: number): PageInfo {
+  return { page, pageSize, total, pageCount: Math.max(1, Math.ceil(total / pageSize)) };
+}
+
+/** Prisma `where` for the list filters the leave screens expose. */
+function buildLeaveWhere(filters: LeaveListFilters & { employeeId?: string }): Prisma.LeaveRequestWhereInput {
+  const where: Prisma.LeaveRequestWhereInput = {};
+  if (filters.status) where.status = filters.status;
+  if (filters.leaveTypeId) where.leaveTypeId = filters.leaveTypeId;
+  if (filters.employeeId) where.employeeId = filters.employeeId;
+  const search = filters.search?.trim();
+  if (search) {
+    where.OR = [
+      { employee: { user: { name: { contains: search, mode: "insensitive" } } } },
+      { employee: { employeeCode: { contains: search, mode: "insensitive" } } },
+      { employee: { department: { contains: search, mode: "insensitive" } } },
+      { leaveType: { name: { contains: search, mode: "insensitive" } } },
+      { reason: { contains: search, mode: "insensitive" } },
+    ];
+  }
+  return where;
+}
+
+type StatusGroup = { status: LeaveRequestStatus; _count: { _all: number } };
+
+function statsFromGroups(
+  groups: StatusGroup[],
+  onLeaveTodayCount: number,
+  paidLeavesCount: number
+): LeaveStats {
+  const count = (status: LeaveRequestStatus) =>
+    groups.find((g) => g.status === status)?._count._all ?? 0;
+  return {
+    totalRequests: groups.reduce((sum, g) => sum + g._count._all, 0),
+    pendingCount: count(LeaveRequestStatus.PENDING),
+    approvedCount: count(LeaveRequestStatus.APPROVED),
+    rejectedCount: count(LeaveRequestStatus.REJECTED),
+    onLeaveTodayCount,
+    paidLeavesCount,
+  };
+}
+
+const EMPTY_STATS: LeaveStats = {
+  totalRequests: 0,
+  pendingCount: 0,
+  approvedCount: 0,
+  rejectedCount: 0,
+  onLeaveTodayCount: 0,
+  paidLeavesCount: 0,
+};
 
 export class LeaveService {
   /** Team view, reviews and on-behalf submissions require `canLeave`. */
@@ -315,114 +403,160 @@ export class LeaveService {
     });
   }
 
+  /** Counts by status pushed to PostgreSQL (`groupBy` / `count`); no rows are loaded. */
+  private async loadStats(scope: Prisma.LeaveRequestWhereInput): Promise<LeaveStats> {
+    const today = toUtcDateOnly(new Date());
+    const [groups, onLeaveTodayCount, paidLeavesCount] = await Promise.all([
+      prisma.leaveRequest.groupBy({ by: ["status"], where: scope, _count: { _all: true } }),
+      prisma.leaveRequest.count({
+        where: {
+          ...scope,
+          status: LeaveRequestStatus.APPROVED,
+          startDate: { lte: today },
+          endDate: { gte: today },
+        },
+      }),
+      prisma.leaveRequest.count({
+        where: { ...scope, status: LeaveRequestStatus.APPROVED, leaveType: { isPaid: true } },
+      }),
+    ]);
+    return statsFromGroups(groups as StatusGroup[], onLeaveTodayCount, paidLeavesCount);
+  }
+
+  /** Approved leave overlapping today and starting within the next 14 days, bounded. */
+  private async loadCalendar(
+    scope: Prisma.LeaveRequestWhereInput,
+    viewerId: string
+  ): Promise<LeaveCalendar> {
+    const today = toUtcDateOnly(new Date());
+    const horizon = new Date(today.getTime() + UPCOMING_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+    const [onLeaveToday, upcoming] = await Promise.all([
+      prisma.leaveRequest.findMany({
+        where: {
+          ...scope,
+          status: LeaveRequestStatus.APPROVED,
+          startDate: { lte: today },
+          endDate: { gte: today },
+        },
+        select: leaveRequestSelect,
+        orderBy: { endDate: "asc" },
+        take: CALENDAR_LIMIT,
+      }),
+      prisma.leaveRequest.findMany({
+        where: {
+          ...scope,
+          status: LeaveRequestStatus.APPROVED,
+          startDate: { gt: today, lte: horizon },
+        },
+        select: leaveRequestSelect,
+        orderBy: { startDate: "asc" },
+        take: CALENDAR_LIMIT,
+      }),
+    ]);
+    return {
+      onLeaveToday: onLeaveToday.map((r) => toLeaveRequestItem(r, viewerId)),
+      upcoming: upcoming.map((r) => toLeaveRequestItem(r, viewerId)),
+    };
+  }
+
   /**
    * Organisation-wide leave counts (requires `canLeave`). No balances are computed (OD-007).
    */
   async getLeaveStats(user: AuthenticatedUser): Promise<LeaveStats> {
     await assertPermission(user, "canLeave");
+    return this.loadStats({});
+  }
 
-    const today = toUtcDateOnly(new Date());
+  /** Organisation-wide calendar lists (requires `canLeave`). */
+  async getLeaveCalendar(user: AuthenticatedUser): Promise<LeaveCalendar> {
+    await assertPermission(user, "canLeave");
+    return this.loadCalendar({}, user.id);
+  }
 
-    const [totalRequests, pendingCount, approvedCount, rejectedCount, onLeaveTodayCount, paidLeavesCount] =
-      await Promise.all([
-        prisma.leaveRequest.count(),
-        prisma.leaveRequest.count({ where: { status: LeaveRequestStatus.PENDING } }),
-        prisma.leaveRequest.count({ where: { status: LeaveRequestStatus.APPROVED } }),
-        prisma.leaveRequest.count({ where: { status: LeaveRequestStatus.REJECTED } }),
-        prisma.leaveRequest.count({
-          where: {
-            status: LeaveRequestStatus.APPROVED,
-            startDate: { lte: today },
-            endDate: { gte: today },
-          },
-        }),
-        prisma.leaveRequest.count({
-          where: { status: LeaveRequestStatus.APPROVED, leaveType: { isPaid: true } },
-        }),
-      ]);
+  /**
+   * One page of leave requests for review (requires `canLeave`). Filters, page and page
+   * size (at most LEAVE_MAX_PAGE_SIZE) come from the URL; the total is counted in the
+   * same round trip.
+   */
+  async getAllLeaveRequests(
+    user: AuthenticatedUser,
+    query: LeaveListFilters & { employeeId?: string; page?: number; pageSize?: number } = {}
+  ): Promise<LeaveRequestPage> {
+    await assertPermission(user, "canLeave");
+
+    const where = buildLeaveWhere(query);
+    const { skip, take, page, pageSize } = pageArgs(query.page, query.pageSize);
+
+    const [rows, total] = await Promise.all([
+      prisma.leaveRequest.findMany({
+        where,
+        select: leaveRequestSelect,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip,
+        take,
+      }),
+      prisma.leaveRequest.count({ where }),
+    ]);
 
     return {
-      totalRequests,
-      pendingCount,
-      approvedCount,
-      rejectedCount,
-      onLeaveTodayCount,
-      paidLeavesCount,
+      items: rows.map((r) => toLeaveRequestItem(r, user.id)),
+      page: toPageInfo(page, pageSize, total),
     };
   }
 
   /**
-   * All leave requests for review (requires `canLeave`).
+   * The signed-in user's own leave requests and employee record (self view). Every query
+   * is scoped to the user's own employee id; nothing about other employees is read.
    */
-  async getAllLeaveRequests(
+  async getMyLeaveOverview(
     user: AuthenticatedUser,
-    filters?: {
-      status?: LeaveRequestStatus;
-      leaveTypeId?: string;
-      employeeId?: string;
-    }
-  ): Promise<LeaveRequestItem[]> {
-    await assertPermission(user, "canLeave");
-
-    const where: Prisma.LeaveRequestWhereInput = {};
-    if (filters?.status) where.status = filters.status;
-    if (filters?.leaveTypeId) where.leaveTypeId = filters.leaveTypeId;
-    if (filters?.employeeId) where.employeeId = filters.employeeId;
-
-    const requests = await prisma.leaveRequest.findMany({
-      where,
-      include: leaveRequestInclude,
-      orderBy: { createdAt: "desc" },
-    });
-
-    return requests.map((r) => toLeaveRequestItem(r, user.id));
-  }
-
-  /**
-   * The signed-in user's own leave requests and employee record (self view).
-   */
-  async getMyLeaveOverview(user: AuthenticatedUser): Promise<{
+    query: LeaveListFilters & { page?: number; pageSize?: number } = {}
+  ): Promise<{
     employee: EmployeeOption | null;
     requests: LeaveRequestItem[];
+    page: PageInfo;
     stats: LeaveStats;
+    calendar: LeaveCalendar;
   }> {
     const employee = await prisma.employee.findUnique({
       where: { userId: user.id },
-      select: {
-        id: true,
-        employeeCode: true,
-        department: true,
-        designation: true,
-        status: true,
-        user: { select: { name: true, email: true } },
-      },
+      select: { ...employeeOptionSelect, status: true },
     });
+
+    const { skip, take, page, pageSize } = pageArgs(query.page, query.pageSize);
 
     if (!employee) {
-      return { employee: null, requests: [], stats: computeStats([]) };
+      return {
+        employee: null,
+        requests: [],
+        page: toPageInfo(page, pageSize, 0),
+        stats: EMPTY_STATS,
+        calendar: { onLeaveToday: [], upcoming: [] },
+      };
     }
 
-    const rows = await prisma.leaveRequest.findMany({
-      where: { employeeId: employee.id },
-      include: leaveRequestInclude,
-      orderBy: { createdAt: "desc" },
-    });
-    const requests = rows.map((r) => toLeaveRequestItem(r, user.id));
+    const scope: Prisma.LeaveRequestWhereInput = { employeeId: employee.id };
+    const where = buildLeaveWhere({ ...query, employeeId: employee.id });
+
+    const [rows, total, stats, calendar] = await Promise.all([
+      prisma.leaveRequest.findMany({
+        where,
+        select: leaveRequestSelect,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip,
+        take,
+      }),
+      prisma.leaveRequest.count({ where }),
+      this.loadStats(scope),
+      this.loadCalendar(scope, user.id),
+    ]);
 
     return {
-      employee:
-        employee.status === EmployeeStatus.EXITED
-          ? null
-          : {
-              id: employee.id,
-              employeeCode: employee.employeeCode,
-              name: employee.user.name,
-              email: employee.user.email,
-              department: employee.department,
-              designation: employee.designation,
-            },
-      requests,
-      stats: computeStats(requests),
+      employee: employee.status === EmployeeStatus.EXITED ? null : toEmployeeOption(employee),
+      requests: rows.map((r) => toLeaveRequestItem(r, user.id)),
+      page: toPageInfo(page, pageSize, total),
+      stats,
+      calendar,
     };
   }
 
@@ -507,7 +641,7 @@ export class LeaveService {
           reason: input.reason.trim(),
           status: LeaveRequestStatus.PENDING,
         },
-        include: leaveRequestInclude,
+        select: leaveRequestSelect,
       });
 
       await tx.auditLog.create({
@@ -674,31 +808,88 @@ export class LeaveService {
   }
 
   /**
-   * Non-exited employees for the on-behalf leave form (requires `canLeave`).
+   * Non-exited employees for the on-behalf leave form (requires `canLeave`). Bounded to
+   * EMPLOYEE_OPTION_LIMIT rows; `search` narrows by name, code or department and `total`
+   * tells the picker whether more employees exist than were returned.
    */
-  async getEmployeeOptions(user: AuthenticatedUser): Promise<EmployeeOption[]> {
+  async getEmployeeOptions(
+    user: AuthenticatedUser,
+    options: { search?: string; take?: number } = {}
+  ): Promise<EmployeeOptionsResult> {
     await assertPermission(user, "canLeave");
 
-    const raw = await prisma.employee.findMany({
-      where: { status: { not: EmployeeStatus.EXITED } },
-      select: {
-        id: true,
-        employeeCode: true,
-        department: true,
-        designation: true,
-        user: { select: { name: true, email: true } },
-      },
-      orderBy: { employeeCode: "asc" },
-    });
+    const take = Math.min(Math.max(1, Math.trunc(options.take ?? EMPLOYEE_OPTION_LIMIT)), EMPLOYEE_OPTION_LIMIT);
+    const search = options.search?.trim();
+    const where: Prisma.EmployeeWhereInput = {
+      status: { not: EmployeeStatus.EXITED },
+      ...(search
+        ? {
+            OR: [
+              { user: { name: { contains: search, mode: "insensitive" } } },
+              { employeeCode: { contains: search, mode: "insensitive" } },
+              { department: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
 
-    return raw.map((e) => ({
-      id: e.id,
-      employeeCode: e.employeeCode,
-      name: e.user.name,
-      email: e.user.email,
-      department: e.department,
-      designation: e.designation,
-    }));
+    const [raw, total] = await Promise.all([
+      prisma.employee.findMany({
+        where,
+        select: employeeOptionSelect,
+        orderBy: { employeeCode: "asc" },
+        take,
+      }),
+      prisma.employee.count({ where }),
+    ]);
+
+    return { options: raw.map(toEmployeeOption), total };
+  }
+
+  /**
+   * Calendar days on record for one employee (the employee themself, or staff with
+   * `canLeave`). Day totals are summed in PostgreSQL; entitlements and balances are not
+   * calculated (OD-007).
+   */
+  async getEmployeeLeaveSummary(
+    user: AuthenticatedUser,
+    employeeId: string,
+    excludeRequestId?: string
+  ): Promise<EmployeeLeaveSummary> {
+    const employee = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { id: true, userId: true },
+    });
+    if (!employee) {
+      throw new NotFoundError("Employee record not found.");
+    }
+    if (employee.userId !== user.id) {
+      await assertPermission(user, "canLeave");
+    }
+
+    const [dayTotals, totalRequests, recentOther] = await Promise.all([
+      prisma.$queryRaw<{ status: string; days: number }[]>`
+        SELECT "status"::text AS status,
+               COALESCE(SUM(("endDate"::date - "startDate"::date) + 1), 0)::int AS days
+        FROM "leave_requests"
+        WHERE "employeeId" = ${employeeId} AND "status" IN ('APPROVED', 'PENDING')
+        GROUP BY "status"`,
+      prisma.leaveRequest.count({ where: { employeeId } }),
+      prisma.leaveRequest.findMany({
+        where: { employeeId, ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}) },
+        select: leaveRequestSelect,
+        orderBy: [{ startDate: "desc" }, { id: "desc" }],
+        take: 3,
+      }),
+    ]);
+
+    const days = (status: string) => Number(dayTotals.find((d) => d.status === status)?.days ?? 0);
+    return {
+      approvedDays: days(LeaveRequestStatus.APPROVED),
+      pendingDays: days(LeaveRequestStatus.PENDING),
+      totalRequests,
+      recentOther: recentOther.map((r) => toLeaveRequestItem(r, user.id)),
+    };
   }
 
   // ---------------------------------------------------------------------------

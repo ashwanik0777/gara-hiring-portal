@@ -13,7 +13,6 @@ import { getInternJourneyState } from "../joining-state";
 import type { ReportingManagerOption } from "@/features/employees/types";
 import { CompletionAndCertificatePanel } from "@/features/certificates/components/completion-and-certificate-panel";
 import { CreateTaskDialog } from "@/features/intern-tasks/components/create-task-dialog";
-import { InternTaskList } from "@/features/intern-tasks/components/intern-task-list";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -68,6 +67,8 @@ interface EvaluationCockpitProps {
     canChange: boolean;
     options: SupervisorOption[];
   };
+  /** Streamed, paginated task list (rendered under the task header inside its own Suspense). */
+  tasksSection: React.ReactNode;
 }
 
 /**
@@ -81,6 +82,7 @@ export function EvaluationCockpit({
   canDecide,
   joining,
   supervisorChange,
+  tasksSection,
 }: EvaluationCockpitProps) {
   const isRunning = enrollment.status === EvaluationStatus.IN_PROGRESS;
   const journeyState = getInternJourneyState({
@@ -178,12 +180,14 @@ export function EvaluationCockpit({
         </Card>
       </div>
 
-      {/* Start trigger (only PENDING_TRIGGER → IN_PROGRESS) */}
-      <StartEvaluationDialog
-        enrollmentId={enrollment.id}
-        candidateName={enrollment.candidateName}
-        currentStatus={enrollment.status}
-      />
+      {/* Start trigger (only PENDING_TRIGGER → IN_PROGRESS); not rendered otherwise, so its client code is not shipped */}
+      {enrollment.status === EvaluationStatus.PENDING_TRIGGER && (
+        <StartEvaluationDialog
+          enrollmentId={enrollment.id}
+          candidateName={enrollment.candidateName}
+          currentStatus={enrollment.status}
+        />
+      )}
 
       <CheckpointReviewPanel
         checkpoints={enrollment.checkpoints}
@@ -224,18 +228,20 @@ export function EvaluationCockpit({
         canIssueIdCard={canDecide}
       />
 
-      <div className="space-y-4 pt-4 border-t border-border">
-        <div className="flex items-center justify-between">
+      <section id="tasks" aria-labelledby="tasks-heading" className="space-y-4 border-t border-border pt-4 scroll-mt-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="text-base font-semibold text-foreground">Assigned Tasks & Deliverables</h3>
+            <h3 id="tasks-heading" className="text-base font-semibold text-foreground">
+              Assigned Tasks & Deliverables
+            </h3>
             <p className="text-xs text-muted-foreground">
               Assign project tasks, set deadlines, and review versioned submissions from the intern.
             </p>
           </div>
           <CreateTaskDialog enrollmentId={enrollment.id} />
         </div>
-        <InternTaskList tasks={enrollment.tasks || []} isSupervisorView={true} />
-      </div>
+        {tasksSection}
+      </section>
 
       <CompletionAndCertificatePanel
         enrollmentId={enrollment.id}

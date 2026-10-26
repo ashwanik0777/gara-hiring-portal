@@ -1,10 +1,10 @@
-import React from "react";
+import React, { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { Role } from "@/types/enums";
-import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
-import { loadLeavePageData } from "@/features/leave/services/leave-page-data";
-import { LeaveManagementClient } from "@/features/leave/components/leave-management-client";
+import { LeavePageSection } from "@/features/leave/components/leave-page-section";
+import { LeavePageSkeleton } from "@/features/leave/components/leave-page-skeleton";
+import type { RawSearchParams } from "@/features/leave/services/leave-page-data";
 
 export const instant = false;
 
@@ -13,7 +13,11 @@ export const metadata = {
   description: "Review leave requests and manage leave categories.",
 };
 
-export default async function AdminLeavePage() {
+export default async function AdminLeavePage({
+  searchParams,
+}: {
+  searchParams: Promise<RawSearchParams>;
+}) {
   const user = await getCurrentUser();
   if (!user || !user.roles.includes(Role.ADMIN)) {
     redirect("/admin");
@@ -22,14 +26,11 @@ export default async function AdminLeavePage() {
     redirect("/set-password");
   }
 
-  const pageData = await loadLeavePageData(user, { allowSelfView: false });
-  if (pageData.view === "forbidden") {
-    return <UnauthorizedState message={pageData.message} />;
-  }
-
   return (
     <div className="w-full">
-      <LeaveManagementClient pageData={pageData} />
+      <Suspense fallback={<LeavePageSkeleton />}>
+        <LeavePageSection user={user} searchParams={searchParams} allowSelfView={false} />
+      </Suspense>
     </div>
   );
 }

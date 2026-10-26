@@ -11,11 +11,18 @@ import {
   LogAttendanceInput,
   RequestRegularizationInput,
   ReviewRegularizationInput,
+  ATTENDANCE_DEFAULT_PAGE_SIZE,
+  ATTENDANCE_MAX_PAGE_SIZE,
 } from "../schemas";
 import type {
   AttendanceEmployeeOption,
+  AttendanceHistoryPage,
+  AttendanceListFilters,
   AttendanceRecordItem,
   AttendanceRecordView,
+  AttendanceTodayCounts,
+  AttendanceWindow,
+  PageInfo,
 } from "../types";
 import {
   PolicyBlockedError,
@@ -24,10 +31,15 @@ import {
   NotFoundError,
   ValidationError,
 } from "@/lib/errors";
-import { toUtcDateOnly } from "./attendance-dates";
+import {
+  currentBusinessMonthKey,
+  toUtcDateOnly,
+  utcDateKey,
+  utcMonthWindow,
+} from "./attendance-dates";
 
-const TEAM_RECORD_LIMIT = 100;
-const SELF_RECORD_LIMIT = 60;
+/** Employee picker: first page size and hard cap. */
+const EMPLOYEE_OPTION_LIMIT = 50;
 
 const employeeSummarySelect = {
   id: true,
@@ -51,6 +63,79 @@ type AttendanceRow = {
   entryMethod: AttendanceEntryMethod;
   notes: string | null;
 };
+
+/** Row columns the attendance tables render, with the employee summary for team views. */
+const attendanceRecordSelect = {
+  id: true,
+  employeeId: true,
+  date: true,
+  checkInTime: true,
+  checkOutTime: true,
+  status: true,
+  entryMethod: true,
+  notes: true,
+  employee: {
+    select: {
+      id: true,
+      employeeCode: true,
+      department: true,
+      designation: true,
+      user: { select: { name: true } },
+    },
+  },
+} satisfies Prisma.AttendanceRecordSelect;
+
+const ownRecordSelect = {
+  id: true,
+  employeeId: true,
+  date: true,
+  checkInTime: true,
+  checkOutTime: true,
+  status: true,
+  entryMethod: true,
+  notes: true,
+} satisfies Prisma.AttendanceRecordSelect;
+
+type ListQuery = Partial<AttendanceListFilters> & { page?: number; pageSize?: number };
+
+/** Clamps page / page size and returns the matching Prisma `skip` / `take`. */
+function pageArgs(page?: number, pageSize?: number) {
+  const size = Math.min(
+    Math.max(1, Math.trunc(pageSize ?? ATTENDANCE_DEFAULT_PAGE_SIZE)),
+    ATTENDANCE_MAX_PAGE_SIZE
+  );
+  const current = Math.max(1, Math.trunc(page ?? 1));
+  return { skip: (current - 1) * size, take: size, page: current, pageSize: size };
+}
+
+function toPageInfo(page: number, pageSize: number, total: number): PageInfo {
+  return { page, pageSize, total, pageCount: Math.max(1, Math.ceil(total / pageSize)) };
+}
+
+/** Resolves the month being browsed (default: current month, business time zone). */
+function resolveWindow(month?: string): AttendanceWindow & { startDate: Date; endDate: Date } {
+  const key = month ?? currentBusinessMonthKey();
+  const { start, endExclusive } = utcMonthWindow(key);
+  return {
+    month: key,
+    start: start.toISOString(),
+    endExclusive: endExclusive.toISOString(),
+    startDate: start,
+    endDate: endExclusive,
+  };
+}
+
+type StatusGroup = { status: AttendanceStatus; _count: { _all: number } };
+
+function todayCountsFromGroups(groups: StatusGroup[], dateKey: string): AttendanceTodayCounts {
+  const count = (status: AttendanceStatus) =>
+    groups.find((g) => g.status === status)?._count._all ?? 0;
+  return {
+    dateKey,
+    present: count(AttendanceStatus.PRESENT) + count(AttendanceStatus.HALF_DAY),
+    onLeaveOrAbsent: count(AttendanceStatus.ON_LEAVE) + count(AttendanceStatus.ABSENT),
+  };
+}
 
 function isUniqueViolation(err: unknown): boolean {
   return (
@@ -138,72 +223,185 @@ export class AttendanceService {
   }
 
   /**
-   * Team view for staff with `canAttendance`: non-exited employees and the latest records.
+   * Non-exited employees for the staff entry form (requires `canAttendance`). Bounded to
+   * EMPLOYEE_OPTION_LIMIT rows; `search` narrows by name, code or department and `total`
+   * tells the picker whether more employees exist than were returned.
    */
-  async getTeamAttendanceView(user: AuthenticatedUser): Promise<{
+  async getEmployeeOptions(
+    user: AuthenticatedUser,
+    options: { search?: string; take?: number } = {}
+  ): Promise<{ options: AttendanceEmployeeOption[]; total: number }> {
+    await assertPermission(user, "canAttendance");
+
+    const take = Math.min(Math.max(1, Math.trunc(options.take ?? EMPLOYEE_OPTION_LIMIT)), EMPLOYEE_OPTION_LIMIT);
+    const search = options.search?.trim();
+    const where: Prisma.EmployeeWhereInput = {
+      status: { not: EmployeeStatus.EXITED },
+      ...(search
+        ? {
+            OR: [
+              { user: { name: { contains: search, mode: "insensitive" } } },
+              { employeeCode: { contains: search, mode: "insensitive" } },
+              { department: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const [employees, total] = await Promise.all([
+      prisma.employee.findMany({
+        where,
+        select: employeeSummarySelect,
+        orderBy: { employeeCode: "asc" },
+        take,
+      }),
+      prisma.employee.count({ where }),
+    ]);
+
+    return { options: employees.map(toEmployeeOption), total };
+  }
+
+  /**
+   * Team view for staff with `canAttendance`: one page of records inside an explicit
+   * month window (default: current month in the business time zone), today's counts
+   * from the database and a bounded employee picker.
+   */
+  async getTeamAttendanceView(
+    user: AuthenticatedUser,
+    query: ListQuery = {}
+  ): Promise<{
     employees: AttendanceEmployeeOption[];
+    employeesTotal: number;
     records: AttendanceRecordView[];
+    page: PageInfo;
+    filters: AttendanceListFilters;
+    window: AttendanceWindow;
+    todayCounts: AttendanceTodayCounts;
     pendingRegularizationCount: number;
     selfEmployeeId: string | null;
   }> {
     await assertPermission(user, "canAttendance");
 
-    const [employees, records, pendingRegularizationCount, selfEmployee] = await Promise.all([
-      prisma.employee.findMany({
-        where: { status: { not: EmployeeStatus.EXITED } },
-        select: employeeSummarySelect,
-        orderBy: { employeeCode: "asc" },
-      }),
-      prisma.attendanceRecord.findMany({
-        include: {
-          employee: {
-            select: {
-              id: true,
-              employeeCode: true,
-              department: true,
-              designation: true,
-              user: { select: { name: true } },
+    const window = resolveWindow(query.month);
+    const { skip, take, page, pageSize } = pageArgs(query.page, query.pageSize);
+    const search = query.search?.trim();
+    const where: Prisma.AttendanceRecordWhereInput = {
+      date: { gte: window.startDate, lt: window.endDate },
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.employeeId ? { employeeId: query.employeeId } : {}),
+      ...(search
+        ? {
+            employee: {
+              OR: [
+                { user: { name: { contains: search, mode: "insensitive" } } },
+                { employeeCode: { contains: search, mode: "insensitive" } },
+                { department: { contains: search, mode: "insensitive" } },
+              ],
             },
-          },
-        },
-        orderBy: { date: "desc" },
-        take: TEAM_RECORD_LIMIT,
-      }),
-      prisma.attendanceRegularization.count({
-        where: { status: RegularizationStatus.PENDING },
-      }),
-      prisma.employee.findUnique({ where: { userId: user.id }, select: { id: true } }),
-    ]);
+          }
+        : {}),
+    };
+    const today = toUtcDateOnly(new Date());
+
+    const [employeeOptions, records, total, todayGroups, pendingRegularizationCount, selfEmployee] =
+      await Promise.all([
+        this.getEmployeeOptions(user),
+        prisma.attendanceRecord.findMany({
+          where,
+          select: attendanceRecordSelect,
+          orderBy: [{ date: "desc" }, { employee: { employeeCode: "asc" } }],
+          skip,
+          take,
+        }),
+        prisma.attendanceRecord.count({ where }),
+        prisma.attendanceRecord.groupBy({
+          by: ["status"],
+          where: { date: today },
+          _count: { _all: true },
+        }),
+        prisma.attendanceRegularization.count({
+          where: { status: RegularizationStatus.PENDING },
+        }),
+        prisma.employee.findUnique({ where: { userId: user.id }, select: { id: true } }),
+      ]);
 
     return {
-      employees: employees.map(toEmployeeOption),
+      employees: employeeOptions.options,
+      employeesTotal: employeeOptions.total,
       records: records.map((r) => toRecordView(r, r.employee)),
+      page: toPageInfo(page, pageSize, total),
+      filters: {
+        month: window.month,
+        status: query.status,
+        search: search || undefined,
+        employeeId: query.employeeId,
+      },
+      window: { month: window.month, start: window.start, endExclusive: window.endExclusive },
+      todayCounts: todayCountsFromGroups(todayGroups as StatusGroup[], utcDateKey(today)),
       pendingRegularizationCount,
       selfEmployeeId: selfEmployee?.id ?? null,
     };
   }
 
   /**
-   * Self view: only the signed-in user's own employee record and attendance rows.
+   * Self view: only the signed-in user's own employee record and attendance rows, one
+   * page of the month being browsed plus today's row (needed for check-in / check-out).
    */
-  async getSelfAttendanceView(user: AuthenticatedUser): Promise<{
+  async getSelfAttendanceView(
+    user: AuthenticatedUser,
+    query: { month?: string; page?: number; pageSize?: number } = {}
+  ): Promise<{
     employee: AttendanceEmployeeOption | null;
     records: AttendanceRecordView[];
+    page: PageInfo;
+    filters: AttendanceListFilters;
+    window: AttendanceWindow;
+    todayRecord: AttendanceRecordView | null;
   }> {
+    const window = resolveWindow(query.month);
+    const { skip, take, page, pageSize } = pageArgs(query.page, query.pageSize);
+    const filters: AttendanceListFilters = { month: window.month };
+    const windowView = { month: window.month, start: window.start, endExclusive: window.endExclusive };
+
     const employee = await this.findOwnEmployee(user);
     if (!employee) {
-      return { employee: null, records: [] };
+      return {
+        employee: null,
+        records: [],
+        page: toPageInfo(page, pageSize, 0),
+        filters,
+        window: windowView,
+        todayRecord: null,
+      };
     }
 
-    const records = await prisma.attendanceRecord.findMany({
-      where: { employeeId: employee.id },
-      orderBy: { date: "desc" },
-      take: SELF_RECORD_LIMIT,
-    });
+    const where: Prisma.AttendanceRecordWhereInput = {
+      employeeId: employee.id,
+      date: { gte: window.startDate, lt: window.endDate },
+    };
+
+    const [records, total, todayRow] = await Promise.all([
+      prisma.attendanceRecord.findMany({
+        where,
+        select: ownRecordSelect,
+        orderBy: { date: "desc" },
+        skip,
+        take,
+      }),
+      prisma.attendanceRecord.count({ where }),
+      prisma.attendanceRecord.findUnique({
+        where: { employeeId_date: { employeeId: employee.id, date: toUtcDateOnly(new Date()) } },
+        select: ownRecordSelect,
+      }),
+    ]);
 
     return {
       employee: toEmployeeOption(employee),
       records: records.map((r) => toRecordView(r, employee)),
+      page: toPageInfo(page, pageSize, total),
+      filters,
+      window: windowView,
+      todayRecord: todayRow ? toRecordView(todayRow, employee) : null,
     };
   }
 
@@ -393,11 +591,13 @@ export class AttendanceService {
 
   /**
    * Attendance history of one employee: the employee themself, or staff with `canAttendance`.
+   * One page inside a month window (default: current month, business time zone).
    */
   async getEmployeeAttendanceHistory(
     user: AuthenticatedUser,
-    employeeId: string
-  ): Promise<AttendanceRecordItem[]> {
+    employeeId: string,
+    query: { month?: string; page?: number; pageSize?: number } = {}
+  ): Promise<AttendanceHistoryPage> {
     const employee = await prisma.employee.findUnique({
       where: { id: employeeId },
       select: employeeSummarySelect,
@@ -411,13 +611,28 @@ export class AttendanceService {
       await assertPermission(user, "canAttendance");
     }
 
-    const records = await prisma.attendanceRecord.findMany({
-      where: { employeeId },
-      orderBy: { date: "desc" },
-      take: 30,
-    });
+    const window = resolveWindow(query.month);
+    const { skip, take, page, pageSize } = pageArgs(query.page, query.pageSize);
+    const where: Prisma.AttendanceRecordWhereInput = {
+      employeeId,
+      date: { gte: window.startDate, lt: window.endDate },
+    };
 
-    return records.map((r) => toRecordItem(r, employee));
+    const [records, total] = await Promise.all([
+      prisma.attendanceRecord.findMany({
+        where,
+        select: ownRecordSelect,
+        orderBy: { date: "desc" },
+        skip,
+        take,
+      }),
+      prisma.attendanceRecord.count({ where }),
+    ]);
+
+    return {
+      items: records.map((r) => toRecordItem(r, employee)),
+      page: toPageInfo(page, pageSize, total),
+    };
   }
 
   /**

@@ -1,15 +1,23 @@
-import React from "react";
+import React, { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { AlertTriangle, ArrowRight, CalendarClock, CalendarDays, ClipboardCheck, History, LogOut } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CalendarClock,
+  CalendarDays,
+  ClipboardCheck,
+  History,
+  LogOut,
+} from "lucide-react";
 import { Role } from "@prisma/client";
-import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
+import { getCurrentUser, hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { STAFF_ROLES } from "@/lib/auth/permissions";
-import { ForbiddenError } from "@/lib/errors";
+import { ForbiddenError, toActionError } from "@/lib/errors";
 import { BUSINESS_TIME_ZONE, businessDateKey } from "@/lib/time/business-time";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { conversionService } from "../services/conversion-service";
 import {
   CONVERSION_OFFER_LABELS,
@@ -17,8 +25,18 @@ import {
   REVIEW_OUTCOME_LABELS,
   type ReviewDueState,
 } from "../conversion-rules";
-import type { InternReviewItem } from "../types";
+import {
+  isInternReviewView,
+  type InternReviewBoard,
+  type InternReviewItem,
+  type InternReviewView,
+} from "../types";
+import { FilterChipLink } from "./filter-chip-link";
+import { ListPagination } from "./list-pagination";
+import { buildListHref, firstParam, parsePositivePage, type RawSearchParams } from "./list-search-params";
+import { ReviewBoardSkeleton } from "./intern-reviews-skeleton";
 import { RecordReviewOutcomeDialog } from "./record-review-outcome-dialog";
+import { SectionUnavailable } from "./section-unavailable";
 
 export type InternReviewsPortal = "admin" | "subadmin";
 
@@ -31,6 +49,29 @@ const DUE_BADGE: Record<ReviewDueState, "destructive" | "warning" | "outline"> =
   OVERDUE: "destructive",
   DUE_THIS_WEEK: "warning",
   UPCOMING: "outline",
+};
+
+const VIEW_META: Record<InternReviewView, { label: string; icon: React.ReactNode; empty: string }> = {
+  due: {
+    label: "Due now",
+    icon: <CalendarClock className="h-3.5 w-3.5" />,
+    empty: "No reviews are overdue or due in the next seven days.",
+  },
+  overdue: {
+    label: "Overdue",
+    icon: <AlertTriangle className="h-3.5 w-3.5" />,
+    empty: "No overdue reviews.",
+  },
+  upcoming: {
+    label: "Upcoming",
+    icon: <CalendarDays className="h-3.5 w-3.5" />,
+    empty: "No later reviews are scheduled. Reviews are scheduled when an intern is marked as joined.",
+  },
+  decided: {
+    label: "Decisions",
+    icon: <History className="h-3.5 w-3.5" />,
+    empty: "No review outcomes have been recorded yet.",
+  },
 };
 
 /** Review and effective dates are calendar days stored at UTC midnight. */
@@ -52,41 +93,9 @@ function formatInstant(value: Date | null): string {
   }).format(new Date(value));
 }
 
-function ReviewSection({
-  id,
-  title,
-  icon,
-  emptyText,
-  children,
-  count,
-}: {
-  id: string;
-  title: string;
-  icon: React.ReactNode;
-  emptyText: string;
-  count: number;
-  children: React.ReactNode;
-}) {
-  return (
-    <section aria-labelledby={`${id}-heading`} className="space-y-3">
-      <h2 id={`${id}-heading`} className="flex items-center gap-2 text-sm font-semibold text-foreground">
-        <span aria-hidden="true" className="text-primary">
-          {icon}
-        </span>
-        {title}
-        <Badge variant="secondary" className="text-[10px]">
-          {count}
-        </Badge>
-      </h2>
-      {count === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">
-          {emptyText}
-        </p>
-      ) : (
-        <ul className="grid grid-cols-1 gap-3">{children}</ul>
-      )}
-    </section>
-  );
+/** `?view=…&page=…`; the default view and page 1 are left out so the base URL stays canonical. */
+function boardHref(basePath: string, view: InternReviewView, page = 1): string {
+  return buildListHref(basePath, { view: view === "due" ? null : view, page: page > 1 ? page : null });
 }
 
 function InternHeading({ item, employeeHref }: { item: InternReviewItem; employeeHref: string | null }) {
@@ -229,12 +238,128 @@ function DecisionCard({
   );
 }
 
+interface BoardSectionProps {
+  user: AuthenticatedUser;
+  paths: { self: string; employees: string };
+  view: InternReviewView;
+  page: number;
+  todayKey: string;
+}
+
+/** Streamed board body: one database page of the selected view plus the per-view counts. */
+async function InternReviewBoardSection({ user, paths, view, page, todayKey }: BoardSectionProps) {
+  let board: InternReviewBoard;
+  try {
+    board = await conversionService.listReviewBoard(user, { view, page });
+  } catch (error) {
+    if (error instanceof ForbiddenError) {
+      return <UnauthorizedState message="You are not authorized to view intern reviews." />;
+    }
+    return (
+      <SectionUnavailable
+        title="Intern reviews"
+        message={toActionError(error, "The review board could not be loaded right now. Please try again.")}
+      />
+    );
+  }
+
+  const tabCounts: Record<InternReviewView, number> = {
+    due: board.counts.overdue + board.counts.dueThisWeek,
+    overdue: board.counts.overdue,
+    upcoming: board.counts.upcoming,
+    decided: board.counts.decided,
+  };
+  const active = VIEW_META[board.view];
+  const scheduledProps = { canRecord: board.canRecord, employeesBase: paths.employees, todayKey };
+
+  return (
+    <div className="space-y-4">
+      {!board.canRecord && (
+        <p className="text-xs text-muted-foreground">
+          Outcomes are recorded by HR and administrators with the employees permission.
+        </p>
+      )}
+
+      <nav aria-label="Review views" className="flex flex-wrap gap-2">
+        {(Object.keys(VIEW_META) as InternReviewView[]).map((key) => (
+          <FilterChipLink
+            key={key}
+            href={boardHref(paths.self, key)}
+            active={board.view === key}
+            label={VIEW_META[key].label}
+            icon={VIEW_META[key].icon}
+            count={tabCounts[key]}
+            emphasis={key === "overdue"}
+          />
+        ))}
+      </nav>
+
+      <section aria-labelledby="review-list-heading" className="space-y-3">
+        <h2 id="review-list-heading" className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <span aria-hidden="true" className="text-primary">
+            {active.icon}
+          </span>
+          {active.label}
+          <Badge variant="secondary" className="text-[10px]">
+            {board.total}
+          </Badge>
+        </h2>
+
+        {board.items.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">
+            {board.total === 0 ? (
+              active.empty
+            ) : (
+              <>
+                No reviews on this page.{" "}
+                <Link
+                  href={boardHref(paths.self, board.view)}
+                  className="font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  Go to the first page
+                </Link>
+              </>
+            )}
+          </p>
+        ) : (
+          <ul className="grid grid-cols-1 gap-3">
+            {board.items.map((item) =>
+              board.view === "decided" ? (
+                <DecisionCard key={item.id} item={item} canRecord={board.canRecord} employeesBase={paths.employees} />
+              ) : (
+                <ScheduledReviewCard key={item.id} item={item} {...scheduledProps} />
+              )
+            )}
+          </ul>
+        )}
+
+        <ListPagination
+          page={board.page}
+          pageCount={board.pageCount}
+          total={board.total}
+          pageSize={board.pageSize}
+          hrefFor={(next) => boardHref(paths.self, board.view, next)}
+          label="Intern review pages"
+          itemNoun="reviews"
+        />
+      </section>
+    </div>
+  );
+}
+
 /**
  * Intern progress reviews (product-owner decision 2026-10-25). Pages call this view, which
  * authorizes the viewer itself (layouts are not a security boundary): staff with the
  * canEmployees permission see the board; ADMIN and HR with canEmployees record outcomes.
+ * The view and page travel in the URL (`?view=&page=`); the board body streams.
  */
-export async function InternReviewsView({ portal }: { portal: InternReviewsPortal }) {
+export async function InternReviewsView({
+  portal,
+  searchParams,
+}: {
+  portal: InternReviewsPortal;
+  searchParams?: Promise<RawSearchParams>;
+}) {
   const paths = PORTAL_PATHS[portal];
   const user = await getCurrentUser();
   if (!user) {
@@ -253,21 +378,14 @@ export async function InternReviewsView({ portal }: { portal: InternReviewsPorta
     return <UnauthorizedState message="Intern reviews require the employees permission." />;
   }
 
-  let board;
-  try {
-    board = await conversionService.listReviewBoard(user);
-  } catch (error) {
-    if (error instanceof ForbiddenError) {
-      return <UnauthorizedState message="You are not authorized to view intern reviews." />;
-    }
-    throw error;
-  }
-
+  const raw = (await searchParams) ?? {};
+  const requestedView = firstParam(raw.view);
+  const view: InternReviewView = isInternReviewView(requestedView) ? requestedView : "due";
+  const page = parsePositivePage(raw.page);
   const todayKey = businessDateKey(new Date());
-  const scheduledProps = { canRecord: board.canRecord, employeesBase: paths.employees, todayKey };
 
   return (
-    <div className="w-full space-y-8">
+    <div className="w-full space-y-6">
       <header className="flex flex-col gap-2 border-b border-border pb-6">
         <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
           <ClipboardCheck className="h-6 w-6 text-primary" aria-hidden="true" /> Intern Reviews
@@ -276,67 +394,11 @@ export async function InternReviewsView({ portal }: { portal: InternReviewsPorta
           Progress reviews held 3 or 6 months after an intern joins. The outcome is a full-time offer, an
           extension or the end of the internship.
         </p>
-        {!board.canRecord && (
-          <p className="text-xs text-muted-foreground">
-            Outcomes are recorded by HR and administrators with the employees permission.
-          </p>
-        )}
       </header>
 
-      <ReviewSection
-        id="overdue"
-        title="Overdue"
-        icon={<AlertTriangle className="h-4 w-4" />}
-        emptyText="No overdue reviews."
-        count={board.overdue.length}
-      >
-        {board.overdue.map((item) => (
-          <ScheduledReviewCard key={item.id} item={item} {...scheduledProps} />
-        ))}
-      </ReviewSection>
-
-      <ReviewSection
-        id="due-this-week"
-        title="Due this week"
-        icon={<CalendarClock className="h-4 w-4" />}
-        emptyText="No reviews are due in the next seven days."
-        count={board.dueThisWeek.length}
-      >
-        {board.dueThisWeek.map((item) => (
-          <ScheduledReviewCard key={item.id} item={item} {...scheduledProps} />
-        ))}
-      </ReviewSection>
-
-      <ReviewSection
-        id="upcoming"
-        title="Upcoming"
-        icon={<CalendarDays className="h-4 w-4" />}
-        emptyText="No later reviews are scheduled. Reviews are scheduled when an intern is marked as joined."
-        count={board.upcoming.length}
-      >
-        {board.upcoming.map((item) => (
-          <ScheduledReviewCard key={item.id} item={item} {...scheduledProps} />
-        ))}
-      </ReviewSection>
-
-      <Card className="border-border shadow-xs">
-        <CardHeader className="border-b border-border/50 pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <History className="h-4 w-4 text-primary" aria-hidden="true" /> Recent decisions
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-4">
-          {board.recentDecisions.length === 0 ? (
-            <p className="text-center text-xs text-muted-foreground">No review outcomes have been recorded yet.</p>
-          ) : (
-            <ul className="grid grid-cols-1 gap-3">
-              {board.recentDecisions.map((item) => (
-                <DecisionCard key={item.id} item={item} canRecord={board.canRecord} employeesBase={paths.employees} />
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+      <Suspense key={`${view}|${page}`} fallback={<ReviewBoardSkeleton />}>
+        <InternReviewBoardSection user={user} paths={paths} view={view} page={page} todayKey={todayKey} />
+      </Suspense>
     </div>
   );
 }

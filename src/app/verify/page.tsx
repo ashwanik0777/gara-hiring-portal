@@ -1,7 +1,7 @@
 import React, { Suspense } from "react";
 import { Metadata } from "next";
 import { VerificationPortal } from "@/components/verification/verification-portal";
-import { PublicDetailSkeleton } from "@/components/feedback/page-skeletons";
+import { VerifyPageSkeleton } from "@/components/feedback/page-skeletons";
 
 export const metadata: Metadata = {
   title: "Verify Certificate | GARA Innovation",
@@ -11,9 +11,7 @@ export const metadata: Metadata = {
 
 export default function VerifyIndexPage() {
   return (
-    <Suspense
-      fallback={<PublicDetailSkeleton withForm label="Loading credential verification" />}
-    >
+    <Suspense fallback={<VerifyPageSkeleton label="Loading credential verification" />}>
       <VerificationPortal />
     </Suspense>
   );

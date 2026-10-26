@@ -1,5 +1,9 @@
-import { ModulePageSkeleton } from "@/components/feedback/page-skeletons";
+import { LeavePageSkeleton } from "@/features/leave/components/leave-page-skeleton";
 
 export default function Loading() {
-  return <ModulePageSkeleton label="Loading leave management" />;
+  return (
+    <div className="w-full">
+      <LeavePageSkeleton />
+    </div>
+  );
 }

@@ -27,6 +27,8 @@ import {
   WorkingDayCalendarConfig,
   EvaluationEnrollmentDetail,
   EvaluationEnrollmentListItem,
+  EvaluationEnrollmentListPage,
+  EvaluationEnrollmentListQuery,
   OnboardingChecklistItem,
   SupervisorOption,
 } from "../types";
@@ -56,6 +58,69 @@ const DEFAULT_ONBOARDING_CHECKLIST: OnboardingChecklistItem[] = [
   { id: "repo-access", label: "Internal Workspace & Repository Provisioned", required: true, completed: false },
   { id: "mentor-assign", label: "Assigned Mentor Induction Completed", required: true, completed: false },
 ];
+
+// ---------------------------------------------------------------------------
+// List bounds and selects
+// ---------------------------------------------------------------------------
+
+/** Staff evaluation list rows per page by default; `ENROLLMENT_LIST_MAX_PAGE_SIZE` is the ceiling. */
+export const ENROLLMENT_LIST_PAGE_SIZE = 20;
+export const ENROLLMENT_LIST_MAX_PAGE_SIZE = 50;
+/** Supervisor picker ceiling (a searchable picker is needed before staff exceed it). */
+export const SUPERVISOR_OPTIONS_LIMIT = 100;
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+/** Columns the staff evaluation list renders; nothing else is selected. */
+const enrollmentListSelect = {
+  id: true,
+  status: true,
+  startDate: true,
+  endDate: true,
+  user: { select: { name: true, email: true } },
+  application: {
+    select: {
+      referenceCode: true,
+      opening: { select: { title: true, department: true } },
+      hiredEmployee: { select: { id: true, employmentType: true } },
+      // The period this application opened (kept as history after a re-join).
+      employmentPeriods: {
+        select: { employmentType: true },
+        orderBy: { startDate: "asc" },
+        take: 1,
+      },
+    },
+  },
+  supervisor: { select: { name: true } },
+  checkpoints: { select: { status: true } },
+  idCard: { select: { cardNumber: true } },
+} satisfies Prisma.InternshipEnrollmentSelect;
+
+type EnrollmentListRow = Prisma.InternshipEnrollmentGetPayload<{ select: typeof enrollmentListSelect }>;
+
+function toEnrollmentListItem(enr: EnrollmentListRow): EvaluationEnrollmentListItem {
+  return {
+    id: enr.id,
+    referenceCode: enr.application.referenceCode,
+    candidateName: enr.user.name,
+    candidateEmail: enr.user.email,
+    openingTitle: enr.application.opening.title,
+    openingDepartment: enr.application.opening.department,
+    supervisorName: enr.supervisor?.name ?? null,
+    status: enr.status,
+    startDate: enr.startDate,
+    endDate: enr.endDate,
+    reviewedCheckpoints: enr.checkpoints.filter((c) => c.status === CheckpointStatus.REVIEWED).length,
+    totalCheckpoints: enr.checkpoints.length,
+    idCardNumber: enr.idCard?.cardNumber ?? null,
+    joined: Boolean(enr.application.employmentPeriods[0] ?? enr.application.hiredEmployee),
+    joinedEmploymentType:
+      enr.application.employmentPeriods[0]?.employmentType ?? enr.application.hiredEmployee?.employmentType ?? null,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Explicit state machines (BUG-05 / BUG-06)
@@ -162,6 +227,7 @@ export class EvaluationService {
       },
       select: { id: true, name: true, email: true, roles: { select: { role: true } } },
       orderBy: { name: "asc" },
+      take: SUPERVISOR_OPTIONS_LIMIT,
     });
 
     return users.map((u) => ({
@@ -938,57 +1004,56 @@ export class EvaluationService {
   }
 
   /**
-   * Lists enrollments visible to the staff member (all for ADMIN/HR, assigned ones for supervisors).
+   * One page of the enrollments visible to the staff member: all for ADMIN/HR, assigned ones
+   * for supervisors (`supervisorId === user.id`), never their own. The status filter narrows
+   * the page; the per-status counts always cover the whole scope.
    */
-  async listEnrollmentsForStaff(user: AuthenticatedUser): Promise<EvaluationEnrollmentListItem[]> {
+  async listEnrollmentsForStaff(
+    user: AuthenticatedUser,
+    query: EvaluationEnrollmentListQuery = {}
+  ): Promise<EvaluationEnrollmentListPage> {
     const access = await assertEvaluationAccess(user);
 
-    const enrollments = await prisma.internshipEnrollment.findMany({
-      where: {
-        ...enrollmentScopeWhere(access, user),
-        // Staff never review their own enrollment.
-        userId: { not: user.id },
-      },
-      include: {
-        user: { select: { name: true, email: true } },
-        application: {
-          select: {
-            referenceCode: true,
-            opening: { select: { title: true, department: true } },
-            hiredEmployee: { select: { id: true, employmentType: true } },
-            // The period this application opened (kept as history after a re-join).
-            employmentPeriods: {
-              select: { employmentType: true },
-              orderBy: { startDate: "asc" },
-              take: 1,
-            },
-          },
-        },
-        supervisor: { select: { name: true } },
-        checkpoints: { select: { status: true } },
-        idCard: { select: { cardNumber: true, status: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    });
+    const scopeWhere: Prisma.InternshipEnrollmentWhereInput = {
+      ...enrollmentScopeWhere(access, user),
+      // Staff never review their own enrollment.
+      userId: { not: user.id },
+    };
+    const where: Prisma.InternshipEnrollmentWhereInput = query.status
+      ? { ...scopeWhere, status: query.status }
+      : scopeWhere;
+    const page = clampInt(query.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+    const pageSize = clampInt(query.pageSize ?? ENROLLMENT_LIST_PAGE_SIZE, 1, ENROLLMENT_LIST_MAX_PAGE_SIZE);
 
-    return enrollments.map((enr) => ({
-      id: enr.id,
-      referenceCode: enr.application.referenceCode,
-      candidateName: enr.user.name,
-      candidateEmail: enr.user.email,
-      openingTitle: enr.application.opening.title,
-      openingDepartment: enr.application.opening.department,
-      supervisorName: enr.supervisor?.name ?? null,
-      status: enr.status,
-      startDate: enr.startDate,
-      endDate: enr.endDate,
-      reviewedCheckpoints: enr.checkpoints.filter((c) => c.status === CheckpointStatus.REVIEWED).length,
-      totalCheckpoints: enr.checkpoints.length,
-      idCardNumber: enr.idCard?.cardNumber ?? null,
-      joined: Boolean(enr.application.employmentPeriods[0] ?? enr.application.hiredEmployee),
-      joinedEmploymentType:
-        enr.application.employmentPeriods[0]?.employmentType ?? enr.application.hiredEmployee?.employmentType ?? null,
-    }));
+    const [rows, total, grouped] = await Promise.all([
+      prisma.internshipEnrollment.findMany({
+        where,
+        select: enrollmentListSelect,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.internshipEnrollment.count({ where }),
+      prisma.internshipEnrollment.groupBy({
+        by: ["status"],
+        where: scopeWhere,
+        _count: { _all: true },
+      }),
+    ]);
+
+    const statusCounts: Partial<Record<EvaluationStatus, number>> = {};
+    for (const group of grouped) {
+      statusCounts[group.status] = group._count._all;
+    }
+
+    return {
+      items: rows.map(toEnrollmentListItem),
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+      statusCounts,
+    };
   }
 
   /**
@@ -1023,20 +1088,7 @@ export class EvaluationService {
         },
         onboarding: true,
         idCard: true,
-        tasks: {
-          include: {
-            assignedBy: {
-              select: { id: true, name: true, email: true },
-            },
-            submissions: {
-              include: {
-                reviewedBy: { select: { id: true, name: true } },
-              },
-              orderBy: { versionNumber: "desc" },
-            },
-          },
-          orderBy: { createdAt: "desc" },
-        },
+        // Tasks and submissions are listed separately (taskService.getEnrollmentTasks, bounded).
         completion: true,
         certificate: true,
         user: {
@@ -1120,30 +1172,6 @@ export class EvaluationService {
             issuedAt: enrollment.idCard.issuedAt,
           }
         : null,
-      tasks: (enrollment.tasks ?? []).map((t) => ({
-        id: t.id,
-        enrollmentId: t.enrollmentId,
-        title: t.title,
-        description: t.description,
-        priority: t.priority,
-        dueDate: t.dueDate,
-        status: t.status,
-        changeRequestNotes: t.changeRequestNotes,
-        assignedBy: t.assignedBy,
-        createdAt: t.createdAt,
-        updatedAt: t.updatedAt,
-        submissions: (t.submissions ?? []).map((s) => ({
-          id: s.id,
-          versionNumber: s.versionNumber,
-          submissionNotes: s.submissionNotes,
-          deliverableUrls: (s.deliverableUrls as string[]) || null,
-          status: s.status,
-          supervisorFeedback: s.supervisorFeedback,
-          reviewedAt: s.reviewedAt,
-          submittedAt: s.submittedAt,
-          reviewedBy: s.reviewedBy,
-        })),
-      })),
       completion: enrollment.completion
         ? {
             id: enrollment.completion.id,

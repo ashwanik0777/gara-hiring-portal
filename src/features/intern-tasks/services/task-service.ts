@@ -1,13 +1,15 @@
 import { prisma } from "@/lib/db";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
-import { TaskStatus, SubmissionReviewStatus } from "@prisma/client";
+import { Prisma, TaskStatus, SubmissionReviewStatus } from "@prisma/client";
 import {
   CreateTaskInput,
   SubmitTaskInput,
   ReviewSubmissionInput,
   CreateProgressReportInput,
   InternTaskDetail,
-  ProgressReportItem,
+  InternTaskPage,
+  ListPageQuery,
+  ProgressReportPage,
 } from "../types";
 import { SUBMISSION_REVIEW_OUTCOMES } from "../schemas";
 import {
@@ -23,6 +25,92 @@ interface EnrollmentRef {
   userId: string;
   supervisorId: string | null;
 }
+
+/** Tasks / progress reports per page by default; `TASK_LIST_MAX_PAGE_SIZE` is the ceiling. */
+export const TASK_LIST_PAGE_SIZE = 20;
+export const TASK_LIST_MAX_PAGE_SIZE = 50;
+/** Newest submission versions returned per task. */
+export const SUBMISSION_HISTORY_LIMIT = 10;
+
+function normalizePaging(query: ListPageQuery): { page: number; pageSize: number; skip: number } {
+  const clamp = (value: number, min: number, max: number) =>
+    Number.isFinite(value) ? Math.min(max, Math.max(min, Math.trunc(value))) : min;
+  const page = clamp(query.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+  const pageSize = clamp(query.pageSize ?? TASK_LIST_PAGE_SIZE, 1, TASK_LIST_MAX_PAGE_SIZE);
+  return { page, pageSize, skip: (page - 1) * pageSize };
+}
+
+/** Columns the task list renders. Staff identifiers and emails are not needed by the browser. */
+const taskListSelect = {
+  id: true,
+  enrollmentId: true,
+  title: true,
+  description: true,
+  priority: true,
+  dueDate: true,
+  status: true,
+  changeRequestNotes: true,
+  createdAt: true,
+  updatedAt: true,
+  assignedBy: { select: { name: true } },
+  submissions: {
+    select: {
+      id: true,
+      versionNumber: true,
+      submissionNotes: true,
+      deliverableUrls: true,
+      status: true,
+      supervisorFeedback: true,
+      reviewedAt: true,
+      submittedAt: true,
+      reviewedBy: { select: { name: true } },
+    },
+    orderBy: { versionNumber: "desc" },
+    take: SUBMISSION_HISTORY_LIMIT,
+  },
+} satisfies Prisma.InternTaskSelect;
+
+type TaskListRow = Prisma.InternTaskGetPayload<{ select: typeof taskListSelect }>;
+
+function toTaskDetail(t: TaskListRow): InternTaskDetail {
+  return {
+    id: t.id,
+    enrollmentId: t.enrollmentId,
+    title: t.title,
+    description: t.description,
+    priority: t.priority,
+    dueDate: t.dueDate,
+    status: t.status,
+    changeRequestNotes: t.changeRequestNotes,
+    assignedBy: t.assignedBy,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+    submissions: t.submissions.map((s) => ({
+      id: s.id,
+      versionNumber: s.versionNumber,
+      submissionNotes: s.submissionNotes,
+      deliverableUrls: (s.deliverableUrls as string[]) || null,
+      status: s.status,
+      supervisorFeedback: s.supervisorFeedback,
+      reviewedAt: s.reviewedAt,
+      submittedAt: s.submittedAt,
+      reviewedBy: s.reviewedBy,
+    })),
+  };
+}
+
+const progressReportSelect = {
+  id: true,
+  enrollmentId: true,
+  cadence: true,
+  periodIdentifier: true,
+  summary: true,
+  learnings: true,
+  blockers: true,
+  supervisorFeedback: true,
+  submittedAt: true,
+  reviewedAt: true,
+} satisfies Prisma.ProgressReportSelect;
 
 export class TaskService {
   /**
@@ -73,9 +161,14 @@ export class TaskService {
   }
 
   /**
-   * Get all tasks for an enrollment.
+   * One page of an enrollment's tasks (newest first) with the latest submission versions.
+   * Interns read their own enrollment; staff need evaluation access for that enrollment.
    */
-  async getEnrollmentTasks(enrollmentId: string, user: AuthenticatedUser): Promise<InternTaskDetail[]> {
+  async getEnrollmentTasks(
+    enrollmentId: string,
+    user: AuthenticatedUser,
+    query: ListPageQuery = {}
+  ): Promise<InternTaskPage> {
     const enrollment = await prisma.internshipEnrollment.findUnique({
       where: { id: enrollmentId },
       select: { id: true, userId: true, supervisorId: true },
@@ -86,48 +179,26 @@ export class TaskService {
     }
     await this.assertCanReadEnrollment(user, enrollment);
 
-    const tasks = await prisma.internTask.findMany({
-      where: { enrollmentId },
-      include: {
-        assignedBy: {
-          select: { id: true, name: true, email: true },
-        },
-        submissions: {
-          include: {
-            reviewedBy: {
-              select: { id: true, name: true },
-            },
-          },
-          orderBy: { versionNumber: "desc" },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-    });
+    const { page, pageSize, skip } = normalizePaging(query);
+    const where: Prisma.InternTaskWhereInput = { enrollmentId };
+    const [rows, total] = await Promise.all([
+      prisma.internTask.findMany({
+        where,
+        select: taskListSelect,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: pageSize,
+      }),
+      prisma.internTask.count({ where }),
+    ]);
 
-    return tasks.map((t) => ({
-      id: t.id,
-      enrollmentId: t.enrollmentId,
-      title: t.title,
-      description: t.description,
-      priority: t.priority,
-      dueDate: t.dueDate,
-      status: t.status,
-      changeRequestNotes: t.changeRequestNotes,
-      assignedBy: t.assignedBy,
-      createdAt: t.createdAt,
-      updatedAt: t.updatedAt,
-      submissions: t.submissions.map((s) => ({
-        id: s.id,
-        versionNumber: s.versionNumber,
-        submissionNotes: s.submissionNotes,
-        deliverableUrls: (s.deliverableUrls as string[]) || null,
-        status: s.status,
-        supervisorFeedback: s.supervisorFeedback,
-        reviewedAt: s.reviewedAt,
-        submittedAt: s.submittedAt,
-        reviewedBy: s.reviewedBy,
-      })),
-    }));
+    return {
+      items: rows.map(toTaskDetail),
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    };
   }
 
   /**
@@ -353,12 +424,13 @@ export class TaskService {
   }
 
   /**
-   * Get progress reports for an enrollment.
+   * One page of an enrollment's progress reports (newest first). Same access rules as tasks.
    */
   async getEnrollmentProgressReports(
     enrollmentId: string,
-    user: AuthenticatedUser
-  ): Promise<ProgressReportItem[]> {
+    user: AuthenticatedUser,
+    query: ListPageQuery = {}
+  ): Promise<ProgressReportPage> {
     const enrollment = await prisma.internshipEnrollment.findUnique({
       where: { id: enrollmentId },
       select: { id: true, userId: true, supervisorId: true },
@@ -369,23 +441,26 @@ export class TaskService {
     }
     await this.assertCanReadEnrollment(user, enrollment);
 
-    const reports = await prisma.progressReport.findMany({
-      where: { enrollmentId },
-      orderBy: { submittedAt: "desc" },
-    });
+    const { page, pageSize, skip } = normalizePaging(query);
+    const where: Prisma.ProgressReportWhereInput = { enrollmentId };
+    const [items, total] = await Promise.all([
+      prisma.progressReport.findMany({
+        where,
+        select: progressReportSelect,
+        orderBy: { submittedAt: "desc" },
+        skip,
+        take: pageSize,
+      }),
+      prisma.progressReport.count({ where }),
+    ]);
 
-    return reports.map((r) => ({
-      id: r.id,
-      enrollmentId: r.enrollmentId,
-      cadence: r.cadence,
-      periodIdentifier: r.periodIdentifier,
-      summary: r.summary,
-      learnings: r.learnings,
-      blockers: r.blockers,
-      supervisorFeedback: r.supervisorFeedback,
-      submittedAt: r.submittedAt,
-      reviewedAt: r.reviewedAt,
-    }));
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    };
   }
 }
 

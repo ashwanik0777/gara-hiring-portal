@@ -74,3 +74,40 @@ export const ReviewRegularizationSchema = z.object({
 export type LogAttendanceInput = z.infer<typeof LogAttendanceSchema>;
 export type RequestRegularizationInput = z.infer<typeof RequestRegularizationSchema>;
 export type ReviewRegularizationInput = z.infer<typeof ReviewRegularizationSchema>;
+
+// ---------------------------------------------------------------------------
+// Read-side query parameters (URL search params are untrusted input)
+// ---------------------------------------------------------------------------
+
+/** Upper bound of one page of attendance rows. */
+export const ATTENDANCE_MAX_PAGE_SIZE = 50;
+export const ATTENDANCE_DEFAULT_PAGE_SIZE = 25;
+
+const ATTENDANCE_LIST_STATUSES = [
+  "PRESENT",
+  "HALF_DAY",
+  "ON_LEAVE",
+  "ABSENT",
+  "REGULARIZATION_PENDING",
+] as const;
+
+/** Invalid or unknown values fall back to the default instead of failing the page. */
+export const AttendanceListQuerySchema = z.object({
+  /** Calendar month `YYYY-MM`; defaults to the current month in the business time zone. */
+  month: z
+    .string()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+    .optional()
+    .catch(undefined),
+  status: z.enum(ATTENDANCE_LIST_STATUSES).optional().catch(undefined),
+  q: z.string().trim().min(1).max(100).optional().catch(undefined),
+  employee: z.string().uuid().optional().catch(undefined),
+  page: z.coerce.number().int().min(1).max(100000).optional().catch(undefined),
+});
+
+export type AttendanceListQuery = z.infer<typeof AttendanceListQuerySchema>;
+
+/** Employee picker search (staff attendance entry form). */
+export const AttendanceEmployeeSearchSchema = z.object({
+  query: z.string().trim().max(100),
+});

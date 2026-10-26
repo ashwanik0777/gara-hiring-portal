@@ -10,8 +10,16 @@ import {
   ReviewLeaveRequestSchema,
   CreateLeaveTypeSchema,
   ToggleLeaveTypeSchema,
+  EmployeeOptionSearchSchema,
+  EmployeeLeaveSummarySchema,
 } from "./schemas";
-import type { LeaveRequestItem, LeaveReviewResult, LeaveTypeItem } from "./types";
+import type {
+  EmployeeLeaveSummary,
+  EmployeeOptionsResult,
+  LeaveRequestItem,
+  LeaveReviewResult,
+  LeaveTypeItem,
+} from "./types";
 
 type ActionResult<T = undefined> =
   | (T extends undefined ? { success: true } : { success: true; data: T })
@@ -131,5 +139,53 @@ export async function seedDefaultLeaveTypesAction(): Promise<ActionResult<{ crea
     return { success: true, data };
   } catch (err: unknown) {
     return { success: false, error: toActionError(err, "Failed to load the suggested leave categories.") };
+  }
+}
+
+/**
+ * Employee picker search for the on-behalf leave form (requires `canLeave`, enforced by
+ * the service). Returns at most one bounded page of non-exited employees.
+ */
+export async function searchLeaveEmployeeOptionsAction(
+  rawInput: unknown
+): Promise<ActionResult<EmployeeOptionsResult>> {
+  try {
+    const user = await requireAuth();
+
+    const parsed = EmployeeOptionSearchSchema.safeParse(rawInput);
+    if (!parsed.success) {
+      return { success: false, error: firstIssue(parsed.error.issues) };
+    }
+
+    const data = await leaveService.getEmployeeOptions(user, { search: parsed.data.query });
+    return { success: true, data };
+  } catch (err: unknown) {
+    return { success: false, error: toActionError(err, "Failed to search employees.") };
+  }
+}
+
+/**
+ * Recorded leave days of one employee for the details dialog (the employee themself, or
+ * staff with `canLeave`). No balances are calculated (OD-007).
+ */
+export async function getEmployeeLeaveSummaryAction(
+  rawInput: unknown
+): Promise<ActionResult<EmployeeLeaveSummary>> {
+  try {
+    const user = await requireAuth();
+
+    const parsed = EmployeeLeaveSummarySchema.safeParse(rawInput);
+    if (!parsed.success) {
+      return { success: false, error: firstIssue(parsed.error.issues) };
+    }
+
+    const data = await leaveService.getEmployeeLeaveSummary(
+      user,
+      parsed.data.employeeId,
+      parsed.data.excludeRequestId
+    );
+    return { success: true, data };
+  } catch (err: unknown) {
+    return { success: false, error: toActionError(err, "Failed to load the leave summary.") };
   }
 }

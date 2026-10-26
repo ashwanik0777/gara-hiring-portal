@@ -1,10 +1,10 @@
-import React from "react";
+import React, { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { isStaffUser, requirePortalCapability } from "@/features/lifecycle/services/lifecycle-service";
-import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
-import { loadAttendancePageData } from "@/features/attendance/services/attendance-page-data";
-import { AttendanceManagementClient } from "@/features/attendance/components/attendance-management-client";
+import { AttendancePageSection } from "@/features/attendance/components/attendance-page-section";
+import { AttendancePageSkeleton } from "@/features/attendance/components/attendance-page-skeleton";
+import type { RawSearchParams } from "@/features/attendance/services/attendance-page-data";
 
 export const instant = false;
 
@@ -13,7 +13,11 @@ export const metadata = {
   description: "Record daily check-ins and check-outs and review attendance logs.",
 };
 
-export default async function AttendanceModulePage() {
+export default async function AttendanceModulePage({
+  searchParams,
+}: {
+  searchParams: Promise<RawSearchParams>;
+}) {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login?callbackUrl=/hrms/attendance");
@@ -28,14 +32,11 @@ export default async function AttendanceModulePage() {
   }
 
   // Team view only for staff holding `canAttendance`; everyone else sees only their own records.
-  const pageData = await loadAttendancePageData(user, { allowSelfView: true });
-  if (pageData.view === "forbidden") {
-    return <UnauthorizedState message={pageData.message} />;
-  }
-
   return (
     <div className="w-full space-y-6">
-      <AttendanceManagementClient pageData={pageData} portalRole="HRMS" />
+      <Suspense fallback={<AttendancePageSkeleton />}>
+        <AttendancePageSection user={user} searchParams={searchParams} allowSelfView portalRole="HRMS" />
+      </Suspense>
     </div>
   );
 }

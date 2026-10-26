@@ -7,6 +7,7 @@ import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { recruitmentService } from "@/features/recruitment/services/recruitment-service";
 import { applicationService } from "@/features/applications/services/application-service";
 import { StaffResumeActions } from "@/features/applications/components/resume-links";
+import { ApplicationSourceSummary } from "@/features/applications/components/application-source-summary";
 import type { DocumentLinkView } from "@/features/applications/document-links";
 import { offerService } from "@/features/employees/services/offer-service";
 import { JobOfferCard } from "@/features/employees/components/job-offer-card";
@@ -215,6 +216,10 @@ export default async function SubAdminApplicationDetailPage({
               <span className="flex items-center gap-1.5">
                 <Calendar className="h-3.5 w-3.5" /> Applied {new Date(application.createdAt).toLocaleDateString()}
               </span>
+              <ApplicationSourceSummary
+                source={application.source}
+                sourceDetail={application.sourceDetail}
+              />
             </div>
           </div>
 

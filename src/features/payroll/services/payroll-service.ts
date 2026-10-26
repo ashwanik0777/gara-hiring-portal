@@ -4,22 +4,29 @@ import { PAYROLL_STAFF_ROLES } from "../roles";
 import { prisma } from "@/lib/db";
 import { assertPermission, hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { Prisma, Role, PayrollStatus, EmployeeStatus } from "@prisma/client";
-import type {
-  CreatePayrollPeriodData,
-  RecordDisbursementData,
-  UpdatePayrollPeriodStatusData,
-  BulkDisbursementData,
-  UpdateEmployeePayoutProfileData,
+import {
+  MY_PAYROLL_PAGE_SIZE,
+  PAYROLL_DIRECTORY_PAGE_SIZE,
+  PAYROLL_MAX_PAGE_SIZE,
+  PAYROLL_PERIODS_PAGE_SIZE,
+  PAYROLL_RECORDS_PAGE_SIZE,
+  type CreatePayrollPeriodData,
+  type RecordDisbursementData,
+  type UpdatePayrollPeriodStatusData,
+  type BulkDisbursementData,
+  type UpdateEmployeePayoutProfileData,
 } from "../schemas";
 import type {
   PayrollPeriodItem,
   PayrollDashboardData,
+  PayrollDashboardQueryInput,
   PayrollPeriodDetail,
   PayrollRecordWithEmployee,
   EmployeePayoutProfile,
   PayrollStats,
   MaskedPayoutDetails,
   MyPayrollOverview,
+  PageInfo,
 } from "../types";
 import {
   PolicyBlockedError,
@@ -159,6 +166,105 @@ function isConfiguredAsPaid(internalNotes: string | null | undefined): boolean {
   return parsePayoutProfile(internalNotes)?.isPaid === true;
 }
 
+// -----------------------------------------------------------------------------
+// Read-side helpers: bounded pages and column selects
+// -----------------------------------------------------------------------------
+
+/** Clamps page / page size and returns the matching Prisma `skip` / `take`. */
+function pageArgs(page: number | undefined, defaultSize: number, pageSize?: number) {
+  const size = Math.min(Math.max(1, Math.trunc(pageSize ?? defaultSize)), PAYROLL_MAX_PAGE_SIZE);
+  const current = Math.max(1, Math.trunc(page ?? 1));
+  return { skip: (current - 1) * size, take: size, page: current, pageSize: size };
+}
+
+function toPageInfo(page: number, pageSize: number, total: number): PageInfo {
+  return { page, pageSize, total, pageCount: Math.max(1, Math.ceil(total / pageSize)) };
+}
+
+const periodSelect = {
+  id: true,
+  code: true,
+  startDate: true,
+  endDate: true,
+  status: true,
+  notes: true,
+} satisfies Prisma.PayrollPeriodSelect;
+
+type PeriodRow = Prisma.PayrollPeriodGetPayload<{ select: typeof periodSelect }>;
+
+/**
+ * Register row. `employee.internalNotes` carries the payout block and is selected only
+ * here, inside the `canPayroll`-gated dashboard; it never reaches the browser unmasked.
+ */
+const recordSelect = {
+  id: true,
+  payrollPeriodId: true,
+  employeeId: true,
+  status: true,
+  disbursementReference: true,
+  disbursedAt: true,
+  disbursedAmount: true,
+  notes: true,
+  finalizedAt: true,
+  createdAt: true,
+  employee: {
+    select: {
+      employeeCode: true,
+      department: true,
+      designation: true,
+      internalNotes: true,
+      user: { select: { name: true, email: true } },
+    },
+  },
+  finalizedBy: { select: { name: true } },
+} satisfies Prisma.PayrollRecordSelect;
+
+const directorySelect = {
+  id: true,
+  employeeCode: true,
+  department: true,
+  designation: true,
+  joiningDate: true,
+  internalNotes: true,
+  user: { select: { name: true, email: true } },
+} satisfies Prisma.EmployeeSelect;
+
+type StatusGroup = { status: PayrollStatus; _count: { _all: number } };
+type PeriodStatusGroup = StatusGroup & { payrollPeriodId: string };
+
+function buildRecordWhere(
+  periodId: string,
+  query: Pick<PayrollDashboardQueryInput, "status" | "search">
+): Prisma.PayrollRecordWhereInput {
+  const search = query.search?.trim();
+  return {
+    payrollPeriodId: periodId,
+    ...(query.status ? { status: query.status } : {}),
+    ...(search
+      ? {
+          OR: [
+            { employee: { user: { name: { contains: search, mode: "insensitive" } } } },
+            { employee: { employeeCode: { contains: search, mode: "insensitive" } } },
+            { employee: { department: { contains: search, mode: "insensitive" } } },
+            { disbursementReference: { contains: search, mode: "insensitive" } },
+          ],
+        }
+      : {}),
+  };
+}
+
+function buildDirectoryWhere(search: string | undefined): Prisma.EmployeeWhereInput {
+  const trimmed = search?.trim();
+  if (!trimmed) return {};
+  return {
+    OR: [
+      { user: { name: { contains: trimmed, mode: "insensitive" } } },
+      { employeeCode: { contains: trimmed, mode: "insensitive" } },
+      { department: { contains: trimmed, mode: "insensitive" } },
+    ],
+  };
+}
+
 function actorRoleOf(user: AuthenticatedUser): string | null {
   if (user.roles.includes(Role.ADMIN)) return Role.ADMIN;
   return user.roles[0] ?? null;
@@ -249,51 +355,144 @@ export class PayrollService {
   }
 
   /**
-   * Retrieval of payroll periods.
+   * Latest payroll periods (one page, newest first) with their record counts.
    */
-  async getPayrollPeriods(user: AuthenticatedUser): Promise<PayrollPeriodItem[]> {
+  async getPayrollPeriods(
+    user: AuthenticatedUser,
+    query: { page?: number; pageSize?: number } = {}
+  ): Promise<{ items: PayrollPeriodItem[]; page: PageInfo }> {
     await this.assertPayrollAccess(user);
 
-    const periods = await prisma.payrollPeriod.findMany({
-      include: {
-        _count: { select: { records: true } },
-      },
-      orderBy: { startDate: "desc" },
-    });
+    const { skip, take, page, pageSize } = pageArgs(query.page, PAYROLL_PERIODS_PAGE_SIZE, query.pageSize);
+    const [periods, total] = await Promise.all([
+      prisma.payrollPeriod.findMany({
+        select: { ...periodSelect, _count: { select: { records: true } } },
+        orderBy: [{ startDate: "desc" }, { id: "desc" }],
+        skip,
+        take,
+      }),
+      prisma.payrollPeriod.count(),
+    ]);
 
-    return periods.map((p) => ({
-      id: p.id,
-      code: p.code,
-      startDate: p.startDate,
-      endDate: p.endDate,
-      status: p.status,
-      notes: p.notes,
-      totalRecords: p._count.records,
-    }));
+    return {
+      items: periods.map((p) => ({
+        id: p.id,
+        code: p.code,
+        startDate: p.startDate,
+        endDate: p.endDate,
+        status: p.status,
+        notes: p.notes,
+        totalRecords: p._count.records,
+      })),
+      page: toPageInfo(page, pageSize, total),
+    };
   }
 
   /**
-   * Payroll overview for the staff console. Read-only: periods and enrolments are
-   * only ever created by explicit staff actions.
+   * Payroll overview for the staff console. Read-only: periods and enrolments are only
+   * ever created by explicit staff actions. Every list is one bounded page and every
+   * count or sum is computed in PostgreSQL (`groupBy`, `aggregate`, `count`).
    */
   async getPayrollDashboardData(
     user: AuthenticatedUser,
-    selectedPeriodId?: string
+    query: PayrollDashboardQueryInput = {}
   ): Promise<PayrollDashboardData> {
     await this.assertPayrollAccess(user);
 
-    const periodsRaw = await prisma.payrollPeriod.findMany({
-      include: {
-        records: {
-          select: { id: true, status: true },
-        },
-      },
-      orderBy: { startDate: "desc" },
-    });
+    const periodPaging = pageArgs(query.periodsPage, PAYROLL_PERIODS_PAGE_SIZE);
+    const [periodRows, periodsTotal] = await Promise.all([
+      prisma.payrollPeriod.findMany({
+        select: periodSelect,
+        orderBy: [{ startDate: "desc" }, { id: "desc" }],
+        skip: periodPaging.skip,
+        take: periodPaging.take,
+      }),
+      prisma.payrollPeriod.count(),
+    ]);
 
-    const periods: PayrollPeriodDetail[] = periodsRaw.map((p) => {
-      const total = p.records.length;
-      const paid = p.records.filter((r) => r.status === PayrollStatus.PAID).length;
+    // A deep link to a period outside the current page still opens that period.
+    let selected: PeriodRow | null = query.periodId
+      ? periodRows.find((p) => p.id === query.periodId) ?? null
+      : null;
+    if (query.periodId && !selected) {
+      selected = await prisma.payrollPeriod.findUnique({
+        where: { id: query.periodId },
+        select: periodSelect,
+      });
+    }
+    const active = selected ?? periodRows[0] ?? null;
+    const listedPeriods = active && !periodRows.some((p) => p.id === active.id) ? [active, ...periodRows] : periodRows;
+    const periodIds = listedPeriods.map((p) => p.id);
+
+    const recordPaging = pageArgs(query.page, PAYROLL_RECORDS_PAGE_SIZE);
+    const directoryPaging = pageArgs(query.directoryPage, PAYROLL_DIRECTORY_PAGE_SIZE);
+    const recordWhere = active ? buildRecordWhere(active.id, query) : null;
+    const directoryWhere = buildDirectoryWhere(query.directorySearch);
+
+    const [
+      periodGroups,
+      recordsRaw,
+      recordsTotal,
+      statusGroups,
+      paidSum,
+      paidRecordsWithoutAmount,
+      workforce,
+      directoryRaw,
+      directoryTotal,
+    ] = await Promise.all([
+      periodIds.length > 0
+        ? prisma.payrollRecord.groupBy({
+            by: ["payrollPeriodId", "status"],
+            where: { payrollPeriodId: { in: periodIds } },
+            _count: { _all: true },
+          })
+        : Promise.resolve([]),
+      recordWhere
+        ? prisma.payrollRecord.findMany({
+            where: recordWhere,
+            select: recordSelect,
+            orderBy: [{ employee: { employeeCode: "asc" } }, { id: "asc" }],
+            skip: recordPaging.skip,
+            take: recordPaging.take,
+          })
+        : Promise.resolve([]),
+      recordWhere ? prisma.payrollRecord.count({ where: recordWhere }) : Promise.resolve(0),
+      active
+        ? prisma.payrollRecord.groupBy({
+            by: ["status"],
+            where: { payrollPeriodId: active.id },
+            _count: { _all: true },
+          })
+        : Promise.resolve([]),
+      active
+        ? prisma.payrollRecord.aggregate({
+            where: { payrollPeriodId: active.id, status: PayrollStatus.PAID },
+            _sum: { disbursedAmount: true },
+          })
+        : Promise.resolve(null),
+      active
+        ? prisma.payrollRecord.count({
+            where: { payrollPeriodId: active.id, status: PayrollStatus.PAID, disbursedAmount: null },
+          })
+        : Promise.resolve(0),
+      // The paid / unpaid flag lives inside the payout block of `internalNotes` (see
+      // payout-notes.ts), so it cannot be grouped in SQL; only that one column is read.
+      prisma.employee.findMany({ select: { internalNotes: true } }),
+      prisma.employee.findMany({
+        where: directoryWhere,
+        select: directorySelect,
+        orderBy: { employeeCode: "asc" },
+        skip: directoryPaging.skip,
+        take: directoryPaging.take,
+      }),
+      prisma.employee.count({ where: directoryWhere }),
+    ]);
+
+    const groupsByPeriod = periodGroups as PeriodStatusGroup[];
+    const toDetail = (p: PeriodRow): PayrollPeriodDetail => {
+      const groups = groupsByPeriod.filter((g) => g.payrollPeriodId === p.id);
+      const total = groups.reduce((sum, g) => sum + g._count._all, 0);
+      const paid = groups.find((g) => g.status === PayrollStatus.PAID)?._count._all ?? 0;
       return {
         id: p.id,
         code: p.code,
@@ -305,25 +504,38 @@ export class PayrollService {
         paidRecords: paid,
         pendingRecords: total - paid,
       };
-    });
+    };
 
-    const activePeriod =
-      periods.find((p) => p.id === selectedPeriodId) ?? periods[0] ?? null;
+    const periods = listedPeriods.map(toDetail);
+    const activePeriod = active ? toDetail(active) : null;
 
-    const employeesRaw = await prisma.employee.findMany({
-      select: {
-        id: true,
-        employeeCode: true,
-        department: true,
-        designation: true,
-        joiningDate: true,
-        internalNotes: true,
-        user: { select: { name: true, email: true } },
-      },
-      orderBy: { employeeCode: "asc" },
-    });
+    const records: PayrollRecordWithEmployee[] = activePeriod
+      ? recordsRaw.map((r) => ({
+          id: r.id,
+          payrollPeriodId: r.payrollPeriodId,
+          payrollPeriodCode: activePeriod.code,
+          employeeId: r.employeeId,
+          employeeName: r.employee.user.name || "Employee",
+          employeeCode: r.employee.employeeCode,
+          employeeEmail: r.employee.user.email,
+          department: r.employee.department,
+          designation: r.employee.designation,
+          status: r.status,
+          disbursementReference: r.disbursementReference,
+          disbursedAt: r.disbursedAt?.toISOString() || null,
+          notes: r.notes,
+          finalizedByName: r.finalizedBy?.name || null,
+          finalizedAt: r.finalizedAt?.toISOString() || null,
+          createdAt: r.createdAt.toISOString(),
+          ...resolveEmployeePayoutInfo(r.employee),
+          // PAID records report the amount snapshotted at disbursement, never the current profile.
+          ...(r.status === PayrollStatus.PAID
+            ? { stipendAmount: r.disbursedAmount == null ? null : r.disbursedAmount.toNumber() }
+            : {}),
+        }))
+      : [];
 
-    const employees: EmployeePayoutProfile[] = employeesRaw.map((emp) => ({
+    const employees: EmployeePayoutProfile[] = directoryRaw.map((emp) => ({
       employeeId: emp.id,
       employeeCode: emp.employeeCode,
       employeeName: emp.user.name || "Employee",
@@ -334,89 +546,62 @@ export class PayrollService {
       ...resolveEmployeePayoutInfo(emp),
     }));
 
-    let records: PayrollRecordWithEmployee[] = [];
-    if (activePeriod) {
-      const recordsRaw = await prisma.payrollRecord.findMany({
-        where: { payrollPeriodId: activePeriod.id },
-        include: {
-          employee: {
-            select: {
-              employeeCode: true,
-              department: true,
-              designation: true,
-              internalNotes: true,
-              user: { select: { name: true, email: true } },
-            },
-          },
-          finalizedBy: { select: { name: true } },
-        },
-        orderBy: { employee: { employeeCode: "asc" } },
-      });
-
-      records = recordsRaw.map((r) => ({
-        id: r.id,
-        payrollPeriodId: r.payrollPeriodId,
-        payrollPeriodCode: activePeriod.code,
-        employeeId: r.employeeId,
-        employeeName: r.employee.user.name || "Employee",
-        employeeCode: r.employee.employeeCode,
-        employeeEmail: r.employee.user.email,
-        department: r.employee.department,
-        designation: r.employee.designation,
-        status: r.status,
-        disbursementReference: r.disbursementReference,
-        disbursedAt: r.disbursedAt?.toISOString() || null,
-        notes: r.notes,
-        finalizedByName: r.finalizedBy?.name || null,
-        finalizedAt: r.finalizedAt?.toISOString() || null,
-        createdAt: r.createdAt.toISOString(),
-        ...resolveEmployeePayoutInfo(r.employee),
-        // PAID records report the amount snapshotted at disbursement, never the current profile.
-        ...(r.status === PayrollStatus.PAID
-          ? { stipendAmount: r.disbursedAmount == null ? null : r.disbursedAmount.toNumber() }
-          : {}),
-      }));
-    }
-
     return {
       periods,
+      periodsPage: toPageInfo(periodPaging.page, periodPaging.pageSize, periodsTotal),
       activePeriod,
       records,
+      recordsPage: toPageInfo(recordPaging.page, recordPaging.pageSize, recordsTotal),
+      recordFilters: { status: query.status, search: query.search?.trim() || undefined },
       employees,
-      stats: this.buildStats(records, employees),
+      employeesPage: toPageInfo(directoryPaging.page, directoryPaging.pageSize, directoryTotal),
+      directorySearch: query.directorySearch?.trim() || undefined,
+      stats: this.buildStats(
+        statusGroups as StatusGroup[],
+        paidSum?._sum.disbursedAmount ?? null,
+        paidRecordsWithoutAmount,
+        workforce
+      ),
     };
   }
 
+  /** Active-period counts from `groupBy` / `aggregate`; workforce flags from the payout blocks. */
   private buildStats(
-    records: PayrollRecordWithEmployee[],
-    employees: EmployeePayoutProfile[]
+    statusGroups: StatusGroup[],
+    disbursedSum: Prisma.Decimal | null,
+    paidRecordsWithoutAmount: number,
+    workforce: { internalNotes: string | null }[]
   ): PayrollStats {
-    const paidRecords = records.filter((r) => r.status === PayrollStatus.PAID);
-    const totalEnrolled = records.length;
+    const count = (status: PayrollStatus) =>
+      statusGroups.find((g) => g.status === status)?._count._all ?? 0;
+    const totalEnrolled = statusGroups.reduce((sum, g) => sum + g._count._all, 0);
+    const paidCount = count(PayrollStatus.PAID);
+    const flags = workforce.map((e) => parsePayoutProfile(e.internalNotes)?.isPaid ?? null);
     return {
       totalEnrolled,
-      draftCount: records.filter((r) => r.status === PayrollStatus.DRAFT).length,
-      finalizedCount: records.filter((r) => r.status === PayrollStatus.FINALIZED).length,
-      paidCount: paidRecords.length,
-      voidCount: records.filter((r) => r.status === PayrollStatus.VOID).length,
-      completionRate:
-        totalEnrolled > 0 ? Math.round((paidRecords.length / totalEnrolled) * 100) : 0,
-      totalDisbursedAmount: paidRecords.reduce(
-        (sum, r) => sum + (typeof r.stipendAmount === "number" ? r.stipendAmount : 0),
-        0
-      ),
-      paidRecordsWithoutAmount: paidRecords.filter((r) => typeof r.stipendAmount !== "number")
-        .length,
-      totalPaidWorkforce: employees.filter((e) => e.isPaid === true).length,
-      totalUnpaidWorkforce: employees.filter((e) => e.isPaid === false).length,
-      totalUnconfiguredWorkforce: employees.filter((e) => e.isPaid === null).length,
+      draftCount: count(PayrollStatus.DRAFT),
+      finalizedCount: count(PayrollStatus.FINALIZED),
+      paidCount,
+      voidCount: count(PayrollStatus.VOID),
+      completionRate: totalEnrolled > 0 ? Math.round((paidCount / totalEnrolled) * 100) : 0,
+      totalDisbursedAmount: disbursedSum ? disbursedSum.toNumber() : 0,
+      paidRecordsWithoutAmount,
+      totalPaidWorkforce: flags.filter((f) => f === true).length,
+      totalUnpaidWorkforce: flags.filter((f) => f === false).length,
+      totalUnconfiguredWorkforce: flags.filter((f) => f === null).length,
     };
   }
 
   /**
-   * Self-service view: the signed-in user's own payroll records and masked payout details.
+   * Self-service view: one page of the signed-in user's own payroll records and masked
+   * payout details. Every query is scoped to the user's own employee row.
    */
-  async getMyPayrollOverview(user: AuthenticatedUser): Promise<MyPayrollOverview> {
+  async getMyPayrollOverview(
+    user: AuthenticatedUser,
+    query: { page?: number; pageSize?: number } = {}
+  ): Promise<MyPayrollOverview> {
+    const { skip, take, page, pageSize } = pageArgs(query.page, MY_PAYROLL_PAGE_SIZE, query.pageSize);
+
     const employee = await prisma.employee.findUnique({
       where: { userId: user.id },
       select: {
@@ -430,21 +615,26 @@ export class PayrollService {
     });
 
     if (!employee) {
-      return { employee: null, payout: null, records: [] };
+      return { employee: null, payout: null, records: [], page: toPageInfo(page, pageSize, 0) };
     }
 
-    const records = await prisma.payrollRecord.findMany({
-      where: { employeeId: employee.id },
-      select: {
-        id: true,
-        status: true,
-        disbursementReference: true,
-        disbursedAt: true,
-        payrollPeriod: { select: { code: true, startDate: true, endDate: true } },
-      },
-      orderBy: { payrollPeriod: { startDate: "desc" } },
-      take: 36,
-    });
+    const where: Prisma.PayrollRecordWhereInput = { employeeId: employee.id };
+    const [records, total] = await Promise.all([
+      prisma.payrollRecord.findMany({
+        where,
+        select: {
+          id: true,
+          status: true,
+          disbursementReference: true,
+          disbursedAt: true,
+          payrollPeriod: { select: { code: true, startDate: true, endDate: true } },
+        },
+        orderBy: [{ payrollPeriod: { startDate: "desc" } }, { id: "desc" }],
+        skip,
+        take,
+      }),
+      prisma.payrollRecord.count({ where }),
+    ]);
 
     return {
       employee: {
@@ -463,6 +653,7 @@ export class PayrollService {
         disbursementReference: r.disbursementReference,
         disbursedAt: r.disbursedAt?.toISOString() ?? null,
       })),
+      page: toPageInfo(page, pageSize, total),
     };
   }
 

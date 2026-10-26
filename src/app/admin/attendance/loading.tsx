@@ -1,5 +1,9 @@
-import { ModulePageSkeleton } from "@/components/feedback/page-skeletons";
+import { AttendancePageSkeleton } from "@/features/attendance/components/attendance-page-skeleton";
 
 export default function Loading() {
-  return <ModulePageSkeleton label="Loading attendance" />;
+  return (
+    <div className="w-full space-y-6">
+      <AttendancePageSkeleton />
+    </div>
+  );
 }

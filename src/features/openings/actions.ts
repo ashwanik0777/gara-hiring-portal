@@ -1,13 +1,16 @@
 "use server";
 
 import { z } from "zod";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { requirePermission } from "@/lib/auth/guards";
 import { OpeningStatus } from "@prisma/client";
 import {
   createOpening,
   updateOpeningStatus,
   saveOpeningFormVersion,
+  PUBLIC_OPENINGS_TAG,
+  publicOpeningIdTag,
+  publicOpeningSlugTag,
 } from "./services/opening-service";
 import {
   CreateOpeningInput,
@@ -33,10 +36,24 @@ function parseArgument<T>(schema: z.ZodType<T>, value: unknown, message: string)
   return parsed.data;
 }
 
-function revalidateOpeningPaths(slug?: string) {
+/**
+ * Expires everything that shows this opening. The public pages and the sitemap read through
+ * `"use cache"` entries tagged in opening-service.ts: `updateTag` (Server Actions only)
+ * expires them immediately, so staff see their change on the very next request. The
+ * `revalidatePath` calls still refresh the prerendered page shells and the staff lists.
+ */
+function revalidateOpeningCaches(opening?: { id?: string; slug?: string }) {
+  updateTag(PUBLIC_OPENINGS_TAG);
+  if (opening?.slug) {
+    updateTag(publicOpeningSlugTag(opening.slug));
+  }
+  if (opening?.id) {
+    updateTag(publicOpeningIdTag(opening.id));
+  }
+
   revalidatePath("/careers");
-  if (slug) {
-    revalidatePath(`/careers/${slug}`);
+  if (opening?.slug) {
+    revalidatePath(`/careers/${opening.slug}`);
   }
   revalidatePath("/admin/openings");
   revalidatePath("/subadmin/openings");
@@ -49,7 +66,7 @@ export async function createOpeningAction(
     const user = await requirePermission("canOpenings");
     const input = parseArgument(createOpeningSchema, data, "Invalid opening details");
     const opening = await createOpening(input, user);
-    revalidateOpeningPaths();
+    revalidateOpeningCaches({ id: opening.id, slug: opening.slug });
     return { success: true, data: { id: opening.id, slug: opening.slug } };
   } catch (error) {
     return { success: false, error: toActionError(error, "The opening could not be created.") };
@@ -65,7 +82,7 @@ export async function updateOpeningStatusAction(
     const openingId = parseArgument(openingIdSchema, id, "Invalid opening identifier");
     const nextStatus = parseArgument(openingStatusSchema, status, "Invalid opening status");
     const opening = await updateOpeningStatus(openingId, nextStatus, user);
-    revalidateOpeningPaths(opening.slug);
+    revalidateOpeningCaches({ id: opening.id, slug: opening.slug });
     return {
       success: true,
       data: { id: opening.id, slug: opening.slug, status: opening.status },
@@ -93,7 +110,8 @@ export async function saveOpeningFormVersionAction(
     );
     const publish = parseArgument(z.boolean(), shouldPublish, "Invalid publish flag");
     const formVersion = await saveOpeningFormVersion(id, formSchema, publish, user);
-    revalidateOpeningPaths();
+    // The slug is not known here; the id tag covers the cached opening page.
+    revalidateOpeningCaches({ id });
     return {
       success: true,
       data: {

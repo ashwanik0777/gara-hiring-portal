@@ -1,5 +1,3 @@
-"use client";
-
 import React from "react";
 import type { InternTaskDetail } from "../types";
 import { SubmissionReviewStatus, TaskPriority, TaskStatus } from "@/types/enums";
@@ -49,6 +47,10 @@ function getStatusBadge(status: TaskStatus) {
   }
 }
 
+/**
+ * Task cards with submission history. A Server Component: only the submit / review dialog
+ * triggers are client code, and their forms load on first use.
+ */
 export function InternTaskList({ tasks, isSupervisorView = false }: InternTaskListProps) {
   if (tasks.length === 0) {
     return (

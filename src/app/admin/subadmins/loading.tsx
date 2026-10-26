@@ -1,5 +1,9 @@
-import { ListPageSkeleton } from "@/components/feedback/page-skeletons";
+import { SubAdminsPageSkeleton } from "@/features/subadmins/components/subadmins-page-skeleton";
 
 export default function Loading() {
-  return <ListPageSkeleton label="Loading sub-admins" />;
+  return (
+    <div className="space-y-6">
+      <SubAdminsPageSkeleton />
+    </div>
+  );
 }

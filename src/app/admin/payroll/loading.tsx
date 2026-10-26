@@ -1,5 +1,5 @@
-import { ModulePageSkeleton } from "@/components/feedback/page-skeletons";
+import { PayrollPageSkeleton } from "@/features/payroll/components/payroll-page-skeleton";
 
 export default function Loading() {
-  return <ModulePageSkeleton label="Loading payroll" />;
+  return <PayrollPageSkeleton />;
 }

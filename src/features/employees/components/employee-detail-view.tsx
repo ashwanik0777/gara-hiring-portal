@@ -1,34 +1,28 @@
-import React from "react";
+import React, { Suspense } from "react";
 import Link from "next/link";
-import { EmployeeStatus, type ConfidentialEmployeeDetail } from "../types";
-import { EmployeeLifecycleCard } from "./employee-lifecycle-card";
-import { EmployeeOnboardingChecklist } from "./employee-onboarding-checklist";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Calendar, ChevronRight, Mail, Phone, ShieldAlert, ShieldCheck, Users } from "lucide-react";
+import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmployeeStatus, type EmployeeDetailCore } from "../types";
+import { EmployeeOnboardingChecklist } from "./employee-onboarding-checklist";
 import { EmploymentTypeBadge } from "./employment-type-badge";
-import { EmploymentPeriodTimeline, type TimelinePeriod } from "./employment-period-timeline";
 import {
-  Calendar,
-  FileText,
-  Mail,
-  Phone,
-  ShieldAlert,
-  ShieldCheck,
-  Users,
-  AlertTriangle,
-  History,
-  FolderLock,
-  ChevronRight,
-  Route,
-} from "lucide-react";
+  EmployeeAdministrationSection,
+  EmployeeDocumentsSection,
+  EmployeeExitSection,
+  EmployeeHistorySection,
+  SectionSkeleton,
+} from "./employee-detail-sections";
 
 interface EmployeeDetailViewProps {
-  employee: ConfidentialEmployeeDetail;
+  /** Core record (one query); histories and documents stream in below. */
+  employee: EmployeeDetailCore;
+  /** Viewer; the streamed sections re-check access through the service. */
+  user: AuthenticatedUser;
   /** HR/Admin with `canEmployees`: confidential notes and lifecycle controls are shown. */
   isStaffAdmin: boolean;
   isSelf: boolean;
-  /** Candidates for the reporting-manager selector (empty unless isStaffAdmin). */
-  allStaff: { id: string; employeeCode: string; name: string }[];
   /** Portal route that opens the originating application, or null to hide the link. */
   applicationHrefBase: string | null;
   /** `?tab=exit` opens the Offboarding tab (linked from the intern review guidance). */
@@ -52,30 +46,18 @@ function getStatusBadge(status: EmployeeStatus) {
 
 /**
  * Employee record cockpit shared by the admin and sub-admin portals. Authorization happens in
- * the calling page and in `employeeService.getEmployeeDetail`; this view only renders the
- * projection it receives.
+ * the calling page and in the employee service; this view renders the core projection it
+ * receives and streams the heavier sections (documents, periods, history, administration).
  */
-/** Periods with the matching exit reason (staff view) or date only (self view). */
-function toTimelinePeriods(employee: ConfidentialEmployeeDetail): TimelinePeriod[] {
-  return employee.employmentPeriods.map((period) => {
-    const exit = employee.exitRecords.find((x) => x.periodId === period.id);
-    return {
-      ...period,
-      note: exit?.reason ? `Exit reason: ${exit.reason}` : null,
-    };
-  });
-}
-
 export function EmployeeDetailView({
   employee,
+  user,
   isStaffAdmin,
   isSelf,
-  allStaff,
   applicationHrefBase,
   openExitTab = false,
 }: EmployeeDetailViewProps) {
-  // The current exit (if the person is exited) is the latest exit record.
-  const latestExit = employee.status === EmployeeStatus.EXITED ? employee.exitRecords[0] ?? null : null;
+  const isExited = employee.status === EmployeeStatus.EXITED;
 
   return (
     <div className="w-full space-y-6">
@@ -84,9 +66,10 @@ export function EmployeeDetailView({
         <div className="flex items-center justify-end">
           <Link
             href={`${applicationHrefBase}/${employee.application.id}`}
-            className="text-xs text-primary hover:underline flex items-center gap-1"
+            className="flex items-center gap-1 rounded-sm text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            Originating Application ({employee.application.referenceCode}) <ChevronRight className="h-3 w-3" />
+            Originating Application ({employee.application.referenceCode})
+            <ChevronRight className="h-3 w-3" aria-hidden="true" />
           </Link>
         </div>
       )}
@@ -94,82 +77,87 @@ export function EmployeeDetailView({
       {/* Header Banner */}
       <Card className="border-border shadow-xs">
         <CardContent className="pt-6">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-            <div className="flex items-center gap-4">
-              <div className="h-16 w-16 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xl border border-primary/20 shrink-0">
-                {employee.name.charAt(0).toUpperCase()}
+          <div className="flex items-start gap-4">
+            <div
+              aria-hidden="true"
+              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full border border-primary/20 bg-primary/10 text-xl font-bold text-primary"
+            >
+              {employee.name.charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h1 className="text-xl font-bold text-foreground">{employee.name}</h1>
+                {getStatusBadge(employee.status)}
+                <EmploymentTypeBadge employmentType={employee.employmentType} />
+                <span className="rounded border border-border bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
+                  {employee.employeeCode}
+                </span>
               </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <h1 className="text-xl font-bold text-foreground">{employee.name}</h1>
-                  {getStatusBadge(employee.status)}
-                  <EmploymentTypeBadge employmentType={employee.employmentType} />
-                  <span className="font-mono text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground border border-border">
-                    {employee.employeeCode}
-                  </span>
-                </div>
-                <div className="text-sm font-medium text-foreground/90 mt-1">
-                  {employee.designation} &bull; <span className="text-muted-foreground">{employee.department}</span>
-                </div>
-                <div className="flex flex-wrap gap-4 text-xs text-muted-foreground mt-2">
-                  <span className="flex items-center gap-1">
-                    <Mail className="h-3 w-3" /> {employee.email}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Calendar className="h-3 w-3" /> Joined: {new Date(employee.joiningDate).toLocaleDateString()}
-                  </span>
-                </div>
+              <div className="mt-1 text-sm font-medium text-foreground/90">
+                {employee.designation} &bull; <span className="text-muted-foreground">{employee.department}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1 break-all">
+                  <Mail className="h-3 w-3 shrink-0" aria-hidden="true" /> {employee.email}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Calendar className="h-3 w-3" aria-hidden="true" /> Joined:{" "}
+                  {new Date(employee.joiningDate).toLocaleDateString()}
+                </span>
               </div>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Left Column (2 Cols on LG) */}
-        <div className="lg:col-span-2 space-y-6">
+        <div className="space-y-6 lg:col-span-2">
           {/* Section: Reporting Line & Hierarchy */}
           <Card className="border-border shadow-xs">
-            <CardHeader className="pb-3 border-b border-border/50">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Users className="h-4 w-4 text-primary" /> Reporting Line & Hierarchy
+            <CardHeader className="border-b border-border/50 pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Users className="h-4 w-4 text-primary" aria-hidden="true" /> Reporting Line & Hierarchy
               </CardTitle>
             </CardHeader>
-            <CardContent className="pt-4 space-y-4 text-xs">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-3.5 rounded-lg bg-muted/30 border border-border/50">
-                  <div className="text-muted-foreground text-[11px] mb-1">Direct Manager</div>
+            <CardContent className="space-y-4 pt-4 text-xs">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="rounded-lg border border-border/50 bg-muted/30 p-3.5">
+                  <div className="mb-1 text-[11px] text-muted-foreground">Direct Manager</div>
                   {employee.manager ? (
                     <div>
-                      <div className="font-semibold text-foreground text-sm">
-                        {employee.manager.name}
-                      </div>
+                      <div className="text-sm font-semibold text-foreground">{employee.manager.name}</div>
                       <div className="text-muted-foreground">
                         {employee.manager.designation} ({employee.manager.employeeCode})
                       </div>
                     </div>
                   ) : (
-                    <div className="text-muted-foreground italic">
+                    <div className="italic text-muted-foreground">
                       No direct manager assigned (Reports to Executive / Root)
                     </div>
                   )}
                 </div>
 
-                <div className="p-3.5 rounded-lg bg-muted/30 border border-border/50">
-                  <div className="text-muted-foreground text-[11px] mb-1">
-                    Direct Reports ({employee.directReports.length})
+                <div className="rounded-lg border border-border/50 bg-muted/30 p-3.5">
+                  <div className="mb-1 text-[11px] text-muted-foreground">
+                    Direct Reports ({employee.directReportCount})
                   </div>
                   {employee.directReports.length === 0 ? (
-                    <div className="text-muted-foreground italic">No direct reports.</div>
+                    <div className="italic text-muted-foreground">No direct reports.</div>
                   ) : (
-                    <div className="space-y-1">
+                    <ul className="space-y-1">
                       {employee.directReports.map((dr) => (
-                        <div key={dr.id} className="flex justify-between items-center py-0.5">
+                        <li key={dr.id} className="flex items-center justify-between gap-2 py-0.5">
                           <span className="font-medium text-foreground">{dr.name}</span>
                           <span className="text-[11px] text-muted-foreground">{dr.designation}</span>
-                        </div>
+                        </li>
                       ))}
-                    </div>
+                      {employee.directReportCount > employee.directReports.length && (
+                        <li className="text-[11px] text-muted-foreground">
+                          and {employee.directReportCount - employee.directReports.length} more in the directory.
+                        </li>
+                      )}
+                    </ul>
                   )}
                 </div>
               </div>
@@ -179,153 +167,70 @@ export function EmployeeDetailView({
           {/* Section: Confidential Contact & Emergency Info */}
           {(isStaffAdmin || isSelf) && (
             <Card className="border-border shadow-xs">
-              <CardHeader className="pb-3 border-b border-border/50">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-primary" /> Confidential Information
+              <CardHeader className="border-b border-border/50 pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <ShieldCheck className="h-4 w-4 text-primary" aria-hidden="true" /> Confidential Information
                   </CardTitle>
-                  <Badge variant="outline" className="text-[10px]">Restricted Data</Badge>
+                  <Badge variant="outline" className="text-[10px]">
+                    Restricted Data
+                  </Badge>
                 </div>
               </CardHeader>
-              <CardContent className="pt-4 space-y-4 text-xs">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="p-3.5 rounded-lg bg-muted/20 border border-border/40">
-                    <div className="text-muted-foreground text-[11px] flex items-center gap-1 mb-1">
-                      <Phone className="h-3 w-3" /> Personal Phone
+              <CardContent className="space-y-4 pt-4 text-xs">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="rounded-lg border border-border/40 bg-muted/20 p-3.5">
+                    <div className="mb-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <Phone className="h-3 w-3" aria-hidden="true" /> Personal Phone
                     </div>
-                    <div className="font-semibold text-foreground">
-                      {employee.personalPhone || "Not provided"}
-                    </div>
+                    <div className="font-semibold text-foreground">{employee.personalPhone || "Not provided"}</div>
                   </div>
 
-                  <div className="p-3.5 rounded-lg bg-muted/20 border border-border/40">
-                    <div className="text-muted-foreground text-[11px] mb-1">Emergency Contact</div>
+                  <div className="rounded-lg border border-border/40 bg-muted/20 p-3.5">
+                    <div className="mb-1 text-[11px] text-muted-foreground">Emergency Contact</div>
                     {employee.emergencyContact ? (
                       <div>
                         <div className="font-semibold text-foreground">
                           {employee.emergencyContact.name} ({employee.emergencyContact.relation})
                         </div>
-                        <div className="text-muted-foreground mt-0.5">
-                          {employee.emergencyContact.phone}
-                        </div>
+                        <div className="mt-0.5 text-muted-foreground">{employee.emergencyContact.phone}</div>
                       </div>
                     ) : (
-                      <div className="text-muted-foreground italic">None on record</div>
+                      <div className="italic text-muted-foreground">None on record</div>
                     )}
                   </div>
                 </div>
 
                 {isStaffAdmin && employee.internalNotes && (
-                  <div className="p-3 rounded-md bg-muted/40 border border-border/60">
-                    <div className="font-semibold text-warning flex items-center gap-1.5 text-[11px] mb-1">
-                      <ShieldAlert className="h-3.5 w-3.5" /> Confidential HR Notes:
+                  <div className="rounded-md border border-border/60 bg-muted/40 p-3">
+                    <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-warning">
+                      <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" /> Confidential HR Notes:
                     </div>
-                    <div className="text-foreground leading-relaxed whitespace-pre-wrap">
-                      {employee.internalNotes}
-                    </div>
+                    <div className="whitespace-pre-wrap leading-relaxed text-foreground">{employee.internalNotes}</div>
                   </div>
                 )}
               </CardContent>
             </Card>
           )}
 
-          {/* Section: Secure Document Metadata */}
-          <Card className="border-border shadow-xs">
-            <CardHeader className="pb-3 border-b border-border/50">
-              <CardTitle className="text-base flex items-center gap-2">
-                <FolderLock className="h-4 w-4 text-primary" /> Secure Employee Documents ({employee.secureDocuments.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-4 text-xs">
-              {employee.secureDocuments.length === 0 ? (
-                <div className="text-center py-6 text-muted-foreground italic">
-                  No documents attached to this employee record yet.
-                </div>
-              ) : (
-                <div className="divide-y divide-border/40">
-                  {employee.secureDocuments.map((doc) => (
-                    <div key={doc.id} className="py-2.5 flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <FileText className="h-4 w-4 text-primary shrink-0" />
-                        <div>
-                          <div className="font-medium text-foreground">{doc.title}</div>
-                          <div className="text-[11px] text-muted-foreground">
-                            {doc.documentType} &bull; {(doc.fileSizeBytes / 1024).toFixed(0)} KB &bull; Uploaded {new Date(doc.uploadedAt).toLocaleDateString()}
-                          </div>
-                        </div>
-                      </div>
-                      <Badge variant="outline" className="text-[10px]">
-                        Private Storage
-                      </Badge>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <Suspense fallback={<SectionSkeleton label="Loading documents" rows={3} />}>
+            <EmployeeDocumentsSection user={user} employeeId={employee.id} />
+          </Suspense>
 
-          {/* Section: Employment periods (joining, re-joining, conversion) */}
-          <Card className="border-border shadow-xs">
-            <CardHeader className="pb-3 border-b border-border/50">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Route className="h-4 w-4 text-primary" aria-hidden="true" /> Employment Periods
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-5">
-              <EmploymentPeriodTimeline periods={toTimelinePeriods(employee)} />
-            </CardContent>
-          </Card>
-
-          {/* Section: Employment History Timeline */}
-          <Card className="border-border shadow-xs">
-            <CardHeader className="pb-3 border-b border-border/50">
-              <CardTitle className="text-base flex items-center gap-2">
-                <History className="h-4 w-4 text-primary" /> Employment History & Audit Log
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-6">
-              <div className="relative border-l-2 border-border ml-3 space-y-6 pl-6 py-2 text-xs">
-                {employee.employmentHistories.map((h) => (
-                  <div key={h.id} className="relative group space-y-1">
-                    <div className="absolute -left-[31px] top-1 h-4 w-4 rounded-full border-2 border-primary bg-card" />
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold uppercase tracking-wider text-foreground text-[11px]">
-                        {h.changeType}
-                      </span>
-                      {h.previousValue && (
-                        <span className="text-muted-foreground">
-                          ({h.previousValue} → <span className="font-medium text-foreground">{h.newValue}</span>)
-                        </span>
-                      )}
-                      {!h.previousValue && (
-                        <span className="font-medium text-foreground">{h.newValue}</span>
-                      )}
-                      <span className="text-[10px] text-muted-foreground ml-auto">
-                        {new Date(h.effectiveDate).toLocaleDateString()}
-                      </span>
-                    </div>
-
-                    {h.remarks && (
-                      <div className="text-muted-foreground mt-0.5">
-                        {h.remarks}
-                      </div>
-                    )}
-
-                    {h.changedBy && (
-                      <div className="text-[10px] text-muted-foreground italic">
-                        Recorded by: {h.changedBy.name}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          <Suspense
+            fallback={
+              <>
+                <SectionSkeleton label="Loading employment periods" rows={2} />
+                <SectionSkeleton label="Loading employment history" rows={4} />
+              </>
+            }
+          >
+            <EmployeeHistorySection user={user} employeeId={employee.id} />
+          </Suspense>
         </div>
 
         {/* Right Column (Controls & Onboarding) */}
         <div className="space-y-6">
-          {/* Onboarding Checklist */}
           {employee.onboardingChecklist && (
             <EmployeeOnboardingChecklist
               employeeId={employee.id}
@@ -334,56 +239,16 @@ export function EmployeeDetailView({
             />
           )}
 
-          {/* Admin Controls */}
           {isStaffAdmin && (
-            <EmployeeLifecycleCard
-              employeeId={employee.id}
-              currentStatus={employee.status}
-              currentManagerId={employee.manager?.id}
-              allStaff={allStaff}
-              initialTab={openExitTab ? "EXIT" : "STATUS"}
-            />
+            <Suspense fallback={<SectionSkeleton label="Loading employee administration" rows={4} />}>
+              <EmployeeAdministrationSection user={user} employee={employee} openExitTab={openExitTab} />
+            </Suspense>
           )}
 
-          {/* Exit Record Summary if EXITED (earlier exits appear in the period timeline) */}
-          {latestExit && (
-            <Card className="border-destructive/30 bg-destructive/5 shadow-xs">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-destructive flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4" aria-hidden="true" /> Exit Record
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-xs">
-                <div>
-                  <span className="text-muted-foreground">Clearance Status:</span>{" "}
-                  <span className="font-medium text-foreground">{latestExit.status}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Last Working Date:</span>{" "}
-                  <span className="font-medium text-foreground">
-                    {new Date(latestExit.lastWorkingDate).toLocaleDateString()}
-                  </span>
-                </div>
-                {latestExit.reason && (
-                  <div>
-                    <span className="text-muted-foreground">Reason:</span>{" "}
-                    <span className="text-foreground">{latestExit.reason}</span>
-                  </div>
-                )}
-                {isStaffAdmin && latestExit.exitInterviewNotes && (
-                  <div className="p-2 rounded bg-muted/40 text-[11px] mt-2 border border-border/40">
-                    <span className="font-semibold block mb-0.5">Exit Interview Notes:</span>
-                    {latestExit.exitInterviewNotes}
-                  </div>
-                )}
-                {isStaffAdmin && (
-                  <p className="text-[11px] text-muted-foreground">
-                    If this person is hired again with the same account, marking them as joined reuses this
-                    record and employee code and starts a new employment period.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+          {isExited && (
+            <Suspense fallback={<SectionSkeleton label="Loading exit record" rows={2} />}>
+              <EmployeeExitSection user={user} employeeId={employee.id} isStaffAdmin={isStaffAdmin} />
+            </Suspense>
           )}
         </div>
       </div>

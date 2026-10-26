@@ -436,3 +436,12 @@ Calendar invites (.ics), interview self-scheduling, offer letter PDF with electr
 
 20. The manager overview lists direct reports from the reporting line on employee records and shows their leave and check-in only when the manager holds the leave or attendance permission. The leave and attendance queues themselves still show every employee to managers holding those permissions; whether managers should act only on their own team is part of open question 15 above (OD-019).
 21. HR sees the whole day's interview schedule instead of a separate "My interviews" list; interviews HR runs appear in that schedule.
+22. **Session cookie cache (performance vs. revocation):** Better Auth can cache the session in a signed cookie (`session.cookieCache`), which saves one database read per request but lets a revoked session keep working until the cookie expires (default 5 minutes). It is **not enabled**: `docs/SECURITY.md` promises that a password reset and staff removal revoke access immediately. Enable it only if the product owner accepts a short window (for example 60 seconds).
+
+### Performance round (2026-10-26) — needs confirmation
+
+23. **Payout profile storage (OD-008):** payout details still live as JSON inside `Employee.internalNotes`, so paid/unpaid counts and the payroll employment-type filter cannot be computed in SQL (the filter applies to the loaded page; the payroll CSV covers the loaded page and says so). A typed payout table would fix both; it needs the payroll scope decision.
+24. **Full payroll export:** a server-side export of the whole payroll register is not built; decide whether it is needed.
+25. **Report CSV limit:** report exports stop at 10,000 rows with a "narrow the filters" message.
+26. **Reporting-manager picker:** lists at most 100 employees; a searchable picker is needed if the workforce grows beyond that.
+27. **Interview board window:** shows sessions from 30 days ago to 60 days ahead by default (UX constants in `src/features/recruitment/types.ts`); "Show all sessions" lists everything.

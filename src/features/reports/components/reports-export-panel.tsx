@@ -47,7 +47,7 @@ export function ReportsExportPanel({
         return;
       }
 
-      const { fileName, csvContent, rowCount } = response.data;
+      const { fileName, csvContent, rowCount, truncated } = response.data;
       const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -59,7 +59,9 @@ export function ReportsExportPanel({
       URL.revokeObjectURL(url);
 
       setLastExportMessage(
-        `Exported ${fileName} (${rowCount} rows) and recorded EXPORT_REPORT in AuditLog.`
+        truncated
+          ? `Exported the first ${rowCount} rows to ${fileName} (export limit reached; narrow the filters to export the rest) and recorded EXPORT_REPORT in AuditLog.`
+          : `Exported ${fileName} (${rowCount} rows) and recorded EXPORT_REPORT in AuditLog.`
       );
     });
   }

@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   BarChart3,
@@ -19,15 +20,76 @@ import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ComprehensiveAnalyticsDashboardData } from "../types";
-import { ReportsExportPanel } from "./reports-export-panel";
-import {
-  RecruitmentTrendChart,
-  SteppedFunnelChart,
-  WorkforceDonutChart,
-  AttendanceTrendChart,
-  PayrollTrendChart,
-} from "./analytics-charts";
+
+/** Placeholder with the footprint of a chart card, shown while a chart chunk loads. */
+function ChartCardSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      className="rounded-2xl border border-border/80 bg-card p-5 shadow-2xs space-y-5"
+    >
+      <span className="sr-only">Loading chart</span>
+      <div className="space-y-2">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-3 w-56 max-w-full" />
+      </div>
+      <div className="flex h-44 items-end gap-2">
+        {[60, 85, 45, 70, 95, 55, 75, 40].map((h, i) => (
+          <Skeleton key={i} className="flex-1 rounded-t-md rounded-b-none" style={{ height: `${h}%` }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PanelSkeleton() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true" className="rounded-2xl border border-border/80 bg-card p-5 space-y-4">
+      <span className="sr-only">Loading export panel</span>
+      <Skeleton className="h-4 w-48" />
+      <div className="flex flex-wrap gap-3">
+        <Skeleton className="h-8 w-56 rounded-xl" />
+        <Skeleton className="h-8 w-56 rounded-xl" />
+        <Skeleton className="h-8 w-56 rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
+/*
+ * The SVG charts are lazy-loaded so the first paint ships the KPI cards and the plain
+ * tables (which remain the accessible, always-rendered view of the same figures); each
+ * chart shows a skeleton of its own size until its chunk arrives.
+ */
+// next/dynamic requires an inline object literal for its options, so each call repeats it.
+const RecruitmentTrendChart = dynamic(
+  () => import("./analytics-charts").then((mod) => mod.RecruitmentTrendChart),
+  { loading: () => <ChartCardSkeleton /> }
+);
+const SteppedFunnelChart = dynamic(
+  () => import("./analytics-charts").then((mod) => mod.SteppedFunnelChart),
+  { loading: () => <ChartCardSkeleton /> }
+);
+const WorkforceDonutChart = dynamic(
+  () => import("./analytics-charts").then((mod) => mod.WorkforceDonutChart),
+  { loading: () => <ChartCardSkeleton /> }
+);
+const AttendanceTrendChart = dynamic(
+  () => import("./analytics-charts").then((mod) => mod.AttendanceTrendChart),
+  { loading: () => <ChartCardSkeleton /> }
+);
+const PayrollTrendChart = dynamic(
+  () => import("./analytics-charts").then((mod) => mod.PayrollTrendChart),
+  { loading: () => <ChartCardSkeleton /> }
+);
+const ReportsExportPanel = dynamic(
+  () => import("./reports-export-panel").then((mod) => mod.ReportsExportPanel),
+  { loading: () => <PanelSkeleton /> }
+);
 
 export type AnalyticsDashboardTab =
   | "overview"

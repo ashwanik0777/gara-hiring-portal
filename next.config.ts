@@ -46,6 +46,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Nothing identifies the framework in response headers.
+  poweredByHeader: false,
   experimental: {
     agentFeedback: true,
     serverActions: {

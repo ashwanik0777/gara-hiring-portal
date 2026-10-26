@@ -1,13 +1,24 @@
-import React from "react";
+import React, { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
-import { employeeService } from "@/features/employees/services/employee-service";
-import { EmployeeDirectoryTable } from "@/features/employees/components/employee-directory-table";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import {
+  EmployeeDirectorySection,
+  EmployeeDirectorySkeleton,
+} from "@/features/employees/components/employee-directory-section";
+import {
+  employeeDirectoryKey,
+  parseEmployeeDirectoryParams,
+} from "@/features/employees/components/employee-directory-params";
+import type { RawSearchParams } from "@/features/employees/components/list-search-params";
 
 export const instant = false;
 
-export default async function RecruitmentEmployeesDirectoryPage() {
+interface EmployeesDirectoryPageProps {
+  searchParams: Promise<RawSearchParams>;
+}
+
+export default async function RecruitmentEmployeesDirectoryPage({ searchParams }: EmployeesDirectoryPageProps) {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login");
@@ -23,17 +34,19 @@ export default async function RecruitmentEmployeesDirectoryPage() {
     );
   }
 
-  const employees = await employeeService.getEmployeeDirectory(user);
-  const departments = Array.from(new Set(employees.map((e) => e.department))).sort();
+  // Filters and page travel in the URL so the back button and shared links reproduce the view.
+  const params = parseEmployeeDirectoryParams(await searchParams);
 
   return (
     <div className="w-full space-y-6">
-      {/* Directory Table */}
-      <EmployeeDirectoryTable
-        employees={employees}
-        departments={departments}
-        detailHrefBase="/admin/employees"
-      />
+      <Suspense key={employeeDirectoryKey(params)} fallback={<EmployeeDirectorySkeleton />}>
+        <EmployeeDirectorySection
+          user={user}
+          params={params}
+          basePath="/admin/employees"
+          detailHrefBase="/admin/employees"
+        />
+      </Suspense>
     </div>
   );
 }

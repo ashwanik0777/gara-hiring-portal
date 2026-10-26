@@ -3,15 +3,24 @@ import { assertPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import {
   Role,
   ApplicationStatus,
+  InterviewRecommendation,
   InterviewStatus,
   OfferStatus,
   Prisma,
 } from "@prisma/client";
 import {
   QueueFilters,
-  RecruiterApplicationItem,
+  QueuePagination,
+  RecruitmentQueuePage,
   RecruiterApplicationDetail,
   InterviewerOption,
+  InterviewBoardOptions,
+  InterviewBoardPage,
+  InterviewBoardStats,
+  INTERVIEW_BOARD_FUTURE_DAYS,
+  INTERVIEW_BOARD_PAGE_SIZE,
+  INTERVIEW_BOARD_PAST_DAYS,
+  RECRUITMENT_QUEUE_PAGE_SIZE,
 } from "../types";
 import {
   VALID_APPLICATION_TRANSITIONS,
@@ -60,6 +69,31 @@ const OPEN_INTERVIEW_STATUSES: InterviewStatus[] = [
   InterviewStatus.SCHEDULED,
   InterviewStatus.RESCHEDULED,
 ];
+const POSITIVE_RECOMMENDATIONS: InterviewRecommendation[] = [
+  InterviewRecommendation.HIRE,
+  InterviewRecommendation.STRONG_HIRE,
+];
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** 1-based page number; anything that is not a positive integer means page 1. */
+function normalizePage(page: number | undefined): number {
+  return page !== undefined && Number.isInteger(page) && page >= 1 ? page : 1;
+}
+
+/** Rows per page, defaulting to and capped at `max` so a list never loads more than one page. */
+function normalizePageSize(pageSize: number | undefined, max: number): number {
+  return pageSize !== undefined && Number.isInteger(pageSize) && pageSize >= 1
+    ? Math.min(pageSize, max)
+    : max;
+}
+
+/** Default interview board window around `now`: recent sessions plus the upcoming weeks. */
+export function interviewBoardWindow(now: Date): { from: Date; to: Date } {
+  return {
+    from: new Date(now.getTime() - INTERVIEW_BOARD_PAST_DAYS * DAY_MS),
+    to: new Date(now.getTime() + INTERVIEW_BOARD_FUTURE_DAYS * DAY_MS),
+  };
+}
 
 export class RecruitmentService {
   private assertStaffAccess(user: AuthenticatedUser): void {
@@ -129,14 +163,16 @@ export class RecruitmentService {
   }
 
   /**
-   * Retrieves applications queue with flexible filtering and search.
+   * One page of the applications queue with flexible filtering and search.
    * Staff never see their own application here; interviewer-scoped users only see
-   * applications they are assigned to.
+   * applications they are assigned to. Pagination happens in the database: the total
+   * and the page rows are fetched in parallel and nothing beyond one page is loaded.
    */
   async getRecruitmentQueue(
     user: AuthenticatedUser,
-    filters?: QueueFilters
-  ): Promise<RecruiterApplicationItem[]> {
+    filters?: QueueFilters,
+    pagination?: QueuePagination
+  ): Promise<RecruitmentQueuePage> {
     this.assertStaffAccess(user);
     await assertPermission(user, "canApplications");
 
@@ -165,81 +201,61 @@ export class RecruitmentService {
       ];
     }
 
-    const applications = await prisma.application.findMany({
-      where,
-      include: {
-        opening: {
-          select: {
-            id: true,
-            title: true,
-            slug: true,
-            department: true,
-            type: true,
-            location: true,
-          },
-        },
-        candidate: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-              },
-            },
-          },
-        },
-        assignedRecruiter: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-        interviewSchedules: {
-          // Interviewer-scoped users only see their own interview rounds.
-          where: scoped ? { interviewerId: user.id } : undefined,
-          orderBy: { scheduledAt: "desc" },
-          take: 1,
-          include: {
-            interviewer: {
-              select: { name: true },
-            },
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-    });
+    const page = normalizePage(pagination?.page);
+    const pageSize = normalizePageSize(pagination?.pageSize, RECRUITMENT_QUEUE_PAGE_SIZE);
 
-    return applications.map((app) => {
-      const latestInt = app.interviewSchedules[0];
-      return {
+    const [total, applications] = await Promise.all([
+      prisma.application.count({ where }),
+      prisma.application.findMany({
+        where,
+        select: {
+          id: true,
+          referenceCode: true,
+          status: true,
+          createdAt: true,
+          opening: { select: { title: true, department: true } },
+          candidate: {
+            select: {
+              phone: true,
+              location: true,
+              user: { select: { name: true, email: true } },
+            },
+          },
+          interviewSchedules: {
+            // Interviewer-scoped users only see their own interview rounds.
+            where: scoped ? { interviewerId: user.id } : undefined,
+            orderBy: { scheduledAt: "desc" },
+            take: 1,
+            select: { id: true, roundName: true, scheduledAt: true, status: true },
+          },
+        },
+        // The id tiebreaker keeps pages stable when applications share a timestamp.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    return {
+      items: applications.map((app) => ({
         id: app.id,
         referenceCode: app.referenceCode,
         status: app.status,
         createdAt: app.createdAt,
-        updatedAt: app.updatedAt,
         opening: app.opening,
         candidate: {
-          id: app.candidate.id,
-          userId: app.candidate.user.id,
           fullName: app.candidate.user.name,
           email: app.candidate.user.email,
           phone: app.candidate.phone,
           location: app.candidate.location,
         },
-        assignedRecruiter: app.assignedRecruiter,
-        latestInterview: latestInt
-          ? {
-              id: latestInt.id,
-              roundName: latestInt.roundName,
-              scheduledAt: latestInt.scheduledAt,
-              status: latestInt.status,
-              interviewerName: latestInt.interviewer?.name ?? null,
-            }
-          : null,
-      };
-    });
+        latestInterview: app.interviewSchedules[0] ?? null,
+      })),
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    };
   }
 
   /**
@@ -284,7 +300,17 @@ export class RecruitmentService {
 
     const app = await prisma.application.findUnique({
       where: { id: applicationId },
-      include: {
+      select: {
+        id: true,
+        referenceCode: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        source: true,
+        sourceDetail: true,
+        submittedResponses: true,
+        resumeStorageKey: true,
+        assignedRecruiterId: true,
         opening: {
           select: {
             id: true,
@@ -296,7 +322,10 @@ export class RecruitmentService {
           },
         },
         candidate: {
-          include: {
+          select: {
+            id: true,
+            phone: true,
+            location: true,
             user: {
               select: {
                 id: true,
@@ -321,7 +350,13 @@ export class RecruitmentService {
         },
         statusHistory: {
           orderBy: { createdAt: "asc" },
-          include: {
+          select: {
+            id: true,
+            fromStatus: true,
+            toStatus: true,
+            internalNotes: true,
+            candidateMessage: true,
+            createdAt: true,
             actor: {
               select: {
                 id: true,
@@ -333,7 +368,17 @@ export class RecruitmentService {
         },
         interviewSchedules: {
           orderBy: { scheduledAt: "asc" },
-          include: {
+          select: {
+            id: true,
+            roundNumber: true,
+            roundName: true,
+            scheduledAt: true,
+            durationMinutes: true,
+            meetingLink: true,
+            status: true,
+            interviewerId: true,
+            rescheduleReason: true,
+            cancellationReason: true,
             interviewer: {
               select: {
                 id: true,
@@ -348,7 +393,13 @@ export class RecruitmentService {
               },
             },
             feedback: {
-              include: {
+              select: {
+                id: true,
+                recommendation: true,
+                ratings: true,
+                summaryNotes: true,
+                submittedAt: true,
+                interviewerId: true,
                 interviewer: {
                   select: { name: true },
                 },
@@ -424,6 +475,8 @@ export class RecruitmentService {
       createdAt: app.createdAt,
       updatedAt: app.updatedAt,
       restrictedView: scoped,
+      source: app.source,
+      sourceDetail: app.sourceDetail,
       opening: app.opening,
       candidate: {
         id: app.candidate.id,
@@ -498,66 +551,139 @@ export class RecruitmentService {
   }
 
   /**
-   * Lists interview sessions for the staff interview board.
-   * Requires staff role and the canInterviews module permission. Interviews for the user's
-   * own application are never listed; interviewer-scoped users only see the rounds they
+   * Sessions the viewer may see on the interview board: never the ones for their own
+   * application; interviewer-scoped users only the rounds they conduct.
+   */
+  private interviewBoardScope(user: AuthenticatedUser): Prisma.InterviewScheduleWhereInput {
+    return {
+      application: { candidate: { userId: { not: user.id } } },
+      ...(isInterviewerScoped(user) ? { interviewerId: user.id } : {}),
+    };
+  }
+
+  /**
+   * One page of interview sessions for the staff interview board.
+   * Requires staff role and the canInterviews module permission. By default the list is
+   * bounded to a rolling window (recent and upcoming sessions); `range: "all"` lists every
+   * session, still one page at a time. Interviewer-scoped users only see the rounds they
    * conduct and only their own recommendation.
    */
   async getInterviewSchedules(
     user: AuthenticatedUser,
-    options: { order?: "asc" | "desc" } = {}
-  ) {
+    options: InterviewBoardOptions = {}
+  ): Promise<InterviewBoardPage> {
     this.assertStaffAccess(user);
     await assertPermission(user, "canInterviews");
     const scoped = isInterviewerScoped(user);
 
-    const schedules = await prisma.interviewSchedule.findMany({
-      where: {
-        application: { candidate: { userId: { not: user.id } } },
-        ...(scoped ? { interviewerId: user.id } : {}),
-      },
-      select: {
-        id: true,
-        applicationId: true,
-        roundNumber: true,
-        roundName: true,
-        scheduledAt: true,
-        durationMinutes: true,
-        meetingLink: true,
-        status: true,
-        icsSequence: true,
-        // Present when the candidate booked this interview from offered times.
-        bookingRequest: { select: { id: true } },
-        application: {
-          select: {
-            candidate: {
-              select: {
-                user: { select: { name: true } },
+    const range = options.range ?? "window";
+    const dateWindow = range === "window" ? interviewBoardWindow(options.now ?? new Date()) : null;
+    const page = normalizePage(options.page);
+    const pageSize = normalizePageSize(options.pageSize, INTERVIEW_BOARD_PAGE_SIZE);
+    const where: Prisma.InterviewScheduleWhereInput = {
+      ...this.interviewBoardScope(user),
+      ...(dateWindow ? { scheduledAt: { gte: dateWindow.from, lt: dateWindow.to } } : {}),
+    };
+
+    const [total, schedules] = await Promise.all([
+      prisma.interviewSchedule.count({ where }),
+      prisma.interviewSchedule.findMany({
+        where,
+        select: {
+          id: true,
+          applicationId: true,
+          roundNumber: true,
+          roundName: true,
+          scheduledAt: true,
+          durationMinutes: true,
+          meetingLink: true,
+          status: true,
+          icsSequence: true,
+          // Present when the candidate booked this interview from offered times.
+          bookingRequest: { select: { id: true } },
+          application: {
+            select: {
+              candidate: {
+                select: {
+                  user: { select: { name: true } },
+                },
+              },
+              opening: {
+                select: { title: true, department: true },
               },
             },
-            opening: {
-              select: { title: true, department: true },
-            },
+          },
+          interviewer: {
+            select: { name: true },
+          },
+          feedback: {
+            select: { recommendation: true, interviewerId: true },
           },
         },
-        interviewer: {
-          select: { name: true },
-        },
-        feedback: {
-          select: { recommendation: true, interviewerId: true },
-        },
-      },
-      orderBy: { scheduledAt: options.order ?? "asc" },
-    });
+        // The id tiebreaker keeps pages stable when sessions share a start time.
+        orderBy: [{ scheduledAt: options.order ?? "asc" }, { id: "asc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
 
-    return schedules.map(({ feedback, bookingRequest, ...schedule }) => ({
-      ...schedule,
-      selfScheduled: Boolean(bookingRequest),
-      feedback:
-        feedback && (!scoped || feedback.interviewerId === user.id)
-          ? { recommendation: feedback.recommendation }
-          : null,
-    }));
+    return {
+      items: schedules.map(({ feedback, bookingRequest, application, interviewer, ...schedule }) => ({
+        ...schedule,
+        selfScheduled: Boolean(bookingRequest),
+        candidateName: application.candidate.user.name,
+        openingTitle: application.opening.title,
+        openingDepartment: application.opening.department,
+        interviewerName: interviewer?.name ?? null,
+        feedback:
+          feedback && (!scoped || feedback.interviewerId === user.id)
+            ? { recommendation: feedback.recommendation }
+            : null,
+      })),
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+      range,
+      window: dateWindow,
+    };
+  }
+
+  /**
+   * All-time counts for the interview board's KPI cards, aggregated in the database and
+   * limited to the sessions (and, for interviewers, the feedback) the viewer may see.
+   */
+  async getInterviewBoardStats(user: AuthenticatedUser): Promise<InterviewBoardStats> {
+    this.assertStaffAccess(user);
+    await assertPermission(user, "canInterviews");
+    const scoped = isInterviewerScoped(user);
+    const scope = this.interviewBoardScope(user);
+
+    const [byStatus, positive] = await Promise.all([
+      prisma.interviewSchedule.groupBy({
+        by: ["status"],
+        where: scope,
+        _count: { _all: true },
+      }),
+      prisma.interviewFeedback.count({
+        where: {
+          recommendation: { in: POSITIVE_RECOMMENDATIONS },
+          schedule: scope,
+          // Interviewer-scoped users only ever see their own recommendations.
+          ...(scoped ? { interviewerId: user.id } : {}),
+        },
+      }),
+    ]);
+
+    const countOf = (status: InterviewStatus) =>
+      byStatus.find((group) => group.status === status)?._count._all ?? 0;
+
+    return {
+      total: byStatus.reduce((sum, group) => sum + group._count._all, 0),
+      upcoming: countOf(InterviewStatus.SCHEDULED) + countOf(InterviewStatus.RESCHEDULED),
+      completed: countOf(InterviewStatus.COMPLETED),
+      positive,
+    };
   }
 
   /**

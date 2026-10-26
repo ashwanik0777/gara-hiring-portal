@@ -94,7 +94,12 @@ export interface EmployeeExitItem {
   } | null;
 }
 
-export interface ConfidentialEmployeeDetail extends PublicEmployeeDirectoryItem {
+/**
+ * Header and profile of one employee record: everything the detail page needs for its first
+ * paint. Confidential fields follow the record-access rules (HR/Admin with canEmployees, or the
+ * person themselves; internal notes are staff-only).
+ */
+export interface EmployeeDetailCore extends PublicEmployeeDirectoryItem {
   personalPhone?: string | null;
   emergencyContact?: EmergencyContact | null;
   internalNotes?: string | null;
@@ -104,8 +109,7 @@ export interface ConfidentialEmployeeDetail extends PublicEmployeeDirectoryItem 
     openingTitle: string;
   } | null;
   onboardingChecklist?: OnboardingChecklistItem[] | null;
-  employmentHistories: EmploymentHistoryItem[];
-  secureDocuments: EmployeeDocumentItem[];
+  /** Direct reports (bounded; `directReportCount` holds the full number). */
   directReports: Array<{
     id: string;
     employeeCode: string;
@@ -113,10 +117,22 @@ export interface ConfidentialEmployeeDetail extends PublicEmployeeDirectoryItem 
     designation: string;
     department: string;
   }>;
+  directReportCount: number;
+}
+
+/** Employment periods, exits and the history timeline of one record (streamed separately). */
+export interface EmployeeHistory {
+  /** History rows, newest first (bounded). */
+  employmentHistories: EmploymentHistoryItem[];
   /** Exit records, newest first (one per employment period). */
   exitRecords: EmployeeExitItem[];
   /** Employment periods (joining, re-joining, conversion), oldest first. */
   employmentPeriods: EmploymentPeriodItem[];
+}
+
+export interface ConfidentialEmployeeDetail extends EmployeeDetailCore, EmployeeHistory {
+  /** Document metadata, newest first (bounded; confidential documents are staff-only). */
+  secureDocuments: EmployeeDocumentItem[];
 }
 
 /** One stint of employment on the same employee record. */
@@ -197,6 +213,33 @@ export interface EmployeeDirectoryFilters {
   search?: string;
 }
 
+/** Directory filters plus the requested page (1-based) and page size (bounded by the service). */
+export interface EmployeeDirectoryQuery extends EmployeeDirectoryFilters {
+  page?: number;
+  pageSize?: number;
+}
+
+/** One page of the employee directory, with the department list for the filter control. */
+export interface EmployeeDirectoryPage {
+  items: PublicEmployeeDirectoryItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  /** Every department that has an employee record (independent of the filters). */
+  departments: string[];
+}
+
+/** Narrowing options for the reporting-manager picker. */
+export interface ReportingManagerQuery {
+  /** Matches employee code, name or designation. */
+  search?: string;
+  /** Leaves the employee being edited out of their own manager choices. */
+  excludeEmployeeId?: string;
+  /** Upper bound on returned options (the service caps it). */
+  take?: number;
+}
+
 /** A scheduled or decided intern progress review, as shown on the staff review board. */
 export interface InternReviewItem {
   id: string;
@@ -229,11 +272,40 @@ export interface InternReviewItem {
   convertedAt: Date | null;
 }
 
+/**
+ * Board views: `due` = overdue plus due within the next six days (default), `overdue` only,
+ * `upcoming` later reviews, `decided` recorded outcomes (newest first).
+ */
+export const INTERN_REVIEW_VIEWS = ["due", "overdue", "upcoming", "decided"] as const;
+export type InternReviewView = (typeof INTERN_REVIEW_VIEWS)[number];
+
+export function isInternReviewView(value: unknown): value is InternReviewView {
+  return typeof value === "string" && (INTERN_REVIEW_VIEWS as readonly string[]).includes(value);
+}
+
+export interface InternReviewBoardQuery {
+  view?: InternReviewView;
+  page?: number;
+  pageSize?: number;
+  /** Reference instant for the due classification (tests inject it). */
+  now?: Date;
+}
+
 export interface InternReviewBoard {
-  overdue: InternReviewItem[];
-  dueThisWeek: InternReviewItem[];
-  upcoming: InternReviewItem[];
-  recentDecisions: InternReviewItem[];
+  view: InternReviewView;
+  items: InternReviewItem[];
+  /** Reviews in the selected view across all pages. */
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  /** Counts per view, computed in the database. */
+  counts: {
+    overdue: number;
+    dueThisWeek: number;
+    upcoming: number;
+    decided: number;
+  };
   /** ADMIN, or HR with canEmployees: may record outcomes and read internal notes. */
   canRecord: boolean;
 }
