@@ -47,6 +47,11 @@ next-env.d.ts
 /.storage/
 /storage/
 
-# local tests and operational scripts (excluded from the repository by product-owner decision, 2026-10-24)
+# local operational scripts (seed scripts; excluded from the repository by product-owner decision, 2026-10-24)
 /scripts/
-/tests/
+
+# test run output (the tests themselves are committed since 2026-10-26)
+/tests/.e2e-results/
+/playwright-report/
+/test-results/
+/coverage/

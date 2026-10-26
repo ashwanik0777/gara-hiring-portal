@@ -3,7 +3,7 @@
 > Source: full-project audit performed on 2026-10-23 (core layer reviewed directly; feature modules traced end to end).
 > Product-owner decisions recorded on 2026-10-24:
 > - Business rules that were implemented without approval are **policy-gated** (removed or replaced with `PolicyBlockedError` / "Not configured"), and tracked in `docs/OPEN_DECISIONS.md`.
-> - `tests/` is kept local only (excluded from Git by product-owner decision on 2026-10-24, after briefly being tracked).
+> - `tests/` is committed again since 2026-10-26 (product-owner decision); CI runs the unit suite on every push.
 >
 > Legend: `[ ]` open · `[x]` fixed in code (see "Verification" at the bottom for evidence) · `[!]` requires a manual owner action outside the codebase · `[~]` deferred, needs a product decision
 
@@ -122,7 +122,7 @@
 ## 7. Engineering hygiene
 
 - [x] **ENG-01** No versioned migrations (`prisma/migrations` missing) → `20261024000000_baseline` + `20261024000100_security_hardening` created. **Not applied** — see OPS-05.
-- [~] **ENG-02** `tests/` excluded by `.gitignore`. → Product-owner decision (2026-10-24): tests stay local only; they were untracked again with `git rm --cached` (files kept). CI cannot run them.
+- [x] **ENG-02** `tests/` excluded by `.gitignore`. → Product-owner decision (2026-10-24): tests stay local only. **Reversed 2026-10-26:** `tests/` is committed; `.github/workflows/ci.yml` runs type check, lint, unit tests and the build (no secrets, no database).
 - [x] **ENG-03** `.env.example` missing although README references it → per product-owner decision (2026-10-24) a single gitignored `.env` holds every variable; README/RUNBOOK point to the variable table in `docs/RUNBOOK.md` §2.
 - [x] **ENG-04** README / release report claim Playwright and outdated results → corrected.
 - [x] **ENG-05** Missing index on `verifications.identifier`; Better Auth rate-limit table → added.

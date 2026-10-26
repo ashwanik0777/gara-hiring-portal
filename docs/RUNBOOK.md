@@ -77,7 +77,7 @@ Rotate immediately if a secret may have been exposed (for example the removed `/
 
 ## 3. Quality Gate Pipeline (CI/CD Release Gate)
 
-Every release candidate must pass all four automated checks with zero errors (the end-to-end suite in §3.1 is run before releases that touch user flows):
+Every release candidate must pass all four automated checks with zero errors (the end-to-end suite in §3.1 is run before releases that touch user flows). `.github/workflows/ci.yml` runs the same four checks on every push to `main` and every pull request; it needs no secrets (unit tests mock the database, the build uses an unreachable placeholder `DATABASE_URL`).
 
 ```bash
 # 1. TypeScript Strict Mode Verification
@@ -100,7 +100,6 @@ npm run test:e2e:install   # once: downloads Chromium
 npm run test:e2e           # public suite: no database needed
 ```
 
-- `playwright.config.ts` is excluded from the app `tsconfig.json` because `tests/` is not committed: Vercel builds would otherwise fail type-checking its imports. Type-check the E2E code locally with `npm run typecheck:e2e` (`tsconfig.playwright.json`).
 - Never set `NODE_ENV` in Vercel environment variables; Vercel sets it to `production` itself. A build with `NODE_ENV=development` fails while prerendering.
 
 - The public suite starts the app with `DATABASE_URL` pointed at a closed local port, so it can never touch a real database. It covers public pages, the 375 px mobile layout, auth form validation and security headers.

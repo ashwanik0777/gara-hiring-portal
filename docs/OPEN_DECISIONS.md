@@ -362,7 +362,7 @@
 
 ### Resolved by the product owner (2026-10-24)
 
-- **Tests stay local:** `tests/` is excluded from Git again (`.gitignore`), reversing the earlier inclusion; the suite runs locally with `npm test` and is not available to CI.
+- ~~**Tests stay local:** `tests/` is excluded from Git again (`.gitignore`), reversing the earlier inclusion; the suite runs locally with `npm test` and is not available to CI.~~ → **Reversed by the product owner on 2026-10-26:** `tests/` is committed (only test-run output stays ignored) and `.github/workflows/ci.yml` runs type check, lint, unit tests and the production build on every push and pull request.
 - **Single environment file:** keep one gitignored `.env` with every variable; no `.env.example`. This overrides the `.env.example` instruction in `docs/PROJECT_BASELINE.md` (rules 12 and the Prompt 0 checklist). The variable reference is `docs/RUNBOOK.md` section 2.
 
 ### Resolved by the product owner (2026-10-25): candidate-to-employee lifecycle

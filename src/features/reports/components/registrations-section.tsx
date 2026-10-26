@@ -68,10 +68,10 @@ function SectionHeading({ periodLabel }: { periodLabel?: string }) {
       <h2 id="registrations-heading" className="text-base font-bold text-foreground">
         Registrations
       </h2>
-      <p className="text-xs text-muted-foreground">
+      {/* <p className="text-xs text-muted-foreground">
         Candidate accounts created{periodLabel ? `: ${periodLabel}` : ""}. Staff accounts are never counted; applications
         are reported separately in the hiring funnel.
-      </p>
+      </p> */}
     </div>
   );
 }
