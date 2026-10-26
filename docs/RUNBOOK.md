@@ -100,6 +100,9 @@ npm run test:e2e:install   # once: downloads Chromium
 npm run test:e2e           # public suite: no database needed
 ```
 
+- `playwright.config.ts` is excluded from the app `tsconfig.json` because `tests/` is not committed: Vercel builds would otherwise fail type-checking its imports. Type-check the E2E code locally with `npm run typecheck:e2e` (`tsconfig.playwright.json`).
+- Never set `NODE_ENV` in Vercel environment variables; Vercel sets it to `production` itself. A build with `NODE_ENV=development` fails while prerendering.
+
 - The public suite starts the app with `DATABASE_URL` pointed at a closed local port, so it can never touch a real database. It covers public pages, the 375 px mobile layout, auth form validation and security headers.
 - The journey suite (candidate → evaluation → intern, and candidate → offer → employee) runs only when `E2E_DATABASE_URL` points at a **dedicated test database**: the URL must differ from `DATABASE_URL` in `.env` and its database name must contain `test`. Global setup applies the migrations to that database and idempotently seeds deterministic fixtures (staff accounts and two published openings). Never point it at production.
 - Optional: `E2E_SERVER_MODE=production` (run `npm run build` first) and `E2E_PORT`.
