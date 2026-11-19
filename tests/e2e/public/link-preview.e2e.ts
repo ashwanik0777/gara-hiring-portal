@@ -93,6 +93,9 @@ test.describe("Content without JavaScript", () => {
     const opening = E2E_OPENINGS.internship;
     await page.goto(`/careers/${opening.slug}`);
     await expect(page.getByRole("heading", { level: 1, name: opening.title })).toBeVisible();
+    // Internships are always free: the tag and the fraud alert are part of the server HTML.
+    await expect(page.getByText("No fee", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("note", { name: "Fraud alert" }).first()).toBeVisible();
     await expect(page.getByRole("link", { name: /Apply Now/ })).toHaveAttribute(
       "href",
       `/careers/${opening.slug}/apply`

@@ -10,6 +10,7 @@ import { Role } from "@prisma/client";
 import { hashPassword } from "better-auth/crypto";
 import { NodemailerEmailAdapter } from "@/infrastructure/email/outbox-processor";
 import { buildSubAdminWelcomeEmail } from "@/infrastructure/email/email-templates";
+import { absoluteUrl } from "@/lib/site-url";
 import { z } from "zod";
 
 /**
@@ -152,7 +153,7 @@ export async function createSubAdminAction(formData: z.infer<typeof createSubAdm
     // 3. Dispatch credentials email with temporary password
     try {
       const emailTransport = new NodemailerEmailAdapter();
-      const loginUrl = `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/login`;
+      const loginUrl = absoluteUrl("/login");
 
       const emailPayload = buildSubAdminWelcomeEmail({
         name,

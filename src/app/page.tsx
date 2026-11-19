@@ -2,7 +2,9 @@ import Link from "next/link";
 import Image from "next/image";
 import { Navbar } from "@/components/navigation/navbar";
 import { Footer } from "@/components/navigation/footer";
+import { FraudAlert } from "@/components/marketing/fraud-alert";
 import { Button } from "@/components/ui/button";
+import { ANNOUNCEMENT } from "@/config/site";
 import {
   Briefcase,
   Users,
@@ -20,7 +22,36 @@ import {
   FileSignature,
   QrCode,
   Sparkles,
+  Code2,
 } from "lucide-react";
+
+/** Student-facing highlights under the hero heading. */
+const HERO_BADGES = [
+  { label: "Real Projects", icon: Code2, tone: "bg-blue-500/10 dark:bg-blue-400/10", color: "text-blue-600 dark:text-blue-400" },
+  { label: "Mentor Support", icon: Users, tone: "bg-emerald-500/10 dark:bg-emerald-400/10", color: "text-emerald-600 dark:text-emerald-400" },
+  { label: "Verified QR Certificates", icon: QrCode, tone: "bg-amber-500/10 dark:bg-amber-400/10", color: "text-amber-600 dark:text-amber-400" },
+  { label: "7-Day Evaluation", icon: Clock, tone: "bg-violet-500/10 dark:bg-violet-400/10", color: "text-violet-600 dark:text-violet-400" },
+];
+
+function AnnouncementPill() {
+  if (!ANNOUNCEMENT) return null;
+  const content = (
+    <span className="inline-flex items-center gap-2 rounded-full bg-primary/10 dark:bg-primary/15 px-4 py-1.5 text-xs font-semibold text-primary ring-1 ring-primary/20">
+      <span className="relative flex h-2 w-2" aria-hidden="true">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+      </span>
+      {ANNOUNCEMENT.text}
+    </span>
+  );
+  return ANNOUNCEMENT.href ? (
+    <Link href={ANNOUNCEMENT.href} className="inline-flex rounded-full hover:opacity-90 transition-opacity">
+      {content}
+    </Link>
+  ) : (
+    content
+  );
+}
 
 export default function Home() {
   return (
@@ -29,7 +60,7 @@ export default function Home() {
 
       <main className="flex-1 flex flex-col">
         {/* ──────────────── HERO SECTION ──────────────── */}
-        <section className="relative overflow-hidden pt-16 pb-24 lg:pt-24 lg:pb-32">
+        <section className="relative overflow-hidden pt-16 pb-12 lg:pt-24 lg:pb-16">
           {/* Ambient background decorations */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
             {/* Large gradient orb - top right */}
@@ -52,13 +83,7 @@ export default function Home() {
               <div className="lg:col-span-7 space-y-8 text-left">
                 {/* Announcement pill */}
                 <div className="animate-fade-in-down">
-                  <span className="inline-flex items-center gap-2 rounded-full bg-primary/10 dark:bg-primary/15 px-4 py-1.5 text-xs font-semibold text-primary ring-1 ring-primary/20">
-                    <span className="relative flex h-2 w-2">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-                    </span>
-                    Now Live — v1.0 Foundation Release
-                  </span>
+                  <AnnouncementPill />
                 </div>
 
                 {/* Main heading with display font */}
@@ -72,6 +97,12 @@ export default function Home() {
                     </span>
                   </span>
                 </h1>
+
+                <p className="animate-fade-in-up [animation-delay:100ms] max-w-xl text-base sm:text-lg text-muted-foreground leading-relaxed">
+                  Free internships and full-time roles in software, full-stack, UI/UX, AI/ML and
+                  cloud. Apply online, prove your skills in a 7-working-day supervised evaluation
+                  and earn a QR-verified certificate.
+                </p>
 
                 {/* CTA buttons */}
                 <div className="animate-fade-in-up [animation-delay:200ms] flex flex-wrap items-center gap-4 pt-2">
@@ -90,26 +121,16 @@ export default function Home() {
                 </div>
 
                 {/* Trust indicators */}
-                <div className="animate-fade-in-up [animation-delay:600ms] flex flex-wrap items-center gap-6 pt-4 text-sm text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10 dark:bg-emerald-400/10">
-                      <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                    </div>
-                    <span className="font-medium">RBAC Security</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 dark:bg-amber-400/10">
-                      <Award className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                    </div>
-                    <span className="font-medium">Verified Certificates</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10 dark:bg-violet-400/10">
-                      <Clock className="h-4 w-4 text-violet-600 dark:text-violet-400" />
-                    </div>
-                    <span className="font-medium">7-Day Evaluation</span>
-                  </div>
-                </div>
+                <ul className="animate-fade-in-up [animation-delay:600ms] flex flex-wrap items-center gap-x-6 gap-y-3 pt-4 text-sm text-muted-foreground">
+                  {HERO_BADGES.map((badge) => (
+                    <li key={badge.label} className="flex items-center gap-2">
+                      <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${badge.tone}`}>
+                        <badge.icon className={`h-4 w-4 ${badge.color}`} aria-hidden="true" />
+                      </div>
+                      <span className="font-medium">{badge.label}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
 
               {/* Right: Brand visual */}
@@ -147,7 +168,7 @@ export default function Home() {
                       {[
                         { value: "7-Day", label: "Evaluation", color: "text-primary" },
                         { value: "QR", label: "Certificates", color: "text-emerald-600 dark:text-emerald-400" },
-                        { value: "RBAC", label: "Security", color: "text-violet-600 dark:text-violet-400" },
+                        { value: "No Fee", label: "Internships", color: "text-violet-600 dark:text-violet-400" },
                       ].map((stat) => (
                         <div
                           key={stat.label}
@@ -180,15 +201,22 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ──────────────── STATS BAR ──────────────── */}
+        {/* ──────────────── FRAUD ALERT ──────────────── */}
+        <section aria-label="Fraud alert" className="pb-10">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <FraudAlert />
+          </div>
+        </section>
+
+        {/* ──────────────── HIGHLIGHTS BAR ──────────────── */}
         <section className="relative border-y border-border/60 bg-muted/30 dark:bg-muted/10">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
               {[
-                { icon: Briefcase, value: "Full Pipeline", label: "Recruitment Engine", color: "text-primary" },
-                { icon: CalendarCheck, value: "Structured", label: "Internship Lifecycle", color: "text-emerald-600 dark:text-emerald-400" },
-                { icon: FileCheck, value: "Verifiable", label: "QR Certificates", color: "text-amber-600 dark:text-amber-400" },
-                { icon: Users, value: "Enterprise", label: "HRMS Foundation", color: "text-violet-600 dark:text-violet-400" },
+                { icon: Briefcase, value: "Internships & Jobs", label: "Apply online", color: "text-primary" },
+                { icon: ShieldCheck, value: "No Fee", label: "Internships are always free", color: "text-emerald-600 dark:text-emerald-400" },
+                { icon: CalendarCheck, value: "7-Day", label: "Supervised evaluation", color: "text-violet-600 dark:text-violet-400" },
+                { icon: FileCheck, value: "QR Verified", label: "Completion certificates", color: "text-amber-600 dark:text-amber-400" },
               ].map((item, i) => (
                 <div
                   key={item.label}
@@ -208,17 +236,17 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ──────────────── CORE PILLARS ──────────────── */}
+        {/* ──────────────── WHAT YOU GET ──────────────── */}
         <section className="py-20 lg:py-28">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             {/* Section header */}
             <div className="text-center max-w-2xl mx-auto mb-16 animate-fade-in-up">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3.5 py-1 text-xs font-semibold text-foreground mb-4">
                 <Zap className="h-3.5 w-3.5 text-primary" />
-                Platform Architecture
+                Why GARA
               </span>
               <h2 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl font-bold tracking-tight text-foreground">
-                Integrated Lifecycle Architecture
+                Built for Students and Early-Career Engineers
               </h2>
             </div>
 
@@ -226,45 +254,45 @@ export default function Home() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
               {[
                 {
-                  icon: Briefcase,
-                  title: "Recruitment Pipeline",
-                  gradient: "from-blue-500/10 to-indigo-500/10 dark:from-blue-500/20 dark:to-indigo-500/20",
-                  iconBg: "bg-blue-500/10 dark:bg-blue-500/20",
-                  iconColor: "text-blue-600 dark:text-blue-400",
-                  borderHover: "hover:border-blue-500/40",
-                  features: [
-                    "Versioned dynamic application forms",
-                    "Multi-round interview scheduling with scorecards",
-                    "Confidential notes isolated from candidate views",
-                    "Historical archive for unselected applicants",
-                  ],
-                },
-                {
                   icon: CalendarCheck,
-                  title: "Internship Lifecycle",
+                  title: "Internships",
                   gradient: "from-emerald-500/10 to-teal-500/10 dark:from-emerald-500/20 dark:to-teal-500/20",
                   iconBg: "bg-emerald-500/10 dark:bg-emerald-500/20",
                   iconColor: "text-emerald-600 dark:text-emerald-400",
                   borderHover: "hover:border-emerald-500/40",
                   features: [
-                    "Supervised evaluation period tracking",
-                    "Intern task submissions and mentor reviews",
-                    "Configurable progress reporting intervals",
-                    "Verifiable PDF certificates with unique QR codes",
+                    "Always free: no fee, deposit or certificate charge",
+                    "7-working-day supervised evaluation",
+                    "Mentor reviews of your task submissions",
+                    "Tenure agreed with you after selection",
                   ],
                 },
                 {
-                  icon: Users,
-                  title: "Enterprise HRMS",
-                  gradient: "from-violet-500/10 to-purple-500/10 dark:from-violet-500/20 dark:to-purple-500/20",
-                  iconBg: "bg-violet-500/10 dark:bg-violet-500/20",
-                  iconColor: "text-violet-600 dark:text-violet-400",
-                  borderHover: "hover:border-violet-500/40",
+                  icon: Briefcase,
+                  title: "Full-Time Roles",
+                  gradient: "from-blue-500/10 to-indigo-500/10 dark:from-blue-500/20 dark:to-indigo-500/20",
+                  iconBg: "bg-blue-500/10 dark:bg-blue-500/20",
+                  iconColor: "text-blue-600 dark:text-blue-400",
+                  borderHover: "hover:border-blue-500/40",
                   features: [
-                    "Core employee profiles and reporting lines",
-                    "Policy-gated attendance records",
-                    "Configurable leave management",
-                    "Compliance-gated payroll processing",
+                    "Role-specific application forms",
+                    "Structured interview rounds",
+                    "Offer letter you review and sign online",
+                    "Application status in your own dashboard",
+                  ],
+                },
+                {
+                  icon: Award,
+                  title: "Verified Certificates",
+                  gradient: "from-amber-500/10 to-orange-500/10 dark:from-amber-500/20 dark:to-orange-500/20",
+                  iconBg: "bg-amber-500/10 dark:bg-amber-500/20",
+                  iconColor: "text-amber-600 dark:text-amber-400",
+                  borderHover: "hover:border-amber-500/40",
+                  features: [
+                    "Issued once your internship is approved",
+                    "Unique certificate ID and QR code",
+                    "Anyone can verify it on our verification page",
+                    "Share it with your college and employers",
                   ],
                 },
               ].map((card, i) => (

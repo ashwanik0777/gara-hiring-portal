@@ -9,6 +9,7 @@ import { LinkPendingReporter } from "@/components/navigation/navigation-progress
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { FraudAlert } from "@/components/marketing/fraud-alert";
 import {
   getPublicOpeningBySlug,
   type PublicOpening,
@@ -112,6 +113,7 @@ function OpeningContent({
           <Badge variant={opening.type === "INTERNSHIP" ? "default" : "secondary"}>
             {opening.type === "INTERNSHIP" ? "Internship Cohort" : "Full-Time Position"}
           </Badge>
+          {opening.type === "INTERNSHIP" && <Badge variant="success">No fee</Badge>}
           <Badge variant="outline" className="capitalize">
             {opening.workplaceType.toLowerCase()}
           </Badge>
@@ -202,6 +204,8 @@ function OpeningContent({
             </CardContent>
           </Card>
         )}
+
+        {opening.type === "INTERNSHIP" && <FraudAlert />}
 
         {/* Final Apply Bar */}
         <div className="pt-6 border-t border-border/60 flex items-center justify-between gap-4">

@@ -78,6 +78,7 @@ Platform level (owner actions — an application cannot absorb a volumetric atta
 - [ ] **After deploy:** `curl -H "Authorization: Bearer <CRON_SECRET>" https://<testing-url>/api/health` → `status: ok` and an empty `productionBlockers` list.
 - [ ] **OPS-01 (2026-10-17 debug endpoint):** confirm the secrets rotation was completed, and delete or protect old Vercel deployments from 2026-10-17 (Vercel keeps each deployment's own URL reachable). Enable Vercel **Deployment Protection** for previews.
 - [ ] **Backups:** delete `.storage/db-backups/` on this machine after the deployment is verified (they contain user and session data).
+- [ ] **Canonical domain (2026-11-19):** in Vercel production set `BETTER_AUTH_URL=https://careers.gara-innovations.tech` explicitly (otherwise Vercel may pick the shorter `*.vercel.app` alias), keep `https://careers.gara-innovations.tech/api/auth/callback/google` in Google Cloud, and point the external cron job at the same domain (RUNBOOK §6.3b). Set `SMTP_FROM` to an address on a domain the company controls, with SPF and DKIM.
 
 ## 6. Manual test plan for the testing phase
 

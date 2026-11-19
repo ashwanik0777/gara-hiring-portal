@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/componen
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/feedback/empty-state";
+import { FraudAlert } from "@/components/marketing/fraud-alert";
 import { getPublicOpenings } from "@/features/openings/services/opening-service";
 import { Briefcase, Building, ArrowRight } from "lucide-react";
 import { getSiteUrl } from "@/lib/site-url";
@@ -66,9 +67,12 @@ async function OpeningsList({ searchParams }: { searchParams: CareersSearchParam
         >
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between gap-2 mb-2">
-              <Badge variant={opening.type === "INTERNSHIP" ? "default" : "secondary"}>
-                {opening.type === "INTERNSHIP" ? "Internship Cohort" : "Full-Time Position"}
-              </Badge>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Badge variant={opening.type === "INTERNSHIP" ? "default" : "secondary"}>
+                  {opening.type === "INTERNSHIP" ? "Internship Cohort" : "Full-Time Position"}
+                </Badge>
+                {opening.type === "INTERNSHIP" && <Badge variant="success">No fee</Badge>}
+              </div>
               <span className="text-xs text-muted-foreground capitalize flex items-center gap-1">
                 <Building className="h-3 w-3" />
                 {opening.workplaceType.toLowerCase()}
@@ -113,6 +117,8 @@ export default function CareersPage({ searchParams }: { searchParams: CareersSea
               Current Openings & Internship Cohorts
             </h1>
           </div>
+
+          <FraudAlert className="mx-auto mb-10 max-w-4xl" />
 
           {/* Rendered into the first HTML response (no JavaScript needed), so link previews,
               crawlers and slow phones see the openings; the list itself comes from the cache. */}

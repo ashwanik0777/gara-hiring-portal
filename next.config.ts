@@ -55,6 +55,43 @@ const securityHeaders = [
   },
 ];
 
+/**
+ * Production builds only: every *.vercel.app address of this project answers with a
+ * permanent redirect to the canonical domain (the configured site URL), so search engines
+ * index one copy of each page and shared links always show the real domain. API routes are
+ * left alone so external cron calls and webhooks keep working on any host. Read at build
+ * time, when Vercel provides VERCEL_ENV and the site URL.
+ */
+function canonicalHostRedirects() {
+  if (process.env.VERCEL_ENV !== "production") return [];
+  const configured = process.env.BETTER_AUTH_URL;
+  const origin =
+    configured && !configured.includes("localhost")
+      ? configured
+      : process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+        : null;
+  if (!origin) return [];
+
+  let canonical: URL;
+  try {
+    canonical = new URL(origin);
+  } catch {
+    return [];
+  }
+  // Never redirect a vercel.app host to itself (that would loop).
+  if (canonical.hostname.endsWith(".vercel.app")) return [];
+
+  return [
+    {
+      source: "/:path((?!api(?:/|$)).*)",
+      has: [{ type: "host" as const, value: ".+\\.vercel\\.app" }],
+      destination: `${canonical.origin}/:path`,
+      permanent: true,
+    },
+  ];
+}
+
 const nextConfig: NextConfig = {
   // Nothing identifies the framework in response headers.
   poweredByHeader: false,
@@ -70,6 +107,7 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["@prisma/client", "@prisma/adapter-pg", "pg"],
   async redirects() {
     return [
+      ...canonicalHostRedirects(),
       {
         source: "/recruitment",
         destination: "/admin/applications",

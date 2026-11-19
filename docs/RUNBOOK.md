@@ -257,6 +257,12 @@ Until the organisation runs its own server, keep `DOCUMENT_STORAGE_MODE=link`. T
 - `BETTER_AUTH_URL` must be set for the **build** as well (Vercel applies environment variables to builds): static pages bake the absolute image URL at build time.
 - Check a deployment: `curl -s -A "WhatsApp/2.23" https://<domain>/ | grep og:image`, then open the image URL. After changing the image, WhatsApp and LinkedIn may show a cached preview for a while; LinkedIn's Post Inspector refreshes it.
 
+### 6.3b Canonical domain (2026-11-19)
+- The canonical domain is the site URL (`BETTER_AUTH_URL`, resolved in `src/lib/site-url.ts`); set it explicitly in Vercel to `https://careers.gara-innovations.tech`. Without it, Vercel's `VERCEL_PROJECT_PRODUCTION_URL` picks the *shortest* production domain, which can be the `*.vercel.app` alias.
+- Production builds (`VERCEL_ENV=production`) answer every page on a `*.vercel.app` host with a permanent 308 redirect to the canonical domain, keeping the path and query string (`canonicalHostRedirects` in `next.config.ts`). `/api/*` is not redirected, so external cron calls and webhooks work on any host; still point them at the canonical domain.
+- Sign-in trusts only the configured site URL and Vercel's own deployment URLs; there is no hard-coded host. After changing the domain, add `https://<domain>/api/auth/callback/google` to the Google OAuth client's redirect URIs.
+- Check: `curl -sI -H "Host: <project>.vercel.app" https://<project>.vercel.app/careers` returns `308` with `location: https://careers.gara-innovations.tech/careers`.
+
 ### 6.4 Bounded queries and pagination (2026-10-26)
 - Every staff list loads one page from the database (`skip`/`take`, at most 50 rows, total from a `count` in the same `Promise.all`); filters, page, month and tab travel in the URL. This covers the application queue, interview board (default window: 30 days back to 60 days ahead, `?range=all` for everything), employee directory, evaluation list, intern review board, intern tasks, leave, attendance (one business month at a time), payroll and sub-admins.
 - Reports and the admin overview aggregate in PostgreSQL (`groupBy`, `count`, `aggregate`, parameterised `$queryRaw`); no report loads whole tables. CSV exports stop at 10,000 rows and say so.

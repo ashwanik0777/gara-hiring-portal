@@ -461,3 +461,21 @@ Calendar invites (.ics), interview self-scheduling, offer letter PDF with electr
 - **Brand images:** the unused variants `gara-emblem-original.jpg`, `gara-logo-transparent.png` and `gara-logo.jpg` were removed from `public/brand/`.
 - **Payroll finalization (owner delegated the choice; engineering recommendation adopted):** finalizing a period locks every draft record, including the finalizer's own record when they are on payroll, so a one-person payroll team is never blocked. Separation of duties stays where money is decided and moved: nobody can edit their own payout profile, be enrolled by themselves or record a disbursement on their own record. The audit row of a finalization records `includesFinalizerOwnRecord`.
 - **Content-Security-Policy `'unsafe-inline'` (ENG-08, owner delegated):** kept. A nonce-based policy would force every page to render per request, removing the static shells, the cached public pages and instant navigations (slower pages, higher cost) while the 2026-11-01 audit found no injection sink. Revisit if user-generated HTML is ever rendered.
+
+### Resolved by the product owner (2026-11-19): careers portal update plan
+
+The full plan, with what is built, changed or skipped, lives in `docs/CAREERS_PORTAL_PLAN.md`.
+
+- **Duplicate applications (OD-005):** one application per user per opening, ever. Withdrawal or rejection does not allow a new application to the same opening. Enforced in Phase 2 with a database unique constraint (production had no duplicate pairs on 2026-11-19).
+- **Resume on the apply form (OD-013):** stays a candidate-provided link (`DOCUMENT_STORAGE_MODE=link`) until a storage provider is chosen.
+- **Phase order:** 0, 1, 2, 5, 3, 4, 6; printed certificate orders are built last in Industrial Training.
+- **Campus Ambassador payouts:** automatic through RazorpayX; the company opens the account.
+- **Business rules from the plan:** internships are always free; Industrial Training is paid with the digital certificate included and printing as an add-on; documents are titled "Payment Receipt" with no GST line; refunds in full before the batch start or within 24 hours after the first live class, then one free transfer; pass criteria 60% marks, 75% attendance, final project and live demo passed (configurable), one free re-attempt; ambassador commission default ₹100 per paid enrollment and student discount default 10% (configurable); amounts stored in paise.
+
+### Open (2026-11-19): needed before the related phase goes live
+
+28. **Company statutory details:** exact registered name, CIN, Udyam number and registered office address. Until provided they are `null` in `src/config/site.ts` and hidden on the site; they are required on payment receipts and certificates.
+29. **Policy pages:** the drafts written in Phase 1 need legal review before the "Draft" banner is turned off.
+30. **TDS on ambassador commissions:** whether and how tax is deducted at source on commission payouts. The ledger will carry a TDS field; the rule comes from the company's accountant.
+31. **Certificate signatories:** names, designations and signature images (or typed names only) for the Director and the Training Head or Mentor.
+32. **Printed certificates:** exact prices for college bulk delivery and home courier, and the courier partner.

@@ -11,6 +11,7 @@
  */
 
 import { BUSINESS_TIME_ZONE } from "@/lib/time/business-time";
+import { getSiteUrl } from "@/lib/site-url";
 
 /**
  * Escapes a value for safe interpolation into HTML text or a quoted attribute.
@@ -40,17 +41,9 @@ export function safeHttpUrl(value: unknown): string | null {
   }
 }
 
+/** Portal origin for email links: the one configured site URL (see src/lib/site-url.ts). */
 function getAppBaseUrl(): string {
-  if (process.env.BETTER_AUTH_URL && !process.env.BETTER_AUTH_URL.includes("localhost")) {
-    return process.env.BETTER_AUTH_URL.replace(/\/$/, "");
-  }
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
-    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`.replace(/\/$/, "");
-  }
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
-  }
-  return "https://gara-hiring-portal.vercel.app";
+  return getSiteUrl();
 }
 
 /**

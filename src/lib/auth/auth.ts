@@ -100,7 +100,7 @@ const authBaseUrl =
  * would trust every site hosted on Vercel for redirects and origin checks.
  */
 function buildTrustedOrigins(): string[] {
-  const origins = new Set<string>([authBaseUrl, "https://gara-hiring-portal.vercel.app"]);
+  const origins = new Set<string>([authBaseUrl]);
   if (process.env.BETTER_AUTH_URL) {
     origins.add(process.env.BETTER_AUTH_URL);
   }

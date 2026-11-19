@@ -13,6 +13,26 @@ test.describe("Public pages", () => {
     await expect(page.getByRole("link", { name: /Explore Opportunities/ }).first()).toBeVisible();
   });
 
+  test("home page is student-facing: fraud alert, no internal HRMS marketing or visitor count", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    await expect(page.getByRole("note", { name: "Fraud alert" })).toContainText(
+      "never charges any fee for internships"
+    );
+    await expect(page.getByText("Built by", { exact: false }).first()).toBeVisible();
+    const body = page.locator("body");
+    for (const internal of ["RBAC", "HRMS", "Platform Architecture", "Recorded visitors", "Architected"]) {
+      await expect(body).not.toContainText(internal);
+    }
+  });
+
+  test("careers page warns about internship fee fraud in the server HTML", async ({ request }) => {
+    const html = await (await request.get("/careers")).text();
+    expect(html).toContain("never charges any fee for internships");
+  });
+
   test("careers page serves its heading in the server HTML", async ({ request }) => {
     // The page renders in the first response (no JavaScript needed for its content).
     const response = await request.get("/careers");
