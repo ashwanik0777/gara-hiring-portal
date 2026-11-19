@@ -567,14 +567,14 @@ describe("Payout reads are computed in SQL and never select encrypted columns", 
 
     const result = await payrollService.generatePayrollRecordsForPeriod(adminUser, PERIOD_ID);
 
-    expect(result).toEqual({ enrolledCount: 1, skippedUnconfiguredCount: 2 });
+    expect(result).toEqual({ enrolledCount: 1, skippedUnconfiguredCount: 2, skippedOwnCount: 0 });
     const eligibleWhere = firstArgs(mockDb.employee.findMany).where;
     expect(eligibleWhere).toEqual({
       status: { in: ["ACTIVE", "PROBATION"] },
       payrollRecords: { none: { payrollPeriodId: PERIOD_ID } },
       payoutProfile: { is: { isPaid: true } },
     });
-    expect(firstArgs(mockDb.employee.findMany).select).toEqual({ id: true });
+    expect(firstArgs(mockDb.employee.findMany).select).toEqual({ id: true, userId: true });
     expect(firstArgs(mockDb.employee.count).where).toMatchObject({ payoutProfile: { is: null } });
     expect(mockDb.payrollRecord.createMany.mock.calls[0][0].data).toEqual([
       { payrollPeriodId: PERIOD_ID, employeeId: EMPLOYEE_ID, status: "DRAFT" },
@@ -623,7 +623,7 @@ describe("Payout reads are computed in SQL and never select encrypted columns", 
       disbursementReference: "BANK-BATCH-1",
     });
 
-    expect(result).toEqual({ updatedCount: 1, skippedNotPaidCount: 2, periodPaid: true });
+    expect(result).toEqual({ updatedCount: 1, skippedNotPaidCount: 2, skippedOwnCount: 0, periodPaid: true });
     expect(firstArgs(mockDb.payrollRecord.findMany).where).toEqual({
       payrollPeriodId: PERIOD_ID,
       status: "FINALIZED",
@@ -746,5 +746,141 @@ describe("Payout profile access requires a payroll role and canPayroll", () => {
       payrollService.updateEmployeePayoutProfile(hrUser, { employeeId: EMPLOYEE_ID, isPaid: false })
     ).resolves.toEqual({ openRecordCount: 0 });
     expect((firstArgs(mockDb.employeePayoutProfile.upsert) as { create: Args }).create.updatedById).toBe(hrUser.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Separation of duties (round 8): payroll staff never act on their own payroll
+// ---------------------------------------------------------------------------
+
+describe("Payroll separation of duties", () => {
+  const OWN_RECORD_ID = "55555555-5555-4555-8555-555555555555";
+  const OWN_EMPLOYEE_ID = "66666666-6666-4666-8666-666666666666";
+  const paidProfile = { isPaid: true, stipendAmount: new Prisma.Decimal(15000) };
+
+  function primeFinalizedPeriod() {
+    mockDb.payrollPeriod.findUnique.mockResolvedValue({ id: PERIOD_ID, code: "2026-04" });
+    mockDb.payrollPeriod.updateMany.mockResolvedValue({ count: 1 });
+  }
+
+  it("refuses to edit the actor's own payout profile, before any write or audit", async () => {
+    mockDb.employee.findUnique.mockResolvedValue({ id: EMPLOYEE_ID, userId: adminUser.id, payoutProfile: null });
+
+    await expect(
+      payrollService.updateEmployeePayoutProfile(adminUser, { employeeId: EMPLOYEE_ID, isPaid: true, stipendAmount: 99999 })
+    ).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("your own payout profile") });
+    expect(firstArgs(mockDb.employee.findUnique).select).toMatchObject({ userId: true });
+    expect(mockDb.employeePayoutProfile.upsert).not.toHaveBeenCalled();
+    expect(mockDb.auditLog.create).not.toHaveBeenCalled();
+
+    // HR holding canPayroll is held to the same rule.
+    mockDb.subAdminPermission.findUnique.mockResolvedValue(permissionRow(hrUser.id, true));
+    mockDb.employee.findUnique.mockResolvedValue({ id: EMPLOYEE_ID, userId: hrUser.id, payoutProfile: null });
+    await expect(
+      payrollService.updateEmployeePayoutProfile(hrUser, { employeeId: EMPLOYEE_ID, isPaid: true })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(mockDb.employeePayoutProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  it("still lets the actor edit another employee's payout profile", async () => {
+    mockDb.employee.findUnique.mockResolvedValue({ id: EMPLOYEE_ID, userId: "user-someone-else", payoutProfile: null });
+    mockDb.employeePayoutProfile.upsert.mockResolvedValue(profileRow());
+    await expect(
+      payrollService.updateEmployeePayoutProfile(adminUser, { employeeId: EMPLOYEE_ID, isPaid: true })
+    ).resolves.toEqual({ openRecordCount: 0 });
+  });
+
+  it("refuses to record a disbursement on the actor's own payroll record", async () => {
+    mockDb.payrollRecord.findUnique.mockResolvedValue({
+      id: OWN_RECORD_ID,
+      payrollPeriodId: PERIOD_ID,
+      employeeId: OWN_EMPLOYEE_ID,
+      status: "FINALIZED",
+      notes: null,
+      payrollPeriod: { id: PERIOD_ID, code: "2026-04" },
+      employee: { userId: adminUser.id, payoutProfile: paidProfile },
+    });
+
+    await expect(
+      payrollService.recordDisbursement(adminUser, { payrollRecordId: OWN_RECORD_ID, disbursementReference: "SELF-PAY" })
+    ).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("your own payroll record") });
+    const include = firstArgs(mockDb.payrollRecord.findUnique).include as { employee: { select: Args } };
+    expect(include.employee.select).toMatchObject({ userId: true });
+    expect(mockDb.payrollPeriod.updateMany).not.toHaveBeenCalled();
+    expect(mockDb.payrollRecord.updateMany).not.toHaveBeenCalled();
+    expect(mockDb.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("bulk disbursement skips and reports the actor's own record and pays the rest", async () => {
+    primeFinalizedPeriod();
+    mockDb.payrollRecord.count.mockResolvedValueOnce(2).mockResolvedValue(1);
+    mockDb.payrollRecord.findMany.mockResolvedValue([
+      { id: RECORD_ID, employee: { userId: "user-someone-else", payoutProfile: paidProfile } },
+      { id: OWN_RECORD_ID, employee: { userId: adminUser.id, payoutProfile: paidProfile } },
+    ]);
+    mockDb.payrollRecord.updateMany.mockResolvedValue({ count: 1 });
+
+    const result = await payrollService.bulkDisburseRecords(adminUser, {
+      periodId: PERIOD_ID,
+      disbursementReference: "BANK-BATCH-2",
+    });
+
+    expect(result).toEqual({ updatedCount: 1, skippedNotPaidCount: 0, skippedOwnCount: 1, periodPaid: false });
+    const writes = JSON.stringify(mockDb.payrollRecord.updateMany.mock.calls);
+    expect(writes).toContain(RECORD_ID);
+    expect(writes).not.toContain(OWN_RECORD_ID);
+    const audit = mockDb.auditLog.create.mock.calls[0][0] as { data: { diffPayload: Args } };
+    expect(audit.data.diffPayload).toMatchObject({ skippedOwnCount: 1, recordIds: [RECORD_ID] });
+  });
+
+  it("bulk disbursement refuses when the only payable record is the actor's own", async () => {
+    primeFinalizedPeriod();
+    mockDb.payrollRecord.count.mockResolvedValue(1);
+    mockDb.payrollRecord.findMany.mockResolvedValue([
+      { id: OWN_RECORD_ID, employee: { userId: adminUser.id, payoutProfile: paidProfile } },
+    ]);
+
+    await expect(
+      payrollService.bulkDisburseRecords(adminUser, { periodId: PERIOD_ID, disbursementReference: "SELF-BATCH" })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(mockDb.payrollRecord.updateMany).not.toHaveBeenCalled();
+    expect(mockDb.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("enrolment skips and reports the actor's own employee row", async () => {
+    primeFinalizedPeriod();
+    mockDb.employee.findMany.mockResolvedValue([
+      { id: EMPLOYEE_ID, userId: "user-someone-else" },
+      { id: OWN_EMPLOYEE_ID, userId: adminUser.id },
+    ]);
+    mockDb.payrollRecord.createMany.mockResolvedValue({ count: 1 });
+
+    const result = await payrollService.generatePayrollRecordsForPeriod(adminUser, PERIOD_ID);
+
+    expect(result).toEqual({ enrolledCount: 1, skippedUnconfiguredCount: 0, skippedOwnCount: 1 });
+    expect(mockDb.payrollRecord.createMany.mock.calls[0][0].data).toEqual([
+      { payrollPeriodId: PERIOD_ID, employeeId: EMPLOYEE_ID, status: "DRAFT" },
+    ]);
+    const audit = mockDb.auditLog.create.mock.calls[0][0] as { data: { diffPayload: Args } };
+    expect(audit.data.diffPayload).toMatchObject({ skippedOwnCount: 1, employeeIds: [EMPLOYEE_ID] });
+  });
+
+  it("enrolment writes nothing when only the actor's own row is eligible", async () => {
+    primeFinalizedPeriod();
+    mockDb.employee.findMany.mockResolvedValue([{ id: OWN_EMPLOYEE_ID, userId: adminUser.id }]);
+
+    const result = await payrollService.generatePayrollRecordsForPeriod(adminUser, PERIOD_ID);
+
+    expect(result).toEqual({ enrolledCount: 0, skippedUnconfiguredCount: 0, skippedOwnCount: 1 });
+    expect(mockDb.payrollRecord.createMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("Payroll page numbers are bounded", () => {
+  it("clamps a huge ?page to MAX_PAGE_NUMBER so OFFSET stays bounded", async () => {
+    await payrollService.getPayrollPeriods(adminUser, { page: 900_000_000 });
+    const args = firstArgs(mockDb.payrollPeriod.findMany);
+    expect(args.take).toBe(12);
+    expect(args.skip).toBe((10_000 - 1) * 12);
   });
 });

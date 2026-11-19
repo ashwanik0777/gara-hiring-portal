@@ -17,18 +17,17 @@ import { PaginationNav } from "@/components/ui/pagination-nav";
 import { DialogFallback } from "@/components/ui/dialog-fallback";
 import {
   Clock,
-  Calendar,
   CheckCircle2,
   UserCheck,
   AlertCircle,
   Search,
   Loader2,
-  FileText,
   ShieldCheck,
   LogIn,
   LogOut,
 } from "lucide-react";
 import type { RecordAttendanceValues } from "./record-attendance-dialog";
+import { formatMonthLabel } from "./attendance-format";
 
 // The staff entry form is loaded on first use so the list paints with less JS.
 const RecordAttendanceDialog = dynamic(
@@ -58,15 +57,6 @@ function formatDuration(checkIn: string | null, checkOut: string | null): string
 
 function formatTime(iso: string | null): string {
   return iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
-}
-
-function formatMonthLabel(month: string): string {
-  const [year, m] = month.split("-").map(Number);
-  return new Date(Date.UTC(year, m - 1, 1)).toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
 }
 
 function StatusBadge({ status }: { status: AttendanceStatus }) {
@@ -395,7 +385,6 @@ function SelfAttendancePanel({
       }
       setSuccessMsg(kind === "in" ? "Checked in for today." : "Checked out for today.");
       setLocalToday(res.record);
-      router.refresh();
     });
   };
 
@@ -472,13 +461,15 @@ function SelfAttendancePanel({
 function TeamAttendancePanel({
   pageData,
   portalRole,
+  statsSlot,
 }: {
   pageData: Extract<AttendancePageData, { view: "team" }>;
   portalRole: PortalRole;
+  statsSlot: React.ReactNode;
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { records, page, filters, employees, employeesTotal, todayCounts, pendingRegularizationCount, selfEmployeeId } = pageData;
+  const { records, page, filters, employees, employeesTotal, selfEmployeeId } = pageData;
 
   // Staff cannot edit their own attendance through the staff form (separation of duties).
   const editableEmployees = employees.filter((e) => e.id !== selfEmployeeId);
@@ -546,7 +537,6 @@ function TeamAttendancePanel({
       }
       setSuccessMsg("Attendance recorded.");
       setIsRecordModalOpen(false);
-      router.refresh();
     });
   };
 
@@ -562,7 +552,6 @@ function TeamAttendancePanel({
       }
       setSuccessMsg("Checked in for today.");
       setIsRecordModalOpen(false);
-      router.refresh();
     });
   };
 
@@ -572,52 +561,8 @@ function TeamAttendancePanel({
     <div className="w-full space-y-6">
       <FeedbackBanner errorMsg={isRecordModalOpen ? null : errorMsg} successMsg={successMsg} />
 
-      {/* KPI Statistics Cards (counted in the database) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-card border border-border/70 border-l-4 border-l-emerald-500 rounded-xl p-4 shadow-2xs flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">Present Today (UTC)</p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">{todayCounts.present}</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Present or half day recorded</p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <UserCheck className="h-4 w-4" />
-          </div>
-        </div>
-
-        <div className="bg-card border border-border/70 border-l-4 border-l-amber-500 rounded-xl p-4 shadow-2xs flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">On Leave / Absent</p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">{todayCounts.onLeaveOrAbsent}</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Recorded for today</p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 flex items-center justify-center shrink-0">
-            <Clock className="h-4 w-4" />
-          </div>
-        </div>
-
-        <div className="bg-card border border-border/70 border-l-4 border-l-blue-500 rounded-xl p-4 shadow-2xs flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">Entries This Month</p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">{page.total}</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">{formatMonthLabel(filters.month)}{hasActiveFilters && filters.status ? " · filtered" : ""}</p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400 flex items-center justify-center shrink-0">
-            <Calendar className="h-4 w-4" />
-          </div>
-        </div>
-
-        <div className="bg-card border border-border/70 border-l-4 border-l-violet-500 rounded-xl p-4 shadow-2xs flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">Pending Regularizations</p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">{pendingRegularizationCount}</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Correction requests awaiting review</p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-violet-50 text-violet-600 dark:bg-violet-950/60 dark:text-violet-400 flex items-center justify-center shrink-0">
-            <FileText className="h-4 w-4" />
-          </div>
-        </div>
-      </div>
+      {/* Summary figures, rendered on the server (attendance-stats-cards.tsx). */}
+      {statsSlot}
 
       {isRecordModalOpen && (
         <RecordAttendanceDialog
@@ -720,9 +665,12 @@ function TeamAttendancePanel({
 export function AttendanceManagementClient({
   pageData,
   portalRole,
+  statsSlot,
 }: {
   pageData: Exclude<AttendancePageData, { view: "forbidden" }>;
   portalRole: PortalRole;
+  /** Server-rendered team summary cards (`AttendanceStatsCards`); unused in the self view. */
+  statsSlot?: React.ReactNode;
 }) {
   if (pageData.view === "self") {
     return (
@@ -736,5 +684,5 @@ export function AttendanceManagementClient({
       />
     );
   }
-  return <TeamAttendancePanel pageData={pageData} portalRole={portalRole} />;
+  return <TeamAttendancePanel pageData={pageData} portalRole={portalRole} statsSlot={statsSlot} />;
 }

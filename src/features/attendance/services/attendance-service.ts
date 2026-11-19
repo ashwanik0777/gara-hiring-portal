@@ -37,6 +37,7 @@ import {
   utcDateKey,
   utcMonthWindow,
 } from "./attendance-dates";
+import { clampPageNumber } from "@/lib/pagination";
 
 /** Employee picker: first page size and hard cap. */
 const EMPLOYEE_OPTION_LIMIT = 50;
@@ -104,7 +105,7 @@ function pageArgs(page?: number, pageSize?: number) {
     Math.max(1, Math.trunc(pageSize ?? ATTENDANCE_DEFAULT_PAGE_SIZE)),
     ATTENDANCE_MAX_PAGE_SIZE
   );
-  const current = Math.max(1, Math.trunc(page ?? 1));
+  const current = clampPageNumber(page);
   return { skip: (current - 1) * size, take: size, page: current, pageSize: size };
 }
 

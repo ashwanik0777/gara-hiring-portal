@@ -1,7 +1,5 @@
 import { z } from "zod";
-
-/** Longest admin-configured regex pattern accepted for a field. */
-export const MAX_FIELD_PATTERN_LENGTH = 200;
+import { checkFieldPatternSafety } from "./pattern-safety";
 
 export const formFieldOptionSchema = z.object({
   label: z.string().min(1, "Option label is required").max(200),
@@ -11,20 +9,13 @@ export const formFieldOptionSchema = z.object({
 export const formFieldValidationSchema = z.object({
   min: z.number().optional(),
   max: z.number().optional(),
+  // Too long, invalid or potentially catastrophic (ReDoS) patterns are refused at save time.
   pattern: z
     .string()
-    .max(MAX_FIELD_PATTERN_LENGTH, `Validation pattern cannot exceed ${MAX_FIELD_PATTERN_LENGTH} characters`)
-    .refine(
-      (pattern) => {
-        try {
-          new RegExp(pattern);
-          return true;
-        } catch {
-          return false;
-        }
-      },
-      { message: "Validation pattern is not a valid regular expression" }
-    )
+    .superRefine((pattern, ctx) => {
+      const safety = checkFieldPatternSafety(pattern);
+      if (!safety.safe) ctx.addIssue({ code: "custom", message: safety.reason });
+    })
     .optional(),
   allowedFileTypes: z.array(z.string().max(100)).max(10).optional(),
   maxFileSizeMb: z.number().positive().max(50).optional(),

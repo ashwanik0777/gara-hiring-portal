@@ -3,17 +3,24 @@ import { ApplicationStatus, Prisma, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { assertPermission, hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { STAFF_ROLES } from "@/lib/auth/permissions";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
+import { clampPageNumber } from "@/lib/pagination";
 import { atBusinessTime, businessDateKey, BUSINESS_TIME_ZONE } from "@/lib/time/business-time";
 import { determineLifecycleStage, STAGE_LABELS } from "@/features/lifecycle/capabilities";
+import { computeProfileCompleteness } from "@/features/lifecycle/services/journey-progress";
+import { describeApplicationStage } from "@/features/applications/stage-labels";
 import type { EmployeeStatus, EvaluationStatus } from "@/types/enums";
 import type {
+  RegistrantApplicationItem,
   RegistrantCsvExportResult,
+  RegistrantDetail,
   RegistrantListFilters,
   RegistrantListItem,
   RegistrantListPage,
   RegistrationAnalyticsReport,
+  RegistrantProfileLink,
   RegistrationBreakdownRow,
+  RegistrationDirectorySummary,
   RegistrationFilters,
   RegistrationInterest,
   RegistrationTrendPoint,
@@ -29,7 +36,8 @@ import { toPercent } from "./hiring-funnel-service";
  * MANAGER, INTERVIEWER, MENTOR); the sign-up moment is `User.createdAt`. "Applied" means
  * at least one application that is not a DRAFT. "Joined" means the person holds the
  * INTERN or EMPLOYEE role. Every figure is aggregated in PostgreSQL; the registrant list
- * (names and e-mails) is paginated and limited to ADMIN and HR with `canReports`.
+ * (names and e-mails) and the registrant detail are paginated / single-row reads limited to
+ * ADMIN and HR with `canReports`, and opening a registrant's detail is audited.
  */
 
 export const REGISTRATION_INTERESTS: readonly RegistrationInterest[] = ["JOB", "INTERNSHIP", "BOTH", "NOT_CHOSEN"];
@@ -51,7 +59,8 @@ export const REGISTRATION_TREND_MONTHS = 12;
 export const REGISTRATION_RECENT_DAYS = 7;
 export const REGISTRANT_DEFAULT_PAGE_SIZE = 25;
 export const REGISTRANT_MAX_PAGE_SIZE = 50;
-const MAX_PAGE_NUMBER = 100_000;
+/** Applications listed on the registrant detail page (newest first). */
+export const REGISTRANT_DETAIL_APPLICATIONS = 50;
 
 const NOT_CHOSEN = "NOT_CHOSEN";
 const JOINED_ROLES: readonly Role[] = [Role.INTERN, Role.EMPLOYEE];
@@ -84,7 +93,10 @@ export const RegistrationFilterSchema = z.object({
     .optional(),
 });
 
-/** Registrant list / CSV filters: the tab filters plus verified, applied, search and page. */
+/**
+ * Registrant list / CSV filters: dates, interest, verified, applied, search and page. The
+ * list's range is open-ended (no dates = every registration); see `parseListFilters`.
+ */
 export const RegistrantListFilterSchema = RegistrationFilterSchema.extend({
   emailVerified: yesNoFilter("Choose an e-mail verification filter from the list."),
   applied: yesNoFilter("Choose an application filter from the list."),
@@ -310,6 +322,7 @@ const NON_DRAFT_APPLICATION: Prisma.ApplicationWhereInput = { status: { not: App
 
 const registrantSelect = {
   id: true,
+  userId: true,
   careerInterest: true,
   user: {
     select: {
@@ -332,15 +345,18 @@ const registrantSelect = {
 
 type RegistrantRow = Prisma.CandidateProfileGetPayload<{ select: typeof registrantSelect }>;
 
-/** Where clause shared by the list, its count and the CSV export. */
+/** Where clause shared by the list, its count and the CSV export (open bounds are omitted). */
 export function registrantWhere(
   filters: RegistrantListFilters,
-  start: Date,
-  endExclusive: Date
+  window: { start: Date | null; endExclusive: Date | null }
 ): Prisma.CandidateProfileWhereInput {
+  const createdAt: Prisma.DateTimeFilter = {
+    ...(window.start ? { gte: window.start } : {}),
+    ...(window.endExclusive ? { lt: window.endExclusive } : {}),
+  };
   const userWhere: Prisma.UserWhereInput = {
     roles: { none: { role: { in: STAFF_ROLES } } },
-    createdAt: { gte: start, lt: endExclusive },
+    ...(window.start || window.endExclusive ? { createdAt } : {}),
     ...(filters.emailVerified !== null ? { emailVerified: filters.emailVerified } : {}),
     ...(filters.search
       ? {
@@ -380,6 +396,7 @@ function toRegistrantItem(row: RegistrantRow): RegistrantListItem {
   });
   return {
     id: row.id,
+    userId: row.userId,
     name: row.user.name,
     email: row.user.email,
     interest: row.careerInterest ?? NOT_CHOSEN,
@@ -417,6 +434,153 @@ export function buildRegistrantCsv(items: RegistrantListItem[]): string {
 function clampPageSize(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) return REGISTRANT_DEFAULT_PAGE_SIZE;
   return Math.min(REGISTRANT_MAX_PAGE_SIZE, Math.max(1, Math.trunc(value)));
+}
+
+// ─── Registrant detail (one user, explicit select) ─────────────────────────────
+
+/** User ids are generated identifiers; anything else cannot be a registrant. */
+const RegistrantIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]+$/);
+
+/**
+ * Columns read for the detail page. Only what the page renders: no password hashes, OAuth
+ * tokens, sessions, two-factor/OTP rows, verification rows or IP addresses.
+ */
+const registrantDetailSelect = {
+  id: true,
+  name: true,
+  email: true,
+  emailVerified: true,
+  createdAt: true,
+  roles: { select: { role: true } },
+  // Sign-in methods only (never the stored password or tokens of the account rows).
+  accounts: { select: { providerId: true }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
+  employeeProfile: { select: { status: true } },
+  evaluationsAsIntern: {
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: { status: true, application: { select: { status: true } } },
+  },
+  candidateProfile: {
+    select: {
+      phone: true,
+      location: true,
+      currentOrganization: true,
+      highestEducation: true,
+      linkedinUrl: true,
+      githubUrl: true,
+      portfolioUrl: true,
+      careerInterest: true,
+      updatedAt: true,
+      applications: {
+        where: NON_DRAFT_APPLICATION,
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        take: REGISTRANT_DETAIL_APPLICATIONS,
+        select: {
+          id: true,
+          referenceCode: true,
+          status: true,
+          createdAt: true,
+          opening: { select: { title: true, type: true } },
+        },
+      },
+      _count: { select: { applications: { where: NON_DRAFT_APPLICATION } } },
+    },
+  },
+} satisfies Prisma.UserSelect;
+
+type RegistrantDetailRow = Prisma.UserGetPayload<{ select: typeof registrantDetailSelect }>;
+
+const SIGN_IN_METHOD_LABELS: Record<string, string> = {
+  credential: "Email and password",
+  google: "Google",
+};
+
+/** Readable name of a Better Auth provider id ("credential" = e-mail and password). */
+export function signInMethodLabel(providerId: string): string {
+  return SIGN_IN_METHOD_LABELS[providerId] ?? providerId;
+}
+
+/**
+ * Returns the URL only when it is an absolute https link without embedded credentials;
+ * anything else (http, javascript:, relative text) is never turned into a link.
+ */
+export function safeHttpsUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function profileLink(raw: string | null): RegistrantProfileLink {
+  const value = raw?.trim() ? raw.trim() : null;
+  return { value, href: safeHttpsUrl(value) };
+}
+
+function blankToNull(value: string | null): string | null {
+  return value && value.trim() ? value.trim() : null;
+}
+
+/** Maps the selected row to the detail view (staff accounts never reach this point). */
+export function toRegistrantDetail(row: RegistrantDetailRow): RegistrantDetail {
+  const profile = row.candidateProfile;
+  if (!profile) {
+    throw new NotFoundError("This registration was not found.");
+  }
+  const latestEnrollment = row.evaluationsAsIntern[0];
+  const enrollmentStatus =
+    latestEnrollment && latestEnrollment.application.status !== ApplicationStatus.HIRED
+      ? (latestEnrollment.status as EvaluationStatus)
+      : null;
+  const stage = determineLifecycleStage({
+    roles: row.roles.map((entry) => entry.role),
+    enrollmentStatus,
+    employeeStatus: (row.employeeProfile?.status as EmployeeStatus | undefined) ?? null,
+  });
+  const methods = Array.from(new Set(row.accounts.map((account) => signInMethodLabel(account.providerId))));
+  const completeness = computeProfileCompleteness(profile);
+  const applications: RegistrantApplicationItem[] = profile.applications.map((application) => ({
+    id: application.id,
+    referenceCode: application.referenceCode,
+    openingTitle: application.opening.title,
+    openingType: application.opening.type,
+    status: application.status,
+    statusLabel: describeApplicationStage(application.status),
+    submittedAt: application.createdAt,
+    submittedDate: businessDateKey(application.createdAt),
+  }));
+  return {
+    userId: row.id,
+    name: row.name,
+    email: row.email,
+    emailVerified: row.emailVerified,
+    signedUpAt: row.createdAt,
+    signedUpDate: businessDateKey(row.createdAt),
+    signUpMethod: methods[0] ?? null,
+    signInMethods: methods,
+    interest: profile.careerInterest ?? NOT_CHOSEN,
+    phone: blankToNull(profile.phone),
+    location: blankToNull(profile.location),
+    currentOrganization: blankToNull(profile.currentOrganization),
+    highestEducation: blankToNull(profile.highestEducation),
+    linkedin: profileLink(profile.linkedinUrl),
+    github: profileLink(profile.githubUrl),
+    portfolio: profileLink(profile.portfolioUrl),
+    profileCompleteness: { completed: completeness.completed, total: completeness.total },
+    profileUpdatedAt: profile.updatedAt,
+    stage,
+    stageLabel: STAGE_LABELS[stage],
+    applications,
+    applicationCount: profile._count.applications,
+  };
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────────
@@ -480,67 +644,104 @@ export class RegistrationAnalyticsService {
   }
 
   /**
-   * All-time figures for the admin overview card: total, per interest, not applied yet and
-   * new in the last 7 days (today and the 6 days before, business time).
+   * All-time figures for the admin overview card and the Registrations page: total, per
+   * interest, e-mail verification, not applied yet and new in the last 7 days (today and
+   * the 6 days before, business time). One grouped query.
    */
-  async getRegistrationSummary(
-    user: AuthenticatedUser,
-    now = new Date()
-  ): Promise<{
-    total: number;
-    byInterest: Record<RegistrationInterest, number>;
-    notApplied: number;
-    newLastSevenDays: number;
-  }> {
+  async getRegistrationSummary(user: AuthenticatedUser, now = new Date()): Promise<RegistrationDirectorySummary> {
     await this.assertCountsAccess(user);
-    const recentSince = atBusinessTime(
-      addDaysToKey(businessDateKey(now), -(REGISTRATION_RECENT_DAYS - 1)),
-      0,
-      0
-    );
-    const rows = await this.loadSummary(null, null, recentSince);
+    const recentSinceDate = addDaysToKey(businessDateKey(now), -(REGISTRATION_RECENT_DAYS - 1));
+    const rows = await this.loadSummary(null, null, atBusinessTime(recentSinceDate, 0, 0));
     const { totals, byInterest, recent } = assembleRegistrationBreakdown(rows);
     const counts = emptyInterestCounts();
     for (const row of byInterest) {
       if (row.interest !== "ALL") counts[row.interest] = row.registrations;
     }
-    return { total: totals.registrations, byInterest: counts, notApplied: totals.notApplied, newLastSevenDays: recent };
+    return {
+      total: totals.registrations,
+      byInterest: counts,
+      emailVerified: totals.emailVerified,
+      emailNotVerified: totals.emailNotVerified,
+      notApplied: totals.notApplied,
+      newLastSevenDays: recent,
+      recentSinceDate,
+    };
   }
 
-  /** Parses the list filters (validation errors surface as ValidationError). */
-  parseListFilters(
-    raw: RegistrantListFilterInput | undefined,
-    now = new Date()
-  ): { filters: RegistrantListFilters; start: Date; endExclusive: Date; page: number; pageSize: number } {
+  /**
+   * Everything one registrant entered (account and candidate profile) plus their recent
+   * applications, for ADMIN and HR with canReports. Staff accounts and users without a
+   * candidate profile are not registrants (NotFoundError). Every successful read is
+   * recorded in the audit log as VIEW_REGISTRANT / USER before the data is returned.
+   */
+  async getRegistrantDetail(user: AuthenticatedUser, rawUserId: unknown): Promise<RegistrantDetail> {
+    await this.assertRegistrantAccess(user);
+    const parsedId = RegistrantIdSchema.safeParse(rawUserId);
+    if (!parsedId.success) {
+      throw new NotFoundError("This registration was not found.");
+    }
+
+    const row = await prisma.user.findUnique({ where: { id: parsedId.data }, select: registrantDetailSelect });
+    if (!row || !row.candidateProfile || row.roles.some((entry) => STAFF_ROLES.includes(entry.role))) {
+      throw new NotFoundError("This registration was not found.");
+    }
+    const detail = toRegistrantDetail(row);
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorRole: user.roles.join(","),
+        action: "VIEW_REGISTRANT",
+        resourceType: "USER",
+        resourceId: row.id,
+      },
+    });
+    return detail;
+  }
+
+  /**
+   * Parses the list filters (validation errors surface as ValidationError). The range is
+   * open-ended: without dates every registration is listed, a start or end date alone
+   * bounds one side. Rows are bounded by pagination (and the export by MAX_EXPORT_ROWS).
+   */
+  parseListFilters(raw: RegistrantListFilterInput | undefined): {
+    filters: RegistrantListFilters;
+    start: Date | null;
+    endExclusive: Date | null;
+    page: number;
+    pageSize: number;
+  } {
     const parsed = RegistrantListFilterSchema.safeParse(raw ?? {});
     if (!parsed.success) {
       throw new ValidationError(parsed.error.issues[0]?.message ?? "Check the registrant filters.");
     }
-    const { filters, start, endExclusive } = windowFromParsed(parsed.data, now);
+    const startDate = parsed.data.startDate || null;
+    const endDate = parsed.data.endDate || null;
+    if (startDate && endDate && startDate > endDate) {
+      throw new ValidationError("The start date must be on or before the end date.");
+    }
     const pageNumber = parsed.data.page === undefined || parsed.data.page === "" ? 1 : Number(parsed.data.page);
     return {
       filters: {
-        ...filters,
+        startDate,
+        endDate,
+        interest: parsed.data.interest ? (parsed.data.interest as RegistrationInterest) : null,
         emailVerified: yesNo(parsed.data.emailVerified),
         applied: yesNo(parsed.data.applied),
         search: parsed.data.search ? parsed.data.search : null,
       },
-      start,
-      endExclusive,
-      page: Math.min(MAX_PAGE_NUMBER, Math.max(1, Math.trunc(pageNumber) || 1)),
+      start: startDate ? atBusinessTime(startDate, 0, 0) : null,
+      endExclusive: endDate ? atBusinessTime(addDaysToKey(endDate, 1), 0, 0) : null,
+      page: clampPageNumber(pageNumber),
       pageSize: clampPageSize(parsed.data.pageSize),
     };
   }
 
   /** One page (≤ 50) of registrants, newest first, with the total in the same round trip. */
-  async listRegistrants(
-    user: AuthenticatedUser,
-    rawFilters: RegistrantListFilterInput = {},
-    now = new Date()
-  ): Promise<RegistrantListPage> {
+  async listRegistrants(user: AuthenticatedUser, rawFilters: RegistrantListFilterInput = {}): Promise<RegistrantListPage> {
     await this.assertRegistrantAccess(user);
-    const { filters, start, endExclusive, page, pageSize } = this.parseListFilters(rawFilters, now);
-    const where = registrantWhere(filters, start, endExclusive);
+    const { filters, start, endExclusive, page, pageSize } = this.parseListFilters(rawFilters);
+    const where = registrantWhere(filters, { start, endExclusive });
 
     const [rows, total] = await Promise.all([
       prisma.candidateProfile.findMany({
@@ -574,10 +775,10 @@ export class RegistrationAnalyticsService {
     now = new Date()
   ): Promise<RegistrantCsvExportResult> {
     await this.assertRegistrantAccess(user);
-    const { filters, start, endExclusive } = this.parseListFilters(rawFilters, now);
+    const { filters, start, endExclusive } = this.parseListFilters(rawFilters);
 
     const rows = await prisma.candidateProfile.findMany({
-      where: registrantWhere(filters, start, endExclusive),
+      where: registrantWhere(filters, { start, endExclusive }),
       select: registrantSelect,
       orderBy: [{ user: { createdAt: "desc" } }, { id: "asc" }],
       // One row more than the limit tells us whether the export was cut off.

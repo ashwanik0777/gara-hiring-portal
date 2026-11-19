@@ -4,7 +4,7 @@ import {
   OfferStatus,
   ApplicationStatus,
   Role,
-} from "@prisma/client";
+} from "@/types/enums";
 
 import type {
   ConversionOfferState,

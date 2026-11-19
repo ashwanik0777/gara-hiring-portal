@@ -18,7 +18,9 @@ const { mockPrisma, mockSession } = vi.hoisted(() => {
   return { mockPrisma: prisma, mockSession: { current: null as null | { user: { id: string; email: string; name: string } } } };
 });
 
-vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
+vi.mock("@/lib/db", async () => ({
+  prisma: (await import("./helpers/session-access")).withSessionAccessQuery(mockPrisma),
+}));
 vi.mock("next/headers", () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth/auth", () => ({
@@ -96,6 +98,11 @@ describe("sanitizeCallbackPath (open-redirect protection)", () => {
     "/\\/evil.example",
     "javascript:alert(1)",
     "/admin\u0000",
+    // Dot segments that normalise into a protocol-relative URL.
+    "/.//evil.example",
+    "/..//evil.example/login",
+    "/%2e%2e//evil.example",
+    "/./%2e//evil.example",
     "",
     null,
   ])("rejects %s", (value) => {
@@ -255,6 +262,9 @@ describe("Sub-admin management preserves history", () => {
         ? { mustChangePassword: false, roles: [{ role: Role.ADMIN }] }
         : null;
     });
+
+    const roleDeleteMany = vi.mocked(mockPrisma.userRole as { deleteMany: ReturnType<typeof vi.fn> }).deleteMany;
+    roleDeleteMany.mockResolvedValueOnce({ count: 1 });
 
     const res = await updateSubAdminPermissionsAction({
       subAdminId: TARGET_ID,

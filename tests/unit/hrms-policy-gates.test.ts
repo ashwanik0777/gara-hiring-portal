@@ -1165,6 +1165,30 @@ describe("Payroll period status machine (BUG-08)", () => {
     );
   });
 
+  it("finalizes a period that holds the finalizer's own record and says so in the audit row", async () => {
+    mockDb.payrollPeriod.findUnique.mockResolvedValue({ id: PERIOD_ID, code: "2026-04", status: "DRAFT", notes: null });
+    mockDb.payrollPeriod.updateMany.mockResolvedValue({ count: 1 });
+    mockDb.payrollRecord.count.mockResolvedValue(1);
+    mockDb.payrollRecord.updateMany.mockResolvedValue({ count: 4 });
+
+    const result = await payrollService.updatePayrollPeriodStatus(adminUser, {
+      periodId: PERIOD_ID,
+      status: "FINALIZED",
+    });
+
+    expect(result.affectedRecords).toBe(4);
+    expect(mockDb.payrollRecord.count).toHaveBeenCalledWith({
+      where: { payrollPeriodId: PERIOD_ID, status: "DRAFT", employee: { userId: adminUser.id } },
+    });
+    expect(mockDb.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          diffPayload: expect.objectContaining({ includesFinalizerOwnRecord: true }),
+        }),
+      })
+    );
+  });
+
   it("rejects the transition when another request changed the period concurrently", async () => {
     mockDb.payrollPeriod.findUnique.mockResolvedValue({ id: PERIOD_ID, code: "2026-04", status: "DRAFT", notes: null });
     mockDb.payrollPeriod.updateMany.mockResolvedValue({ count: 0 });
@@ -1229,7 +1253,7 @@ describe("Payroll disbursement integrity (SEC-16, POL-04)", () => {
       disbursementReference: "BANK-BATCH-1",
     });
 
-    expect(result).toEqual({ updatedCount: 1, skippedNotPaidCount: 1, periodPaid: false });
+    expect(result).toEqual({ updatedCount: 1, skippedNotPaidCount: 1, skippedOwnCount: 0, periodPaid: false });
     expect(mockDb.payrollRecord.count).toHaveBeenCalledWith({
       where: { payrollPeriodId: PERIOD_ID, status: "FINALIZED" },
     });
@@ -1242,10 +1266,10 @@ describe("Payroll disbursement integrity (SEC-16, POL-04)", () => {
         },
       })
     );
-    // One conditional update per eligible record, each snapshotting that record's amount
+    // One conditional update per distinct amount, each snapshotting that amount
     expect(mockDb.payrollRecord.updateMany).toHaveBeenCalledTimes(1);
     const updateArgs = mockDb.payrollRecord.updateMany.mock.calls[0][0];
-    expect(updateArgs.where).toEqual({ id: RECORD_ID, status: "FINALIZED" });
+    expect(updateArgs.where).toEqual({ id: { in: [RECORD_ID] }, status: "FINALIZED" });
     expect(updateArgs.data.disbursementReference).toBe("BANK-BATCH-1");
     expect(updateArgs.data.disbursedAmount).toBe(12000);
     expect(mockDb.auditLog.create).toHaveBeenCalledWith(
@@ -1267,6 +1291,43 @@ describe("Payroll disbursement integrity (SEC-16, POL-04)", () => {
       payrollService.bulkDisburseRecords(adminUser, { periodId: PERIOD_ID, disbursementReference: "BANK-BATCH-1" })
     ).rejects.toMatchObject({ code: "CONFLICT" });
     expect(mockDb.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("writes records sharing an amount in one conditional update per amount, within an explicit timeout", async () => {
+    const paid = (amount: number) => ({ isPaid: true, stipendAmount: new Prisma.Decimal(amount) });
+    mockDb.payrollPeriod.findUnique.mockResolvedValue({ id: PERIOD_ID, code: "2026-04" });
+    mockDb.payrollPeriod.updateMany.mockResolvedValue({ count: 1 });
+    mockDb.payrollRecord.count.mockResolvedValueOnce(3).mockResolvedValue(0);
+    mockDb.payrollRecord.findMany.mockResolvedValue([
+      { id: "rec-a", employee: { userId: "user-a", payoutProfile: paid(12000) } },
+      { id: "rec-b", employee: { userId: "user-b", payoutProfile: paid(9000) } },
+      { id: "rec-c", employee: { userId: "user-c", payoutProfile: paid(12000) } },
+    ]);
+    mockDb.payrollRecord.updateMany.mockImplementation(async (args: { where: { id: { in: string[] } } }) => ({
+      count: args.where.id.in.length,
+    }));
+
+    const result = await payrollService.bulkDisburseRecords(adminUser, {
+      periodId: PERIOD_ID,
+      disbursementReference: "BANK-BATCH-1",
+    });
+
+    expect(result.updatedCount).toBe(3);
+    type BatchWrite = { where: { id: { in: string[] }; status: string }; data: { disbursedAmount: number | null } };
+    const writes = mockDb.payrollRecord.updateMany.mock.calls.map((call: unknown[]) => {
+      const args = call[0] as BatchWrite;
+      return { ids: args.where.id.in, status: args.where.status, amount: args.data.disbursedAmount };
+    });
+    expect(writes).toEqual([
+      { ids: ["rec-a", "rec-c"], status: "FINALIZED", amount: 12000 },
+      { ids: ["rec-b"], status: "FINALIZED", amount: 9000 },
+    ]);
+    expect(mockDb.$transaction).toHaveBeenCalledWith(expect.any(Function), { timeout: 15_000 });
+    expect(mockDb.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: "PAYROLL_BULK_DISBURSEMENT_RECORDED" }),
+      })
+    );
   });
 
   it("rejects single disbursement of a DRAFT record and duplicate disbursement of a PAID record", async () => {
@@ -1308,7 +1369,7 @@ describe("Payroll disbursement integrity (SEC-16, POL-04)", () => {
 
     const result = await payrollService.generatePayrollRecordsForPeriod(adminUser, PERIOD_ID);
 
-    expect(result).toEqual({ enrolledCount: 1, skippedUnconfiguredCount: 1 });
+    expect(result).toEqual({ enrolledCount: 1, skippedUnconfiguredCount: 1, skippedOwnCount: 0 });
     expect(mockDb.employee.findMany.mock.calls[0][0].where).toMatchObject({
       payoutProfile: { is: { isPaid: true } },
       payrollRecords: { none: { payrollPeriodId: PERIOD_ID } },

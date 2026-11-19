@@ -6,9 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   Calendar,
   CreditCard,
-  Users,
   CheckCircle2,
-  Clock,
   AlertCircle,
   Download,
   PlusCircle,
@@ -25,7 +23,6 @@ import {
   ShieldCheck,
   FileSpreadsheet,
   UserX,
-  Sparkles,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PaginationNav } from "@/components/ui/pagination-nav";
 import { DialogFallback } from "@/components/ui/dialog-fallback";
+import { StatCard, StatGrid } from "@/components/ui/stat-card";
 import type {
   PayrollDashboardData,
   PayrollRecordWithEmployee,
@@ -81,12 +79,17 @@ interface PayrollManagementClientProps {
   initialData: PayrollDashboardData;
   /** Tab from the URL (`?tab=`), so links and the back button restore it. */
   initialTab?: PayrollTab;
+  /** Server-rendered cycle summary cards (`PayrollStatsCards`). */
+  statsSlot?: React.ReactNode;
 }
 
 type TypeFilter = "ALL" | "INTERN" | "FULL_TIME";
 type StatusPill = "ALL" | "PAID" | "FINALIZED" | "DRAFT";
 
-export function PayrollManagementClient({ initialData, initialTab }: PayrollManagementClientProps) {
+/** Separation of duties: the services never let staff enrol or pay their own payroll record. */
+const OWN_RECORD_SKIPPED_NOTE = "Your own record was skipped: another payroll user must process it.";
+
+export function PayrollManagementClient({ initialData, initialTab, statsSlot }: PayrollManagementClientProps) {
   const router = useRouter();
   const pathname = usePathname();
   const data = initialData;
@@ -198,7 +201,6 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
       }
       setDisburseRecord(null);
       showFeedback("success", `Disbursement logged with reference ${ref}`);
-      router.refresh();
     });
   };
 
@@ -216,13 +218,13 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
         return;
       }
       setBulkOpen(false);
-      const skipped = res.data.skippedNotPaidCount;
+      const { skippedNotPaidCount: skipped, skippedOwnCount } = res.data;
       showFeedback(
         "success",
         `Recorded reference ${ref} for ${res.data.updatedCount} finalized record(s).` +
-          (skipped > 0 ? ` ${skipped} record(s) skipped: employee not configured as paid.` : "")
+          (skipped > 0 ? ` ${skipped} record(s) skipped: employee not configured as paid.` : "") +
+          (skippedOwnCount > 0 ? ` ${OWN_RECORD_SKIPPED_NOTE}` : "")
       );
-      router.refresh();
     });
   };
 
@@ -234,13 +236,13 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
         showFeedback("error", res.error || "Failed to enroll employees.");
         return;
       }
-      const { enrolledCount, skippedUnconfiguredCount } = res.data;
+      const { enrolledCount, skippedUnconfiguredCount, skippedOwnCount } = res.data;
       showFeedback(
         "success",
         `Enrolled ${enrolledCount} employee(s) configured as paid.` +
-          (skippedUnconfiguredCount > 0 ? ` ${skippedUnconfiguredCount} employee(s) skipped: payout profile not configured.` : "")
+          (skippedUnconfiguredCount > 0 ? ` ${skippedUnconfiguredCount} employee(s) skipped: payout profile not configured.` : "") +
+          (skippedOwnCount > 0 ? ` ${OWN_RECORD_SKIPPED_NOTE}` : "")
       );
-      router.refresh();
     });
   };
 
@@ -255,7 +257,6 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
       }
       const verb = status === "FINALIZED" ? "finalized" : status === "DRAFT" ? "reopened as draft" : "voided";
       showFeedback("success", `Payroll cycle ${period.code} ${verb}.`);
-      router.refresh();
     });
   };
 
@@ -319,7 +320,6 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
           (!values.isPaid && open > 0 ? ` ${open} open payroll record(s) remain and cannot be disbursed while unpaid.` : "")
       );
       setProfileTarget(null);
-      router.refresh();
     });
   };
 
@@ -333,7 +333,6 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
         return;
       }
       showFeedback("success", `${emp.employeeName} is now marked as ${newPaid ? "PAID" : "UNPAID"}.`);
-      router.refresh();
     });
   };
 
@@ -462,58 +461,8 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
         </div>
       </Card>
 
-      {/* ─── Metric Cards Grid (counted in the database) ─── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
-        <div className="bg-card border border-border/80 border-l-4 border-l-blue-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-blue-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Active Cycle</span>
-            <div className="h-8 w-8 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0"><Calendar className="h-4 w-4" /></div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight whitespace-nowrap">{activePeriod?.code || "—"}</div>
-          <div className="mt-2 text-[11px] text-muted-foreground truncate">{activePeriod ? `${formatDate(activePeriod.startDate)}` : "No cycle"}</div>
-        </div>
-
-        <div className="bg-card border border-border/80 border-l-4 border-l-purple-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-purple-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Enrolled Records</span>
-            <div className="h-8 w-8 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0"><Users className="h-4 w-4" /></div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">{data.stats.totalEnrolled}</div>
-          <div className="mt-2 text-[11px] text-purple-700 dark:text-purple-300 font-medium flex items-center gap-1">
-            <Sparkles className="h-3 w-3" />
-            {data.stats.totalPaidWorkforce} configured as paid
-          </div>
-        </div>
-
-        <div className="bg-card border border-border/80 border-l-4 border-l-emerald-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-emerald-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Disbursed & Paid</span>
-            <div className="h-8 w-8 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0"><CheckCircle2 className="h-4 w-4" /></div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">{data.stats.paidCount}</div>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px]">
-            <span className="font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-500/15 px-2 py-0.5 rounded-md font-mono">{data.stats.completionRate}% Done</span>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border/80 border-l-4 border-l-amber-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-amber-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Pending Payouts</span>
-            <div className="h-8 w-8 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0"><Clock className="h-4 w-4" /></div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">{data.stats.draftCount + data.stats.finalizedCount}</div>
-          <div className="mt-2 text-[11px] text-muted-foreground">Awaiting bank disbursement</div>
-        </div>
-
-        <div className="col-span-2 sm:col-span-1 bg-card border border-border/80 border-l-4 border-l-zinc-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs hover:border-zinc-500/40 transition-all flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Unpaid Workforce</span>
-            <div className="h-8 w-8 rounded-xl bg-muted text-muted-foreground flex items-center justify-center shrink-0"><UserX className="h-4 w-4" /></div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-muted-foreground tracking-tight">{data.stats.totalUnpaidWorkforce}</div>
-          <div className="mt-2 text-[11px] text-muted-foreground">{data.stats.totalUnconfiguredWorkforce} payout {NOT_CONFIGURED.toLowerCase()}</div>
-        </div>
-      </div>
+      {/* ─── Cycle summary, rendered on the server (payroll-stats-cards.tsx) ─── */}
+      {statsSlot}
 
       {/* ─── Navigation Tabs ─── */}
       <div role="tablist" aria-label="Payroll sections" className="flex items-center gap-1.5 p-1 rounded-2xl bg-muted/60 border border-border/60 max-w-full overflow-x-auto">
@@ -1006,23 +955,28 @@ export function PayrollManagementClient({ initialData, initialTab }: PayrollMana
             </Button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
-              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Register Entries (filtered)</span>
-              <div className="text-2xl font-bold font-mono text-foreground mt-1">{recordsPage.total}</div>
-            </div>
-            <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
-              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Disbursed Total (cycle)</span>
-              <div className="text-2xl font-bold font-mono mt-1 text-emerald-600 dark:text-emerald-400">{formatCurrency(data.stats.totalDisbursedAmount)}</div>
-              <div className="text-[11px] text-muted-foreground mt-1">Excludes {data.stats.paidRecordsWithoutAmount} paid record(s) without a recorded amount</div>
-            </div>
-            <div className="p-4 rounded-xl bg-muted/40 border border-border/60">
-              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">Bank Upload Format</span>
-              <div className="text-sm font-bold text-foreground mt-1 flex items-center gap-2">
-                <ShieldCheck className="h-5 w-5 text-muted-foreground" />
-                Pending approval (OD-008)
-              </div>
-            </div>
+          <div className="space-y-3">
+            <StatGrid columns={2} label="Register export summary">
+              <StatCard
+                label="Register Entries (filtered)"
+                value={recordsPage.total}
+                icon={FileSpreadsheet}
+                tone="slate"
+              />
+              <StatCard
+                label="Disbursed Total (cycle)"
+                value={formatCurrency(data.stats.totalDisbursedAmount)}
+                icon={CreditCard}
+                tone="emerald"
+                hint={`Excludes ${data.stats.paidRecordsWithoutAmount} paid record(s) without a recorded amount`}
+              />
+            </StatGrid>
+            <p className="p-3.5 rounded-xl bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>
+                <span className="font-semibold text-foreground">Bank upload format:</span> Pending approval (OD-008)
+              </span>
+            </p>
           </div>
         </Card>
       )}

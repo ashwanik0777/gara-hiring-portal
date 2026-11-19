@@ -34,52 +34,50 @@ export function NavbarAuthActions({
   initialUser?: UserProfileData | null;
 }) {
   const router = useRouter();
-  const { data: session, isPending: sessionPending } = authClient.useSession();
+  const { data: session } = authClient.useSession();
+  const sessionUserId = session?.user?.id ?? null;
+  const sessionUserName = session?.user?.name ?? null;
+  const sessionUserEmail = session?.user?.email ?? null;
 
-  const [user, setUser] = useState<UserProfileData | null>(initialUser || null);
+  // Roles are not part of the Better Auth session, so a signed-in user the server did not
+  // render (static public pages) is resolved through /api/auth/me once per user id, not on
+  // every session refetch. Pages that pass `initialUser` never make that request.
+  const [resolved, setResolved] = useState<UserProfileData | null>(null);
+  const [signedOutUserId, setSignedOutUserId] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Sync session and fetch full roles from /api/auth/me if logged in
+  const needsLookup =
+    sessionUserId !== null && initialUser?.id !== sessionUserId && resolved?.id !== sessionUserId;
+
   useEffect(() => {
-    let isMounted = true;
+    if (!needsLookup || !sessionUserId) return;
+    const controller = new AbortController();
+    // Basic session data is the fallback when the endpoint is unreachable.
+    const fallback = (): UserProfileData => ({
+      id: sessionUserId,
+      name: sessionUserName || "User",
+      email: sessionUserEmail || "",
+      roles: [Role.CANDIDATE],
+    });
 
-    const timer = setTimeout(async () => {
-      if (session?.user) {
-        try {
-          const res = await fetch("/api/auth/me");
-          if (res.ok) {
-            const data = await res.json();
-            if (isMounted && data.user) {
-              setUser(data.user);
-              return;
-            }
-          }
-        } catch {
-          // Fallback: use basic session data if endpoint is unreachable
-        }
+    fetch("/api/auth/me", { signal: controller.signal })
+      .then(async (res) => {
+        const data: { user?: UserProfileData | null } | null = res.ok ? await res.json() : null;
+        setResolved(data?.user?.id === sessionUserId ? data.user : fallback());
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setResolved(fallback());
+      });
 
-        if (isMounted) {
-          setUser({
-            id: session.user.id,
-            name: session.user.name || "User",
-            email: session.user.email || "",
-            roles: [Role.CANDIDATE],
-          });
-        }
-      } else if (!sessionPending && !initialUser) {
-        if (isMounted) {
-          setUser(null);
-        }
-      }
-    }, 0);
+    return () => controller.abort();
+  }, [needsLookup, sessionUserId, sessionUserName, sessionUserEmail]);
 
-    return () => {
-      isMounted = false;
-      clearTimeout(timer);
-    };
-  }, [session, sessionPending, initialUser]);
+  // A session that is still loading (or unknown to the client) keeps the server's user.
+  const displayedUser =
+    sessionUserId !== null && resolved?.id === sessionUserId ? resolved : (initialUser ?? null);
+  const user = displayedUser && displayedUser.id !== signedOutUserId ? displayedUser : null;
 
   // Close dropdown on outside click or Escape key
   useEffect(() => {
@@ -112,7 +110,7 @@ export function NavbarAuthActions({
     setIsSigningOut(true);
     try {
       await authClient.signOut();
-      setUser(null);
+      setSignedOutUserId(user?.id ?? null);
       setIsOpen(false);
       router.replace("/");
       router.refresh();

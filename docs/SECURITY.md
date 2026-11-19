@@ -50,7 +50,7 @@ The GARA platform handles sensitive data across multiple user types. Key threat 
 | `/login` | 5 attempts / 15 min per IP | Lock account after N failures (N to be decided) |
 | `/register` | 3 registrations / hour per IP | Prevent mass account creation |
 | `/forgot-password` | 3 requests / hour per email | Prevent email flooding |
-| `/api/verify/*` | 30 requests / min per IP | Prevent enumeration |
+| `/api/certificates/verify`, `/verify/[code]` | 30 requests / min per IP | Prevent enumeration |
 | File upload endpoints | 10 uploads / min per user | Prevent storage abuse |
 | Chatbot endpoints | 20 requests / min per user | Prevent AI cost abuse |
 
@@ -71,8 +71,9 @@ The GARA platform handles sensitive data across multiple user types. Key threat 
 - **Sign-up:** a new email/password account must enter a 6-digit code emailed to it (`email-otp` plugin, `overrideDefaultEmailVerification`). `requireEmailVerification` blocks password sign-in until then; a sign-in attempt by an unverified account re-sends a code and shows the same verification step. Entering the code signs the person in (`autoSignInAfterVerification`).
 - **Every password sign-in:** after a correct password, the session is withheld and a fresh 6-digit code is emailed (`two-factor` plugin, OTP only). This applies to every account (`User.twoFactorEnabled` defaults to true and is forced on creation). There is no trusted-device option: requests carrying `trustDevice` are rejected. Google sign-in is not asked for a code; Google is never linked to an email/password account that has not verified its email (`requireLocalEmailVerified`).
 - **Codes:** 6 digits, valid 10 minutes, stored hashed (SHA-256), at most 5 attempts per code; 10 consecutive failures lock second-step sign-in for 15 minutes (`two_factors` lockout row per user). Codes are never logged and are sent directly by SMTP after the response, so responses do not reveal whether an account exists.
-- **Rate limits** (database-backed, production): sending a code 3 per 60 s and verifying 10 per 60 s per IP, on top of the per-code attempt counter.
-- **Disabled endpoints** (404): passwordless `/sign-in/email-otp`, email-OTP password reset and email change, `/email-otp/check-verification-otp`, `/two-factor/enable|disable`, TOTP and backup-code endpoints, and the link-based `/send-verification-email` and `/verify-email`. Password reset keeps the emailed single-use link.
+- **Rate limits** (database-backed, production): sending a code 3 per 60 s and verifying 10 per 60 s per IP, plus per email address 5 code requests and 15 checks per hour (whatever the IP), on top of the per-code attempt counter. Session reads (`/get-session`) are not counted.
+- **Verified accounts are never served by the email-verification endpoints** (fixed 2026-11-01): no code is created for an unknown or already verified address (the answer stays identical), and `/email-otp/verify-email` — which signs the person in — refuses already verified accounts, so guessing codes can never sign in to an account without its password.
+- **Disabled endpoints** (404): passwordless `/sign-in/email-otp`, email-OTP password reset and email change, `/email-otp/check-verification-otp`, `/two-factor/enable|disable`, TOTP and backup-code endpoints, the link-based `/send-verification-email` and `/verify-email`, and account changes the portal does not offer (`/update-user` — the name feeds certificates and the offer e-signature — `/change-email`, `/change-password`, `/delete-user`, `/update-session`, `/link-social`, `/unlink-account`, `/list-accounts`, `/account-info`, `/get-access-token`, `/refresh-token`). Password reset keeps the emailed single-use link.
 - **Dependency:** sign-in now requires working SMTP delivery for every role, administrators included.
 - **Test seam:** `E2E_FIXED_OTP` makes codes predictable only when `NODE_ENV` is not production, the app is not on Vercel, and `E2E_DATABASE_URL` equals `DATABASE_URL` and names a test database (`resolveFixedTestOtp` in `src/lib/auth/auth.ts`). It is never set in deployed environments.
 
@@ -262,6 +263,8 @@ Opening pages embed `JobPosting` JSON-LD. It is the only `dangerouslySetInnerHTM
 - Certificate generation, issuance, and revocation
 - Admin actions (role changes, settings changes)
 - Bulk operations
+- Staff viewing a registrant's personal details (`VIEW_REGISTRANT`, resource `USER`); the detail page is not shown if this entry cannot be written
+- Registration exports (`EXPORT_REPORT`, resource `REGISTRATIONS`; only whether a search was used is recorded, not the search text)
 
 ### Audit Record Structure
 

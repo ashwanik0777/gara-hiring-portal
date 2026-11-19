@@ -3,7 +3,8 @@
 import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FileText, ShieldCheck, X, Check, Info, PieChart, CalendarCheck } from "lucide-react";
+import { StatCard, StatCardSkeleton, StatGrid } from "@/components/ui/stat-card";
+import { FileText, ShieldCheck, X, Check, Info, PieChart, CalendarCheck, Clock } from "lucide-react";
 import { getEmployeeLeaveSummaryAction } from "../../actions";
 import type { EmployeeLeaveSummary, LeaveRequestItem } from "../../types";
 import { formatDisplayDate, LeaveStatusBadge, LeaveTypeBadge } from "../leave-ui";
@@ -13,6 +14,11 @@ interface LeaveDetailsDialogProps {
   canReview: boolean;
   onClose: () => void;
   onReview: (action: "APPROVED" | "REJECTED") => void;
+}
+
+/** Recorded calendar days as entered on the requests (no balance is derived, OD-007). */
+function formatDays(days: number): string {
+  return `${days} ${days === 1 ? "day" : "days"}`;
 }
 
 type SummaryState =
@@ -174,43 +180,45 @@ export function LeaveDetailsDialog({ target, canReview, onClose, onReview }: Lea
             </div>
 
             {summary.status === "loading" ? (
-              <div role="status" aria-live="polite" aria-busy="true" className="grid grid-cols-3 gap-2.5">
+              <div role="status" aria-live="polite" aria-busy="true">
                 <span className="sr-only">Loading recorded leave</span>
-                {[0, 1, 2].map((i) => (
-                  <Skeleton key={i} className="h-16 rounded-xl" />
-                ))}
+                <StatGrid columns={3} className="sm:grid-cols-3">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className={i === 2 ? "col-span-2 sm:col-span-1" : undefined}>
+                      <StatCardSkeleton size="compact" />
+                    </div>
+                  ))}
+                </StatGrid>
               </div>
             ) : summary.status === "unavailable" ? (
               <div role="status" className="p-3 rounded-xl bg-muted/20 border border-border/50 text-[11px] text-muted-foreground">
                 Recorded leave is unavailable right now. {summary.message}
               </div>
             ) : (
-              <div className="grid grid-cols-3 gap-2.5">
-                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-center">
-                  <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 uppercase font-mono block">
-                    Approved
-                  </span>
-                  <span className="text-lg sm:text-xl font-extrabold font-mono text-emerald-700 dark:text-emerald-300 block mt-0.5">
-                    {summary.data.approvedDays} <span className="text-xs font-normal">days</span>
-                  </span>
-                </div>
-                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-center">
-                  <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase font-mono block">
-                    Pending Approvals
-                  </span>
-                  <span className="text-lg sm:text-xl font-extrabold font-mono text-amber-700 dark:text-amber-300 block mt-0.5">
-                    {summary.data.pendingDays} <span className="text-xs font-normal">days</span>
-                  </span>
-                </div>
-                <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-center">
-                  <span className="text-[10px] font-bold text-blue-700 dark:text-blue-400 uppercase font-mono block">
-                    Total Applications
-                  </span>
-                  <span className="text-lg sm:text-xl font-extrabold font-mono text-blue-700 dark:text-blue-300 block mt-0.5">
-                    {summary.data.totalRequests}
-                  </span>
-                </div>
-              </div>
+              <StatGrid columns={3} label="Recorded leave" className="sm:grid-cols-3">
+                <StatCard
+                  label="Approved"
+                  value={formatDays(summary.data.approvedDays)}
+                  icon={CalendarCheck}
+                  tone="emerald"
+                  size="compact"
+                />
+                <StatCard
+                  label="Pending Approvals"
+                  value={formatDays(summary.data.pendingDays)}
+                  icon={Clock}
+                  tone="amber"
+                  size="compact"
+                />
+                <StatCard
+                  label="Total Applications"
+                  value={summary.data.totalRequests}
+                  icon={FileText}
+                  tone="blue"
+                  size="compact"
+                  className="col-span-2 sm:col-span-1"
+                />
+              </StatGrid>
             )}
 
             <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-2">

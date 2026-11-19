@@ -53,6 +53,7 @@ export function getStaffWorkspaces(roles: readonly Role[]): StaffWorkspace[] {
 
 export type StaffModuleKey =
   | "applications"
+  | "registrations"
   | "openings"
   | "interviews"
   | "evaluations"
@@ -76,6 +77,7 @@ export interface StaffModule {
 /** Staff modules in navigation order. */
 export const STAFF_MODULES: readonly StaffModule[] = [
   { key: "applications", label: "Applications", description: "Screen candidates and move stages", path: "/applications", iconName: "FileText" },
+  { key: "registrations", label: "Registrations", description: "Who signed up and what they entered", path: "/registrations", iconName: "UserPlus" },
   { key: "openings", label: "Job Openings", description: "Openings and application forms", path: "/openings", iconName: "Briefcase" },
   { key: "interviews", label: "Interviews", description: "Schedules, invites and feedback", path: "/interviews", iconName: "Calendar" },
   { key: "evaluations", label: "Evaluations", description: "7-working-day internship evaluations", path: "/evaluations", iconName: "Award" },
@@ -93,6 +95,9 @@ function holdsAnyRole(roles: readonly Role[], allowed: readonly Role[]): boolean
 
 const EVALUATION_STAFF_ROLES: readonly Role[] = [...EVALUATION_DECISION_ROLES, ...EVALUATION_SUPERVISOR_ROLES];
 
+/** Names and e-mails of registrants: HR (and ADMIN) only, as in the registrant list service. */
+const REGISTRANT_VIEWER_ROLES: readonly Role[] = [Role.HR];
+
 /**
  * Modules a staff member can actually open: the granular permission together with the role
  * each module's service requires, so navigation and dashboards never offer a page that
@@ -104,6 +109,7 @@ export function getStaffModuleAccess(
 ): Record<StaffModuleKey, boolean> {
   return {
     applications: permissions.canApplications && holdsAnyRole(roles, RECRUITMENT_STAFF_ROLES),
+    registrations: permissions.canReports && holdsAnyRole(roles, REGISTRANT_VIEWER_ROLES),
     openings: permissions.canOpenings,
     interviews: permissions.canInterviews && holdsAnyRole(roles, RECRUITMENT_STAFF_ROLES),
     evaluations: permissions.canEvaluations && holdsAnyRole(roles, EVALUATION_STAFF_ROLES),

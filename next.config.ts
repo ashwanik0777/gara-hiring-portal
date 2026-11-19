@@ -33,7 +33,17 @@ const securityHeaders = [
   },
   {
     key: "Permissions-Policy",
-    value: "camera=(), microphone=(), geolocation=()",
+    value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+  },
+  {
+    // Pages opened from other sites get no window handle back to this one (and vice versa).
+    key: "Cross-Origin-Opener-Policy",
+    value: "same-origin",
+  },
+  {
+    // Other sites cannot embed this app's responses (images, PDFs, JSON) in their pages.
+    key: "Cross-Origin-Resource-Policy",
+    value: "same-site",
   },
   {
     key: "Strict-Transport-Security",

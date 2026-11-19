@@ -40,6 +40,7 @@ import {
   PolicyBlockedError,
   ValidationError,
 } from "@/lib/errors";
+import { clampPageNumber } from "@/lib/pagination";
 
 const DEFAULT_CHECKPOINTS = [
   { day: 1, title: "Day 1: Orientation & Development Environment", desc: "Complete portal sign-in, repository setup, and local build verification." },
@@ -1022,7 +1023,7 @@ export class EvaluationService {
     const where: Prisma.InternshipEnrollmentWhereInput = query.status
       ? { ...scopeWhere, status: query.status }
       : scopeWhere;
-    const page = clampInt(query.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+    const page = clampPageNumber(query.page);
     const pageSize = clampInt(query.pageSize ?? ENROLLMENT_LIST_PAGE_SIZE, 1, ENROLLMENT_LIST_MAX_PAGE_SIZE);
 
     const [rows, total, grouped] = await Promise.all([

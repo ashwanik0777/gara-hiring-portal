@@ -55,8 +55,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 1,
-  workers: process.env.CI ? 2 : undefined,
-  timeout: 60_000,
+  // Journeys share one test database and run against `next dev`, so they run one at a time
+  // with room for the first compile of each route.
+  workers: e2eDatabaseUrl ? 1 : process.env.CI ? 2 : undefined,
+  timeout: e2eDatabaseUrl ? 120_000 : 60_000,
   expect: { timeout: 15_000 },
   reporter: process.env.CI
     ? [["list"], ["html", { open: "never", outputFolder: "tests/.e2e-report" }]]
@@ -66,7 +68,7 @@ export default defineConfig({
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     // The first request to a route compiles it in dev mode.
-    navigationTimeout: 45_000,
+    navigationTimeout: e2eDatabaseUrl ? 120_000 : 45_000,
     actionTimeout: 15_000,
   },
   projects: [

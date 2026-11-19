@@ -1,6 +1,5 @@
-import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { env } from "@/lib/env";
+import { hasCronSecret } from "@/lib/security/cron-auth";
 import { logger } from "@/lib/logging/logger";
 import { runAutomation } from "@/features/automation/run-automation";
 
@@ -8,19 +7,8 @@ export const maxDuration = 60;
 
 const NO_STORE = { "Cache-Control": "no-store, max-age=0" };
 
-function isAuthorized(req: NextRequest): boolean {
-  if (!env.CRON_SECRET) {
-    return false;
-  }
-  const provided = req.headers.get("authorization") ?? "";
-  const expected = `Bearer ${env.CRON_SECRET}`;
-  const providedBuf = Buffer.from(provided, "utf8");
-  const expectedBuf = Buffer.from(expected, "utf8");
-  return providedBuf.length === expectedBuf.length && crypto.timingSafeEqual(providedBuf, expectedBuf);
-}
-
 async function handle(req: NextRequest) {
-  if (!isAuthorized(req)) {
+  if (!hasCronSecret(req.headers.get("authorization"))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: NO_STORE });
   }
   try {

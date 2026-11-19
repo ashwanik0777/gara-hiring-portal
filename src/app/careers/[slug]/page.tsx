@@ -9,8 +9,6 @@ import { LinkPendingReporter } from "@/components/navigation/navigation-progress
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
-import { OpeningDetailSkeleton } from "@/components/feedback/page-skeletons";
 import {
   getPublicOpeningBySlug,
   type PublicOpening,
@@ -132,7 +130,17 @@ function OpeningContent({
         </h1>
 
         <div className="flex items-center gap-4 pt-2">
-          <Suspense fallback={<Skeleton className="h-11 w-44 rounded-xl" />}>
+          {/* Fallback: the same link without campaign parameters, so it works without JavaScript. */}
+          <Suspense
+            fallback={
+              <Link href={`/careers/${opening.slug}/apply`}>
+                <Button size="lg" className="gap-2">
+                  <FileText className="h-4 w-4" />
+                  Apply for this Role
+                </Button>
+              </Link>
+            }
+          >
             <ApplyLink slug={opening.slug} searchParams={searchParams} size="lg">
               <FileText className="h-4 w-4" />
               Apply for this Role
@@ -201,7 +209,13 @@ function OpeningContent({
             <p className="text-sm font-semibold text-foreground">Interested in this role?</p>
             <p className="text-xs text-muted-foreground">Sign in or create a candidate account to apply.</p>
           </div>
-          <Suspense fallback={<Skeleton className="h-10 w-28 rounded-xl" />}>
+          <Suspense
+            fallback={
+              <Link href={`/careers/${opening.slug}/apply`}>
+                <Button>Apply Now</Button>
+              </Link>
+            }
+          >
             <ApplyLink slug={opening.slug} searchParams={searchParams}>
               Apply Now
             </ApplyLink>
@@ -230,7 +244,6 @@ async function OpeningDetail({ params, searchParams }: OpeningDetailPageProps) {
 }
 
 export default function OpeningDetailPage({ params, searchParams }: OpeningDetailPageProps) {
-  // Navbar, back link and footer are the static shell; the opening streams into it.
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <Navbar />
@@ -247,9 +260,9 @@ export default function OpeningDetailPage({ params, searchParams }: OpeningDetai
             <LinkPendingReporter />
           </Link>
 
-          <Suspense fallback={<OpeningDetailSkeleton />}>
-            <OpeningDetail params={params} searchParams={searchParams} />
-          </Suspense>
+          {/* Rendered into the first HTML response (no JavaScript needed): link previews,
+              crawlers and slow phones see the full opening; the data comes from the cache. */}
+          <OpeningDetail params={params} searchParams={searchParams} />
         </div>
       </main>
 

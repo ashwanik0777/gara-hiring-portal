@@ -17,6 +17,11 @@ export const ADMIN_NAV_ITEMS: DashboardNavItem[] = [
     iconName: "FileText",
   },
   {
+    label: "Registrations",
+    href: "/admin/registrations",
+    iconName: "UserPlus",
+  },
+  {
     label: "Job Openings",
     href: "/admin/openings",
     iconName: "Briefcase",

@@ -20,6 +20,24 @@ interface FooterSocialLink {
   icon: React.ReactNode;
 }
 
+function subscribeToNothing(): () => void {
+  return () => {};
+}
+
+/**
+ * The current year, read in the browser only. Reading the clock while the server prerenders
+ * a page that also streams request-time content makes Next.js drop that page's static shell
+ * (the page would first paint as its loading skeleton), so the server renders nothing here.
+ */
+function CopyrightYear() {
+  const year = React.useSyncExternalStore(
+    subscribeToNothing,
+    () => new Date().getFullYear(),
+    () => null
+  );
+  return <>{year}</>;
+}
+
 export function Footer() {
   const socialLinks: FooterSocialLink[] = [
     {
@@ -327,7 +345,7 @@ export function Footer() {
           <div className="grid grid-cols-1 lg:grid-cols-3 items-center gap-4 text-xs text-muted-foreground">
             {/* Left: Copyright */}
             <div className="text-center lg:text-left justify-self-center lg:justify-self-start order-2 lg:order-1">
-              <span>© {new Date().getFullYear()} <strong>GARA INNOVATION</strong>. All rights reserved.</span>
+              <span>© <CopyrightYear /> <strong>GARA INNOVATION</strong>. All rights reserved.</span>
             </div>
 
             {/* Middle: Centered attribution with empty hollow heart, red border & soft pink shade */}

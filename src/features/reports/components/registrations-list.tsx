@@ -15,27 +15,64 @@ import {
 } from "../services/registration-analytics-service";
 import type { RegistrantListPage } from "../types";
 import {
-  REGISTRATION_PARAM_KEYS,
-  RegistrantListFiltersForm,
-  registrantListParams,
-  registrationsHref,
+  REGISTRANT_DIRECTORY_PARAM_KEYS,
+  registrantDirectoryHref,
+  registrantDirectoryParams,
+  type RegistrantDirectoryFormValues,
 } from "./registrations-filters";
 import { RegistrantsExportButton } from "./registrations-export-button";
 
+type SearchParamValue = string | string[] | undefined;
+
 const thClass = "py-2.5 px-3 text-left font-semibold";
 const pageLinkClass =
-  "inline-flex h-8 items-center justify-center rounded-xl border border-border bg-card px-3 text-xs font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary";
+  "inline-flex h-8 items-center justify-center rounded-xl border border-border bg-card px-3 text-xs font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-interface RegistrantListSectionProps {
+function firstValue(value: SearchParamValue): string {
+  return (Array.isArray(value) ? value[0] : value) ?? "";
+}
+
+/**
+ * Reads the Registrations page parameters: the raw values for the filter form and the
+ * service input (validated by the service).
+ */
+export function readRegistrantDirectoryParams(searchParams: Record<string, SearchParamValue>): {
+  input: RegistrantListFilterInput;
+  formValues: RegistrantDirectoryFormValues;
+} {
+  const keys = REGISTRANT_DIRECTORY_PARAM_KEYS;
+  const formValues: RegistrantDirectoryFormValues = {
+    search: firstValue(searchParams[keys.search]),
+    interest: firstValue(searchParams[keys.interest]),
+    emailVerified: firstValue(searchParams[keys.emailVerified]),
+    applied: firstValue(searchParams[keys.applied]),
+    startDate: firstValue(searchParams[keys.startDate]),
+    endDate: firstValue(searchParams[keys.endDate]),
+  };
+  return {
+    formValues,
+    input: {
+      search: formValues.search,
+      interest: formValues.interest as RegistrantListFilterInput["interest"],
+      emailVerified: formValues.emailVerified as RegistrantListFilterInput["emailVerified"],
+      applied: formValues.applied as RegistrantListFilterInput["applied"],
+      startDate: formValues.startDate,
+      endDate: formValues.endDate,
+      page: firstValue(searchParams[keys.page]),
+    },
+  };
+}
+
+interface RegistrantDirectoryListProps {
   user: AuthenticatedUser;
   params: RegistrantListFilterInput;
-  reportsPath: string;
-  preservedParams: Record<string, string>;
+  /** The Registrations page of the current console, e.g. "/admin/registrations". */
+  listPath: string;
 }
 
 function ListShell({ children, meta }: { children: ReactNode; meta?: ReactNode }) {
   return (
-    <Card className="rounded-2xl border border-border/80 p-5 shadow-2xs">
+    <Card className="rounded-2xl border border-border/80 p-4 shadow-2xs sm:p-5">
       <section aria-labelledby="registrants-heading" className="space-y-4">
         <div className="flex flex-col gap-2 border-b border-border/60 pb-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-center gap-2">
@@ -53,10 +90,11 @@ function ListShell({ children, meta }: { children: ReactNode; meta?: ReactNode }
 }
 
 /**
- * Registrant list (names and e-mails) for ADMIN and HR with canReports: one bounded page
- * with its total, filters and page travel in the URL, and an audited CSV export.
+ * Registrant table of the Registrations page (ADMIN, or HR with canReports): one bounded
+ * page, newest first, with its total, page travel in the URL, an audited CSV export and a
+ * link from every row to the person's detail page.
  */
-export async function RegistrantListSection({ user, params, reportsPath, preservedParams }: RegistrantListSectionProps) {
+export async function RegistrantDirectoryList({ user, params, listPath }: RegistrantDirectoryListProps) {
   let page: RegistrantListPage;
   try {
     page = await registrationAnalyticsService.listRegistrants(user, params);
@@ -66,7 +104,7 @@ export async function RegistrantListSection({ user, params, reportsPath, preserv
         <ListShell>
           <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
             {error.message}{" "}
-            <Link href={registrationsHref(reportsPath, preservedParams)} className="font-semibold underline">
+            <Link href={listPath} className="font-semibold underline">
               Clear the filters
             </Link>
           </div>
@@ -86,11 +124,15 @@ export async function RegistrantListSection({ user, params, reportsPath, preserv
     );
   }
 
-  const listParams = { ...preservedParams, ...registrantListParams(page.filters) };
+  const listParams = registrantDirectoryParams(page.filters);
   const pageHref = (target: number) =>
-    registrationsHref(reportsPath, { ...listParams, [REGISTRATION_PARAM_KEYS.page]: target > 1 ? String(target) : "" });
+    registrantDirectoryHref(listPath, {
+      ...listParams,
+      [REGISTRANT_DIRECTORY_PARAM_KEYS.page]: target > 1 ? String(target) : "",
+    });
   const firstRow = page.total === 0 ? 0 : (page.page - 1) * page.pageSize + 1;
   const lastRow = (page.page - 1) * page.pageSize + page.items.length;
+  const filtered = Object.values(listParams).some(Boolean);
 
   return (
     <ListShell
@@ -98,19 +140,20 @@ export async function RegistrantListSection({ user, params, reportsPath, preserv
         <div className="flex flex-col items-start gap-1 sm:items-end">
           <span className="font-mono text-xs text-muted-foreground">
             {page.total} {page.total === 1 ? "person" : "people"}
+            {filtered ? " match these filters" : ""}
           </span>
           {page.total > 0 && <RegistrantsExportButton filters={page.filters} />}
         </div>
       }
     >
-      <RegistrantListFiltersForm reportsPath={reportsPath} filters={page.filters} preservedParams={preservedParams} />
-
       {page.items.length === 0 ? (
         <EmptyState
-          title={page.total === 0 ? "Nobody matches these filters" : "No people on this page"}
+          title={page.total === 0 ? (filtered ? "Nobody matches these filters" : "Nobody has signed up yet") : "No people on this page"}
           description={
             page.total === 0
-              ? "Nobody who signed up in this period matches the filters. Widen the date range or clear the filters."
+              ? filtered
+                ? "Nobody who signed up matches the filters. Widen the date range or clear the filters."
+                : "People appear here as soon as they create a candidate account."
               : "This page is past the end of the list."
           }
           icon={<Users className="h-6 w-6 text-primary" />}
@@ -118,6 +161,10 @@ export async function RegistrantListSection({ user, params, reportsPath, preserv
             page.total > 0 ? (
               <Link href={pageHref(1)} className={pageLinkClass}>
                 Go to the first page
+              </Link>
+            ) : filtered ? (
+              <Link href={listPath} className={pageLinkClass}>
+                Clear the filters
               </Link>
             ) : undefined
           }
@@ -127,8 +174,8 @@ export async function RegistrantListSection({ user, params, reportsPath, preserv
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] border-collapse text-xs">
               <caption className="sr-only">
-                People who signed up, newest first: name, e-mail, what they signed up for, sign-up date, e-mail
-                verification, applications and current stage
+                People who signed up, newest first: name (opens their details), e-mail, what they signed up for, sign-up
+                date, e-mail verification, applications and current stage
               </caption>
               <thead>
                 <tr className="border-b border-border/80 bg-muted/40 text-[11px] text-muted-foreground">
@@ -143,9 +190,14 @@ export async function RegistrantListSection({ user, params, reportsPath, preserv
               </thead>
               <tbody className="divide-y divide-border/60">
                 {page.items.map((item) => (
-                  <tr key={item.id}>
-                    <th scope="row" className="max-w-[12rem] truncate py-2.5 px-3 text-left font-medium text-foreground">
-                      {item.name}
+                  <tr key={item.id} className="transition-colors hover:bg-muted/30">
+                    <th scope="row" className="max-w-[14rem] py-2.5 px-3 text-left font-medium">
+                      <Link
+                        href={`${listPath}/${encodeURIComponent(item.userId)}`}
+                        className="block truncate rounded-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {item.name}
+                      </Link>
                     </th>
                     <td className="max-w-[16rem] truncate py-2.5 px-3 text-muted-foreground">{item.email}</td>
                     <td className="py-2.5 px-3">{REGISTRATION_INTEREST_LABELS[item.interest]}</td>
@@ -197,28 +249,31 @@ export async function RegistrantListSection({ user, params, reportsPath, preserv
 }
 
 /** Suspense fallback mirroring the list card. */
-export function RegistrantListSkeleton() {
+export function RegistrantDirectoryListSkeleton() {
   return (
     <div
       role="status"
       aria-live="polite"
       aria-busy="true"
-      className="space-y-4 rounded-2xl border border-border/80 bg-card p-5 shadow-2xs"
+      className="space-y-4 rounded-2xl border border-border/80 bg-card p-4 shadow-2xs sm:p-5"
     >
       <span className="sr-only">Loading the registrant list</span>
-      <div className="flex items-center justify-between" aria-hidden="true">
+      <div className="flex items-center justify-between border-b border-border/60 pb-3" aria-hidden="true">
         <Skeleton className="h-4 w-44" />
         <Skeleton className="h-8 w-28 rounded-xl" />
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-hidden="true">
-        {Array.from({ length: 4 }, (_, i) => (
-          <Skeleton key={i} className="h-9 rounded-xl" />
+      <div className="space-y-2" aria-hidden="true">
+        <Skeleton className="h-8 w-full" />
+        {Array.from({ length: 8 }, (_, i) => (
+          <Skeleton key={i} className="h-9 w-full" />
         ))}
       </div>
-      <div className="space-y-2" aria-hidden="true">
-        {Array.from({ length: 6 }, (_, i) => (
-          <Skeleton key={i} className="h-8 w-full" />
-        ))}
+      <div className="flex items-center justify-between" aria-hidden="true">
+        <Skeleton className="h-3 w-48" />
+        <div className="flex gap-2">
+          <Skeleton className="h-8 w-20 rounded-xl" />
+          <Skeleton className="h-8 w-16 rounded-xl" />
+        </div>
       </div>
     </div>
   );

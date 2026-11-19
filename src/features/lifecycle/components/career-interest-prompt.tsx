@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Compass } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { CareerInterest } from "@/types/enums";
@@ -10,10 +9,10 @@ import { CareerInterestPicker } from "./career-interest-picker";
 
 /**
  * Shown on the candidate dashboard when no career interest is recorded yet (for example
- * after a Google sign-up). Saving refreshes the page so recommendations follow the choice.
+ * after a Google sign-up). The save action revalidates the dashboard, so its response
+ * re-renders the page and recommendations follow the choice.
  */
 export function CareerInterestPrompt() {
-  const router = useRouter();
   const [value, setValue] = useState<CareerInterest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -31,7 +30,6 @@ export function CareerInterestPrompt() {
         setError(result.error);
         return;
       }
-      router.refresh();
     });
   };
 

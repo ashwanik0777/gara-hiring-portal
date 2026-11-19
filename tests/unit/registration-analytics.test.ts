@@ -6,8 +6,9 @@ import type { AuthenticatedUser } from "@/lib/auth/guards";
  * Round 6: registration analytics (candidate sign-ups, separate from applications).
  * Pins (1) that staff accounts are never counted, (2) the interest buckets including
  * "not chosen", (3) the verified / applied splits and conversion maths, (4) canReports
- * gating with names and e-mails limited to ADMIN and HR, (5) bounded pagination, (6) the
- * audited, injection-guarded CSV export and (7) the admin card's honest "unavailable".
+ * gating with names and e-mails limited to ADMIN and HR, (5) bounded pagination with an
+ * open-ended date range (round 7: the Registrations page lists everyone by default), (6)
+ * the audited, injection-guarded CSV export and (7) the admin card's honest "unavailable".
  */
 
 const { db, state } = vi.hoisted(() => ({
@@ -24,7 +25,9 @@ const { db, state } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@/lib/db", () => ({ prisma: db }));
+vi.mock("@/lib/db", async () => ({
+  prisma: (await import("./helpers/session-access")).withSessionAccessQuery(db),
+}));
 vi.mock("next/headers", () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock("@/lib/auth/auth", () => ({
   auth: { api: { getSession: vi.fn(async () => state.session) } },
@@ -99,6 +102,7 @@ function mockAggregates() {
 function registrantRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "profile-1",
+    userId: "user-1",
     careerInterest: "INTERNSHIP",
     user: {
       name: "Asha Rao",
@@ -295,7 +299,7 @@ describe("Registration analytics access (canReports; names and e-mails for ADMIN
     expect(report.canViewRegistrants).toBe(false);
     expect(report.totals.registrations).toBe(10);
 
-    await expect(registrationAnalyticsService.listRegistrants(manager, {}, NOW)).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(registrationAnalyticsService.listRegistrants(manager, {})).rejects.toBeInstanceOf(ForbiddenError);
     await expect(registrationAnalyticsService.exportRegistrantsCsv(manager, {}, NOW)).rejects.toBeInstanceOf(
       ForbiddenError
     );
@@ -307,10 +311,10 @@ describe("Registration analytics access (canReports; names and e-mails for ADMIN
     mockAggregates();
     expect((await registrationAnalyticsService.getRegistrationAnalytics(admin, {}, NOW)).canViewRegistrants).toBe(true);
     expect((await registrationAnalyticsService.getRegistrationAnalytics(hr, {}, NOW)).canViewRegistrants).toBe(true);
-    await expect(registrationAnalyticsService.listRegistrants(hr, {}, NOW)).resolves.toMatchObject({ total: 0 });
+    await expect(registrationAnalyticsService.listRegistrants(hr, {})).resolves.toMatchObject({ total: 0 });
 
     db.subAdminPermission.findUnique.mockResolvedValue({ userId: hr.id, canReports: false });
-    await expect(registrationAnalyticsService.listRegistrants(hr, {}, NOW)).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(registrationAnalyticsService.listRegistrants(hr, {})).rejects.toBeInstanceOf(ForbiddenError);
   });
 });
 
@@ -319,11 +323,14 @@ describe("Registrant list is one bounded page", () => {
     db.candidateProfile.findMany.mockResolvedValue([registrantRow()]);
     db.candidateProfile.count.mockResolvedValue(120);
 
-    const page = await registrationAnalyticsService.listRegistrants(
-      admin,
-      { page: "3", pageSize: 500, interest: "INTERNSHIP", emailVerified: "yes", applied: "no", search: "  asha " },
-      NOW
-    );
+    const page = await registrationAnalyticsService.listRegistrants(admin, {
+      page: "3",
+      pageSize: 500,
+      interest: "INTERNSHIP",
+      emailVerified: "yes",
+      applied: "no",
+      search: "  asha ",
+    });
 
     const args = db.candidateProfile.findMany.mock.calls[0][0];
     expect(args.take).toBe(REGISTRANT_MAX_PAGE_SIZE);
@@ -342,6 +349,8 @@ describe("Registrant list is one bounded page", () => {
 
     expect(page).toMatchObject({ total: 120, page: 3, pageSize: 50, pageCount: 3 });
     expect(page.items[0]).toMatchObject({
+      id: "profile-1",
+      userId: "user-1",
       name: "Asha Rao",
       email: "asha@example.com",
       interest: "INTERNSHIP",
@@ -354,19 +363,45 @@ describe("Registrant list is one bounded page", () => {
   });
 
   it("never goes below page 1, defaults to 25 rows and rejects a malformed page", async () => {
-    await registrationAnalyticsService.listRegistrants(admin, { page: "0" }, NOW);
+    await registrationAnalyticsService.listRegistrants(admin, { page: "0" });
     expect(db.candidateProfile.findMany.mock.calls[0][0]).toMatchObject({ skip: 0, take: 25 });
 
-    await expect(registrationAnalyticsService.listRegistrants(admin, { page: "-2" }, NOW)).rejects.toBeInstanceOf(
+    await expect(registrationAnalyticsService.listRegistrants(admin, { page: "-2" })).rejects.toBeInstanceOf(
       ValidationError
     );
     await expect(
-      registrationAnalyticsService.listRegistrants(admin, { search: "x".repeat(101) }, NOW)
+      registrationAnalyticsService.listRegistrants(admin, { search: "x".repeat(101) })
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
+  it("lists every registration without dates and bounds only the sides that are set", async () => {
+    await registrationAnalyticsService.listRegistrants(admin, {});
+    expect(db.candidateProfile.findMany.mock.calls[0][0].where.user).not.toHaveProperty("createdAt");
+
+    await registrationAnalyticsService.listRegistrants(admin, { startDate: "2026-10-01" });
+    expect(db.candidateProfile.findMany.mock.calls[1][0].where.user.createdAt).toEqual({
+      gte: new Date("2026-09-30T18:30:00.000Z"),
+    });
+
+    await registrationAnalyticsService.listRegistrants(admin, { endDate: "2026-10-01" });
+    expect(db.candidateProfile.findMany.mock.calls[2][0].where.user.createdAt).toEqual({
+      lt: new Date("2026-10-01T18:30:00.000Z"),
+    });
+
+    // The list is paginated, so a range longer than the analytics limit is fine.
+    const page = await registrationAnalyticsService.listRegistrants(admin, { startDate: "2020-01-01", endDate: "2026-10-26" });
+    expect(page.filters).toMatchObject({ startDate: "2020-01-01", endDate: "2026-10-26" });
+
+    await expect(
+      registrationAnalyticsService.listRegistrants(admin, { startDate: "2026-10-10", endDate: "2026-10-01" })
+    ).rejects.toThrow(/on or before/);
+    await expect(registrationAnalyticsService.listRegistrants(admin, { endDate: "2026-13-01" })).rejects.toBeInstanceOf(
+      ValidationError
+    );
+  });
+
   it("filters not chosen and applied with the non-draft rule", async () => {
-    await registrationAnalyticsService.listRegistrants(admin, { interest: "NOT_CHOSEN", applied: "yes" }, NOW);
+    await registrationAnalyticsService.listRegistrants(admin, { interest: "NOT_CHOSEN", applied: "yes" });
     const where = db.candidateProfile.findMany.mock.calls[0][0].where;
     expect(where.careerInterest).toBeNull();
     expect(where.applications).toEqual({ some: { status: { not: "DRAFT" } } });
@@ -391,7 +426,7 @@ describe("Registrant list is one bounded page", () => {
       }),
       registrantRow({ id: "p-none", careerInterest: null }),
     ]);
-    const page = await registrationAnalyticsService.listRegistrants(admin, {}, NOW);
+    const page = await registrationAnalyticsService.listRegistrants(admin, {});
     expect(page.items.map((item) => item.stage)).toEqual(["INTERN", "EVALUATION", "ALUMNI", "CANDIDATE"]);
     expect(page.items[3].interest).toBe("NOT_CHOSEN");
   });
@@ -401,6 +436,7 @@ describe("Registrant CSV export", () => {
   it("escapes every cell and neutralises formula injection", () => {
     const item: RegistrantListItem = {
       id: "p",
+      userId: "u",
       name: '=HYPERLINK("http://evil")',
       email: "a,b@example.com",
       interest: "BOTH",
@@ -414,7 +450,7 @@ describe("Registrant CSV export", () => {
     const csv = buildRegistrantCsv([item]);
     const [header, row] = csv.split("\n");
     expect(header).toBe("Name,Email,Signed up for,Signed up,Email verified,Applications,Current stage");
-    expect(row).toBe(`"'=HYPERLINK(""http://evil"")","a,b@example.com",Both,2026-10-01,No,0,Candidate`);
+    expect(row).toBe(`"'=HYPERLINK(""http://evil"")","a,b@example.com","Both","2026-10-01","No","0","Candidate"`);
   });
 
   it("is audited as EXPORT_REPORT / REGISTRATIONS without logging the search text", async () => {
@@ -492,6 +528,21 @@ describe("Admin overview registrations card", () => {
     expect(db.$queryRaw).toHaveBeenCalledTimes(1);
     const sql = sqlOfCall(db.$queryRaw.mock.calls[0]);
     expect(sql.sql).not.toContain(`u."createdAt" <`);
+  });
+
+  it("gives the Registrations page the verification split and the first day counted as new", async () => {
+    mockAggregates();
+    const summary = await registrationAnalyticsService.getRegistrationSummary(hr, NOW);
+    expect(summary).toEqual({
+      total: 10,
+      byInterest: { JOB: 4, INTERNSHIP: 5, BOTH: 0, NOT_CHOSEN: 1 },
+      emailVerified: 8,
+      emailNotVerified: 2,
+      notApplied: 7,
+      newLastSevenDays: 4,
+      // Today (2026-10-26) and the 6 days before, business time.
+      recentSinceDate: "2026-10-20",
+    });
   });
 
   it("reads unavailable (not zero) when the query fails", async () => {

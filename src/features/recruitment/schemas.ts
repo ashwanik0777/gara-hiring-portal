@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ApplicationStatus, InterviewRecommendation } from "@prisma/client";
+import { ApplicationStatus, InterviewRecommendation } from "@/types/enums";
 
 /**
  * Valid Application Lifecycle State Machine.
@@ -127,6 +127,14 @@ export const AssignRecruiterSchema = z.object({
   recruiterId: z.string().uuid("Invalid recruiter ID").nullable(),
 });
 
+/** Optional meeting link of an interview or of offered times: https only. */
+const HttpsMeetingLinkSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .url("Please enter a valid meeting URL")
+  .refine((u) => u.startsWith("https://"), { message: "Meeting link must start with https://" });
+
 export const ScheduleInterviewSchema = z.object({
   applicationId: z.string().uuid("Invalid application ID"),
   roundNumber: z.coerce.number().int().min(1).max(10).default(1),
@@ -135,7 +143,7 @@ export const ScheduleInterviewSchema = z.object({
     message: "Valid ISO date/time string is required",
   }),
   durationMinutes: z.coerce.number().int().min(15).max(180).default(45),
-  meetingLink: z.string().max(2048).url("Please enter a valid meeting URL").refine((u) => u.startsWith("https://") || u.startsWith("http://"), { message: "Meeting link must start with http:// or https://" }).or(z.literal("")).optional().nullable(),
+  meetingLink: HttpsMeetingLinkSchema.or(z.literal("")).optional().nullable(),
   interviewerId: z.string().uuid("Invalid interviewer ID").optional().nullable(),
 });
 
@@ -192,14 +200,6 @@ export const MIN_BOOKING_SLOT_GAP_MINUTES = 15;
 const IsoDateTimeSchema = z.string().max(64).refine((val) => !isNaN(Date.parse(val)), {
   message: "Each time option must be a valid date and time",
 });
-
-/** Optional meeting link for offered times: https only. */
-const HttpsMeetingLinkSchema = z
-  .string()
-  .trim()
-  .max(2048)
-  .url("Please enter a valid meeting URL")
-  .refine((u) => u.startsWith("https://"), { message: "Meeting link must start with https://" });
 
 export const CreateBookingRequestSchema = z.object({
   applicationId: z.string().uuid("Invalid application ID"),

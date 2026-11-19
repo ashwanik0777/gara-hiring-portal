@@ -19,8 +19,7 @@ const PAGES: MobilePage[] = [
   { path: "/forgot-password", ready: null },
   { path: "/help", ready: /Help Center/ },
   { path: "/verify", ready: "Verify Certificate" },
-  // Without a database the careers list fails and the error boundary renders instead.
-  { path: "/careers", ready: hasE2EDatabase ? "Current Openings & Internship Cohorts" : null },
+  { path: "/careers", ready: "Current Openings & Internship Cohorts" },
   {
     path: `/careers/${E2E_OPENINGS.internship.slug}`,
     ready: E2E_OPENINGS.internship.title,

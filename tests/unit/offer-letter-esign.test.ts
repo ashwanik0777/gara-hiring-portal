@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { db, state, requestHeaders } = vi.hoisted(() => {
+const { db, state, requestHeaders, mockEnforce } = vi.hoisted(() => {
   const state = {
     session: null as null | { user: { id: string; email: string; name: string } },
     users: {} as Record<string, { roles: string[] }>,
@@ -16,16 +16,22 @@ const { db, state, requestHeaders } = vi.hoisted(() => {
     auditLog: { create: vi.fn() },
     $transaction: vi.fn(),
   };
-  return { db, state, requestHeaders };
+  return { db, state, requestHeaders, mockEnforce: vi.fn() };
 });
 
-vi.mock("@/lib/db", () => ({ prisma: db }));
+vi.mock("@/lib/db", async () => ({
+  prisma: (await import("./helpers/session-access")).withSessionAccessQuery(db),
+}));
 vi.mock("next/headers", () => ({ headers: vi.fn(async () => requestHeaders.value) }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth/auth", () => ({
   auth: { api: { getSession: vi.fn(async () => state.session) } },
 }));
 vi.mock("@/infrastructure/email/outbox-dispatch", () => ({ scheduleOutboxFlush: vi.fn() }));
+vi.mock("@/lib/security/rate-limit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/security/rate-limit")>()),
+  defaultRateLimiter: { enforce: (...args: unknown[]) => mockEnforce(...args) },
+}));
 
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -53,6 +59,7 @@ import {
   renderOfferAcceptedConfirmationEmail,
 } from "@/infrastructure/email/templates/offer-letter-emails";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
+import { RateLimitError } from "@/lib/errors";
 
 const HR_ID = "11111111-1111-4111-8111-111111111111";
 const ADMIN_ID = "22222222-2222-4222-8222-222222222222";
@@ -432,6 +439,37 @@ describe("GET /api/offers/[id]/letter authorization", () => {
     expect((await download()).status).toBe(404);
     expect((await download("not-a-uuid")).status).toBe(404);
     expect(db.jobOffer.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("rate-limits PDF generation per user and answers 429 with Retry-After", async () => {
+    signInAs(CANDIDATE_ID, [Role.CANDIDATE]);
+    db.jobOffer.findUnique.mockResolvedValue(offerRow(OfferStatus.EXTENDED));
+
+    expect((await download()).status).toBe(200);
+    expect(mockEnforce).toHaveBeenCalledWith(
+      CANDIDATE_ID,
+      expect.objectContaining({ scope: "pdf:offer_letter", maxRequests: 20, windowSeconds: 60 })
+    );
+
+    mockEnforce.mockRejectedValueOnce(new RateLimitError(30));
+    db.jobOffer.findUnique.mockClear();
+    const limited = await download();
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBe("30");
+    expect(limited.headers.get("Cache-Control")).toContain("no-store");
+    expect(await limited.json()).toEqual({
+      error: "Too many downloads. Please wait a minute and try again.",
+      code: "RATE_LIMIT_EXCEEDED",
+    });
+    expect(db.jobOffer.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("never spends the rate limit on a malformed id, and errors are no-store", async () => {
+    signInAs(HR_ID, [Role.HR]);
+    const res = await download("not-a-uuid");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Cache-Control")).toContain("no-store");
+    expect(mockEnforce).not.toHaveBeenCalled();
   });
 
   it("hides unexpected failures behind a friendly message", async () => {

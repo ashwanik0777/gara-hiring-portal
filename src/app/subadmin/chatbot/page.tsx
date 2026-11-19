@@ -4,12 +4,10 @@ import { getCurrentUser } from "@/lib/auth/guards";
 import { STAFF_ROLES } from "@/lib/auth/permissions";
 import { chatbotService } from "@/features/chatbot/services/chatbot-service";
 import { PortalChatbotWidget } from "@/features/chatbot/components/portal-chatbot-widget";
+import { ChatbotOverviewStats } from "@/features/chatbot/components/chatbot-overview-stats";
 import { Badge } from "@/components/ui/badge";
 import {
-  Bot,
   BookOpen,
-  Sparkles,
-  Lock,
 } from "lucide-react";
 
 export const instant = false;
@@ -34,89 +32,7 @@ export default async function SubAdminChatbotPage() {
 
   return (
     <div className="w-full space-y-6">
-      {/* ─── KPI Metric Overview Cards (Clean & Subtitle-Free) ─── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
-        {/* Card 1: AI Assistant Status */}
-        <div className="bg-card border border-border/80 border-l-4 border-l-blue-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Assistant Engine
-            </span>
-            <div className="flex items-center gap-1.5 mt-1.5">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-base sm:text-lg font-bold text-foreground">Rule-Gated AI Core</span>
-            </div>
-            <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-              <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20">
-                Active & Ready
-              </Badge>
-            </div>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-            <Bot className="h-5 w-5" />
-          </div>
-        </div>
-
-        {/* Card 2: Knowledge Base Version */}
-        <div className="bg-card border border-border/80 border-l-4 border-l-emerald-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Approved FAQs
-            </span>
-            <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight mt-1">
-              {faqCatalog.entries.length}
-            </div>
-            <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-              <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20">
-                Catalog {faqCatalog.version}
-              </Badge>
-            </div>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <BookOpen className="h-5 w-5" />
-          </div>
-        </div>
-
-        {/* Card 3: Governance Policy */}
-        <div className="bg-card border border-border/80 border-l-4 border-l-violet-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Governance Policy
-            </span>
-            <div className="text-base sm:text-lg font-bold font-mono text-foreground mt-1.5">
-              OD-012 Compliant
-            </div>
-            <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-              <Badge variant="outline" className="text-[10px] bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/20">
-                Zero-PII Safe
-              </Badge>
-            </div>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-violet-500/15 text-violet-600 dark:text-violet-400 flex items-center justify-center shrink-0">
-            <Lock className="h-5 w-5" />
-          </div>
-        </div>
-
-        {/* Card 4: Response Latency */}
-        <div className="bg-card border border-border/80 border-l-4 border-l-amber-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Query Latency
-            </span>
-            <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight mt-1">
-              &lt; 50ms
-            </div>
-            <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20">
-                Local Memory Index
-              </Badge>
-            </div>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
-            <Sparkles className="h-5 w-5" />
-          </div>
-        </div>
-      </div>
+      <ChatbotOverviewStats />
 
       {/* ─── Main Grid: Single Clean Chatbot (No Wrapper Cover) + Knowledge Base ─── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

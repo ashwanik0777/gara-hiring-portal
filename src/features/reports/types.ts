@@ -352,8 +352,16 @@ export interface RegistrationAnalyticsReport {
   canViewRegistrants: boolean;
 }
 
-/** Filters of the registrant list (the tab filters plus list-only narrowing). */
-export interface RegistrantListFilters extends RegistrationFilters {
+/**
+ * Filters of the registrant list on the Registrations page. Unlike the analytics tab the
+ * date range is open-ended: no dates means every registration (the list is paginated).
+ */
+export interface RegistrantListFilters {
+  /** Inclusive first sign-up day (YYYY-MM-DD, business time zone); null = no lower bound. */
+  startDate: string | null;
+  /** Inclusive last sign-up day (YYYY-MM-DD, business time zone); null = no upper bound. */
+  endDate: string | null;
+  interest: RegistrationInterest | null;
   emailVerified: boolean | null;
   applied: boolean | null;
   search: string | null;
@@ -362,6 +370,8 @@ export interface RegistrantListFilters extends RegistrationFilters {
 export interface RegistrantListItem {
   /** CandidateProfile id. */
   id: string;
+  /** User id (the Registrations detail page is addressed by it). */
+  userId: string;
   name: string;
   email: string;
   interest: RegistrationInterest;
@@ -391,4 +401,69 @@ export interface RegistrantCsvExportResult {
   rowCount: number;
   truncated: boolean;
   generatedAt: Date;
+}
+
+/** All-time sign-up figures shown at the top of the Registrations page. */
+export interface RegistrationDirectorySummary {
+  total: number;
+  byInterest: Record<RegistrationInterest, number>;
+  emailVerified: number;
+  emailNotVerified: number;
+  notApplied: number;
+  newLastSevenDays: number;
+  /** First business day counted as "new" (YYYY-MM-DD), for the filtered-list link. */
+  recentSinceDate: string;
+}
+
+/** A profile link entered by the registrant; `href` is set only for a safe https URL. */
+export interface RegistrantProfileLink {
+  /** The value as entered (shown as text when it is not a safe https link). */
+  value: string | null;
+  href: string | null;
+}
+
+export interface RegistrantApplicationItem {
+  id: string;
+  referenceCode: string;
+  openingTitle: string;
+  openingType: string;
+  status: string;
+  statusLabel: string;
+  submittedAt: Date;
+  /** Submission day in the business time zone (YYYY-MM-DD). */
+  submittedDate: string;
+}
+
+/**
+ * Everything a registrant entered at sign-up and in their candidate profile, for ADMIN and
+ * HR with canReports. Never contains passwords, sessions, tokens, OTP data or IP addresses.
+ */
+export interface RegistrantDetail {
+  userId: string;
+  name: string;
+  email: string;
+  emailVerified: boolean;
+  signedUpAt: Date;
+  /** Sign-up day in the business time zone (YYYY-MM-DD). */
+  signedUpDate: string;
+  /** How the account was created (its first sign-in method), e.g. "Email and password". */
+  signUpMethod: string | null;
+  /** Every sign-in method linked to the account. */
+  signInMethods: string[];
+  interest: RegistrationInterest;
+  phone: string | null;
+  location: string | null;
+  currentOrganization: string | null;
+  highestEducation: string | null;
+  linkedin: RegistrantProfileLink;
+  github: RegistrantProfileLink;
+  portfolio: RegistrantProfileLink;
+  profileCompleteness: { completed: number; total: number };
+  profileUpdatedAt: Date;
+  stage: LifecycleStage;
+  stageLabel: string;
+  /** Newest first; at most REGISTRANT_DETAIL_APPLICATIONS rows. */
+  applications: RegistrantApplicationItem[];
+  /** Non-draft applications in total. */
+  applicationCount: number;
 }

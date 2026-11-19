@@ -100,6 +100,7 @@ export async function AnalyticsDashboardSection({
               user={user}
               params={readRegistrationParams(searchParams)}
               reportsPath={reportsPath}
+              registrationsPath={`${basePath}/registrations`}
               preservedParams={preservedParams}
             />
           </Suspense>

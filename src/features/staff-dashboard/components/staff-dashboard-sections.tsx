@@ -14,8 +14,11 @@ import {
   CreditCard,
   FileText,
   GraduationCap,
+  Hourglass,
+  PlayCircle,
   Users,
   UserCheck,
+  UserPlus,
   Video,
   type LucideIcon,
 } from "lucide-react";
@@ -24,6 +27,7 @@ import { ForbiddenError } from "@/lib/errors";
 import { logger } from "@/lib/logging/logger";
 import { BUSINESS_TIME_ZONE, businessDateKey } from "@/lib/time/business-time";
 import { Badge } from "@/components/ui/badge";
+import { StatCard, StatGrid } from "@/components/ui/stat-card";
 import { ListCardSkeleton } from "@/components/feedback/page-skeletons";
 import { addDaysToKey } from "@/features/automation/schedule";
 import {
@@ -292,19 +296,18 @@ export async function PipelineSection({ user, base }: { user: AuthenticatedUser;
         </Link>
       }
     >
-      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {/* Each card opens the queue filtered to its stage. */}
+      <StatGrid columns={4} label="Active applications by stage" className="gap-2 sm:gap-2.5">
         {stages.map((stage) => (
-          <li key={stage.status}>
-            <Link
-              href={`${base}/applications?status=${stage.status}`}
-              className="flex h-full flex-col rounded-xl border border-border/60 bg-muted/30 p-3 transition-colors hover:border-primary/50 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <span className="text-lg font-bold tabular-nums text-foreground">{stage.count}</span>
-              <span className="text-[11px] leading-tight text-muted-foreground">{stage.label}</span>
-            </Link>
-          </li>
+          <StatCard
+            key={stage.status}
+            label={stage.label}
+            value={stage.count}
+            size="compact"
+            href={`${base}/applications?status=${stage.status}`}
+          />
         ))}
-      </ul>
+      </StatGrid>
     </SectionCard>
   );
 }
@@ -320,11 +323,6 @@ export async function EvaluationCohortSection({ user, base }: { user: Authentica
   if (result.status === "failed") return <SectionFailed id={id} title={title} icon={icon} />;
 
   const counts = result.data;
-  const tiles: Array<[string, number]> = [
-    ["Waiting to start", counts.waitingToStart],
-    ["In progress", counts.inProgress],
-    ["Under review", counts.underReview],
-  ];
   return (
     <SectionCard
       id={id}
@@ -336,14 +334,11 @@ export async function EvaluationCohortSection({ user, base }: { user: Authentica
         </Link>
       }
     >
-      <dl className="grid grid-cols-3 gap-2">
-        {tiles.map(([label, value]) => (
-          <div key={label} className="rounded-xl border border-border/60 bg-muted/30 p-3">
-            <dt className="text-[11px] leading-tight text-muted-foreground">{label}</dt>
-            <dd className="mt-0.5 text-lg font-bold tabular-nums text-foreground">{value}</dd>
-          </div>
-        ))}
-      </dl>
+      <StatGrid columns={3} label="Internship evaluations by status" className="gap-2 sm:gap-2.5">
+        <StatCard label="Waiting to start" value={counts.waitingToStart} icon={Hourglass} size="compact" />
+        <StatCard label="In progress" value={counts.inProgress} icon={PlayCircle} size="compact" />
+        <StatCard label="Under review" value={counts.underReview} icon={CheckCircle2} size="compact" />
+      </StatGrid>
     </SectionCard>
   );
 }
@@ -558,6 +553,7 @@ export async function MyWorkdaySection({ user }: { user: AuthenticatedUser }) {
 
 const MODULE_ICONS: Record<StaffModuleKey, LucideIcon> = {
   applications: FileText,
+  registrations: UserPlus,
   openings: Briefcase,
   interviews: Calendar,
   evaluations: Award,

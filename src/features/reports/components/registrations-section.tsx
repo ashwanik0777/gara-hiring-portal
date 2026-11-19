@@ -1,20 +1,26 @@
-import { Suspense, type ReactNode } from "react";
-import { CheckCircle2, Clock, MailCheck, UserCheck, UserPlus, Users } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, CheckCircle2, Clock, MailCheck, UserCheck, UserPlus, Users } from "lucide-react";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logging/logger";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatCard, StatGrid, StatGridSkeleton } from "@/components/ui/stat-card";
 import { BUSINESS_TIME_ZONE } from "@/lib/time/business-time";
 import {
   parseRegistrationFilters,
   registrationAnalyticsService,
-  type RegistrantListFilterInput,
+  type RegistrationFilterInput,
 } from "../services/registration-analytics-service";
 import type { RegistrationAnalyticsReport, RegistrationFilters } from "../types";
-import { REGISTRATION_PARAM_KEYS, RegistrationFiltersForm } from "./registrations-filters";
+import {
+  REGISTRANT_DIRECTORY_PARAM_KEYS,
+  REGISTRATION_PARAM_KEYS,
+  RegistrationFiltersForm,
+  registrantDirectoryHref,
+} from "./registrations-filters";
 import { RegistrationInterestBreakdown, RegistrationTrendChart } from "./registrations-charts";
-import { RegistrantListSection, RegistrantListSkeleton } from "./registrations-list";
+import { reportToolbarClass } from "./report-toolbar";
 
 type SearchParamValue = string | string[] | undefined;
 
@@ -23,56 +29,34 @@ function firstValue(value: SearchParamValue): string {
 }
 
 /** Reads the registrations-tab parameters from the page search params (validated by the service). */
-export function readRegistrationParams(searchParams: Record<string, SearchParamValue>): RegistrantListFilterInput {
+export function readRegistrationParams(searchParams: Record<string, SearchParamValue>): RegistrationFilterInput {
   return {
     startDate: firstValue(searchParams[REGISTRATION_PARAM_KEYS.startDate]),
     endDate: firstValue(searchParams[REGISTRATION_PARAM_KEYS.endDate]),
-    interest: firstValue(searchParams[REGISTRATION_PARAM_KEYS.interest]) as RegistrantListFilterInput["interest"],
-    emailVerified: firstValue(searchParams[REGISTRATION_PARAM_KEYS.emailVerified]) as RegistrantListFilterInput["emailVerified"],
-    applied: firstValue(searchParams[REGISTRATION_PARAM_KEYS.applied]) as RegistrantListFilterInput["applied"],
-    search: firstValue(searchParams[REGISTRATION_PARAM_KEYS.search]),
-    page: firstValue(searchParams[REGISTRATION_PARAM_KEYS.page]),
+    interest: firstValue(searchParams[REGISTRATION_PARAM_KEYS.interest]) as RegistrationFilterInput["interest"],
   };
 }
 
 interface RegistrationsSectionProps {
   user: AuthenticatedUser;
-  params: RegistrantListFilterInput;
+  params: RegistrationFilterInput;
   reportsPath: string;
+  /** The Registrations page of the same console (full registrant list and details). */
+  registrationsPath: string;
   /** Dashboard parameters to keep when the registration filters change. */
   preservedParams: Record<string, string>;
-}
-
-function StatTile({ label, value, detail, icon }: { label: string; value: string; detail?: string; icon: ReactNode }) {
-  return (
-    <div className="flex flex-col justify-between rounded-2xl border border-border/80 bg-card p-4 shadow-2xs">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold text-muted-foreground">{label}</span>
-        <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10 text-primary" aria-hidden="true">
-          {icon}
-        </span>
-      </div>
-      <span className="text-2xl font-extrabold text-foreground">{value}</span>
-      {detail && <span className="mt-1 text-[11px] text-muted-foreground">{detail}</span>}
-    </div>
-  );
 }
 
 function share(part: number, whole: number): string {
   return whole > 0 ? `${Math.round((part / whole) * 1000) / 10}%` : "—";
 }
 
-function SectionHeading({ periodLabel }: { periodLabel?: string }) {
+/** The tab strip already shows "Registrations", so the section heading is for screen readers. */
+function SectionHeading() {
   return (
-    <div>
-      <h2 id="registrations-heading" className="text-base font-bold text-foreground">
-        Registrations
-      </h2>
-      {/* <p className="text-xs text-muted-foreground">
-        Candidate accounts created{periodLabel ? `: ${periodLabel}` : ""}. Staff accounts are never counted; applications
-        are reported separately in the hiring funnel.
-      </p> */}
-    </div>
+    <h2 id="registrations-heading" className="sr-only">
+      Registrations
+    </h2>
   );
 }
 
@@ -81,37 +65,67 @@ function fallbackFilters(): RegistrationFilters {
   return parseRegistrationFilters({}).filters;
 }
 
-/**
- * "Registrations" tab of the reports page (canReports). The figures and the registrant
- * list (names and e-mails, ADMIN and HR only) stream in sibling Suspense boundaries, so
- * their queries run in parallel; every figure is a grouped query.
- */
-export async function RegistrationsSection({ user, params, reportsPath, preservedParams }: RegistrationsSectionProps) {
-  const canViewRegistrants = await registrationAnalyticsService.canViewRegistrants(user);
+/** Link card to the Registrations page, or a note for viewers who may only see counts. */
+function RegistrantListLink({
+  canViewRegistrants,
+  registrationsPath,
+  filters,
+}: {
+  canViewRegistrants: boolean;
+  registrationsPath: string;
+  filters: RegistrationFilters;
+}) {
+  if (!canViewRegistrants) {
+    return (
+      <p className="rounded-xl border border-border bg-muted/30 p-4 text-xs text-muted-foreground">
+        Names and e-mail addresses of the people who signed up are visible to administrators and HR only.
+      </p>
+    );
+  }
+  const keys = REGISTRANT_DIRECTORY_PARAM_KEYS;
+  const periodHref = registrantDirectoryHref(registrationsPath, {
+    [keys.startDate]: filters.startDate,
+    [keys.endDate]: filters.endDate,
+    [keys.interest]: filters.interest ?? "",
+  });
+  const linkClass =
+    "inline-flex h-9 items-center justify-center gap-1.5 rounded-xl px-3 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
   return (
-    <div className="space-y-6">
-      <Suspense fallback={<RegistrationFiguresSkeleton />}>
-        <RegistrationFigures user={user} params={params} reportsPath={reportsPath} preservedParams={preservedParams} />
-      </Suspense>
-      {canViewRegistrants ? (
-        <Suspense fallback={<RegistrantListSkeleton />}>
-          <RegistrantListSection
-            user={user}
-            params={params}
-            reportsPath={reportsPath}
-            preservedParams={preservedParams}
-          />
-        </Suspense>
-      ) : (
-        <p className="rounded-xl border border-border bg-muted/30 p-4 text-xs text-muted-foreground">
-          Names and e-mail addresses of the people who signed up are visible to administrators and HR only.
-        </p>
-      )}
+    <div className={`${reportToolbarClass} flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}>
+      <div className="flex items-start gap-2.5">
+        <Users className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+        <div>
+          <p className="text-sm font-semibold text-foreground">Who signed up</p>
+          <p className="text-[11px] text-muted-foreground">
+            Names, e-mails and everything people entered at sign-up are on the Registrations page.
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Link href={periodHref} className={`${linkClass} border border-border bg-card text-foreground hover:bg-accent`}>
+          People from this period
+        </Link>
+        <Link href={registrationsPath} className={`${linkClass} bg-primary text-primary-foreground hover:bg-primary/90`}>
+          View all registrations
+          <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+        </Link>
+      </div>
     </div>
   );
 }
 
-async function RegistrationFigures({ user, params, reportsPath, preservedParams }: RegistrationsSectionProps) {
+/**
+ * "Registrations" tab of the reports page (canReports): sign-up figures and charts, every
+ * figure a grouped query. The full registrant list with names, e-mails and details lives on
+ * the Registrations page (ADMIN and HR with canReports); the figures link to it for them.
+ */
+export async function RegistrationsSection({
+  user,
+  params,
+  reportsPath,
+  registrationsPath,
+  preservedParams,
+}: RegistrationsSectionProps) {
   let report: RegistrationAnalyticsReport;
   try {
     report = await registrationAnalyticsService.getRegistrationAnalytics(user, {
@@ -155,10 +169,21 @@ async function RegistrationFigures({ user, params, reportsPath, preservedParams 
   }
 
   const { totals } = report;
+  // Each figure opens the matching people on the Registrations page (same window and interest).
+  const keys = REGISTRANT_DIRECTORY_PARAM_KEYS;
+  const listHref = (extra: Record<string, string> = {}) =>
+    report.canViewRegistrants
+      ? registrantDirectoryHref(registrationsPath, {
+          [keys.startDate]: report.filters.startDate,
+          [keys.endDate]: report.filters.endDate,
+          [keys.interest]: report.filters.interest ?? "",
+          ...extra,
+        })
+      : undefined;
 
   return (
     <section aria-labelledby="registrations-heading" className="space-y-6">
-      <SectionHeading periodLabel={report.periodLabel} />
+      <SectionHeading />
 
       <RegistrationFiltersForm
         reportsPath={reportsPath}
@@ -167,39 +192,60 @@ async function RegistrationFigures({ user, params, reportsPath, preservedParams 
         timeZoneLabel={report.timeZone}
       />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <StatTile label="Registrations" value={String(totals.registrations)} icon={<UserPlus className="h-4 w-4" />} />
-        <StatTile
+      <StatGrid columns={6} label="Registration figures">
+        <StatCard
+          label="Registrations"
+          value={totals.registrations}
+          icon={UserPlus}
+          tone="blue"
+          hint={report.periodLabel}
+          href={listHref()}
+        />
+        <StatCard
           label="Applied"
-          value={String(totals.applied)}
-          detail={`${share(totals.applied, totals.registrations)} of sign-ups`}
-          icon={<CheckCircle2 className="h-4 w-4" />}
+          value={totals.applied}
+          icon={CheckCircle2}
+          tone="emerald"
+          hint={`${share(totals.applied, totals.registrations)} of sign-ups`}
+          href={listHref({ [keys.applied]: "yes" })}
         />
-        <StatTile
+        <StatCard
           label="Not applied yet"
-          value={String(totals.notApplied)}
-          detail={`${share(totals.notApplied, totals.registrations)} of sign-ups`}
-          icon={<Clock className="h-4 w-4" />}
+          value={totals.notApplied}
+          icon={Clock}
+          tone="amber"
+          hint={`${share(totals.notApplied, totals.registrations)} of sign-ups`}
+          href={listHref({ [keys.applied]: "no" })}
         />
-        <StatTile
+        <StatCard
           label="E-mail verified"
-          value={String(totals.emailVerified)}
-          detail={`${totals.emailNotVerified} not verified`}
-          icon={<MailCheck className="h-4 w-4" />}
+          value={totals.emailVerified}
+          icon={MailCheck}
+          tone="cyan"
+          hint={`${totals.emailNotVerified} not verified`}
+          href={listHref({ [keys.emailVerified]: "yes" })}
         />
-        <StatTile
+        <StatCard
           label="Joined later"
-          value={String(totals.joined)}
-          detail="Became an intern or employee"
-          icon={<UserCheck className="h-4 w-4" />}
+          value={totals.joined}
+          icon={UserCheck}
+          tone="violet"
+          hint="Became an intern or employee"
         />
-        <StatTile
+        <StatCard
           label="All time"
-          value={String(report.allTimeRegistrations)}
-          detail={report.filters.interest ? "For this interest" : "Every registration"}
-          icon={<Users className="h-4 w-4" />}
+          value={report.allTimeRegistrations}
+          icon={Users}
+          tone="slate"
+          hint={report.filters.interest ? "For this interest" : "Every registration"}
         />
-      </div>
+      </StatGrid>
+
+      <RegistrantListLink
+        canViewRegistrants={report.canViewRegistrants}
+        registrationsPath={registrationsPath}
+        filters={report.filters}
+      />
 
       {totals.registrations === 0 ? (
         <EmptyState
@@ -230,25 +276,14 @@ async function RegistrationFigures({ user, params, reportsPath, preservedParams 
   );
 }
 
-/** Suspense fallback of the tab (the list has its own fallback once the tab renders). */
+/** Suspense fallback of the tab. */
 export function RegistrationsSkeleton() {
-  return <RegistrationFiguresSkeleton />;
-}
-
-function RegistrationFiguresSkeleton() {
   return (
     <div role="status" aria-live="polite" aria-busy="true" className="space-y-6">
       <span className="sr-only">Loading registrations</span>
-      <div className="space-y-2" aria-hidden="true">
-        <Skeleton className="h-5 w-40" />
-        <Skeleton className="h-3 w-72 max-w-full" />
-      </div>
-      <Skeleton className="h-24 w-full rounded-2xl" />
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" aria-hidden="true">
-        {Array.from({ length: 6 }, (_, i) => (
-          <Skeleton key={i} className="h-24 rounded-2xl" />
-        ))}
-      </div>
+      <Skeleton className="h-28 w-full rounded-2xl sm:h-24" />
+      <StatGridSkeleton count={6} columns={6} label="Loading registration figures" />
+      <Skeleton className="h-16 w-full rounded-2xl" />
       <Skeleton className="h-64 w-full rounded-2xl" />
       <Skeleton className="h-56 w-full rounded-2xl" />
     </div>

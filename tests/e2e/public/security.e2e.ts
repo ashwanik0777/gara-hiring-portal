@@ -36,6 +36,9 @@ test.describe("Security headers", () => {
     expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
     expect(headers["permissions-policy"]).toContain("camera=()");
     expect(headers["strict-transport-security"]).toContain("max-age=");
+    expect(headers["cross-origin-opener-policy"]).toBe("same-origin");
+    expect(headers["cross-origin-resource-policy"]).toBe("same-site");
+    expect(headers["x-powered-by"]).toBeUndefined();
 
     const csp = headers["content-security-policy"] ?? "";
     expect(csp).toContain("default-src 'self'");

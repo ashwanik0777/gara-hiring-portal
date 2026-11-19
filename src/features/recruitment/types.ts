@@ -4,7 +4,7 @@ import {
   EvaluationStatus,
   InterviewStatus,
   InterviewRecommendation,
-} from "@prisma/client";
+} from "@/types/enums";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
 
 export { ApplicationStatus, InterviewStatus, InterviewRecommendation };

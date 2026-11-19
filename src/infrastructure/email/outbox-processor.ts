@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import type { Transporter } from "nodemailer";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
@@ -30,20 +30,41 @@ export interface EmailTransportAdapter {
   sendEmail(message: OutboundEmailMessage): Promise<void>;
 }
 
+const smtpState = globalThis as typeof globalThis & { __garaSmtpTransporter?: Promise<Transporter> };
+
+/**
+ * One pooled SMTP transporter per server process, created on the first send. Nodemailer is
+ * imported only then, so requests that never send email do not load it on a cold start, and
+ * the pool reuses connections (TLS and AUTH handshakes) across messages. A failed import or
+ * setup is not cached: the next send tries again.
+ */
+function getSmtpTransporter(): Promise<Transporter> {
+  smtpState.__garaSmtpTransporter ??= import("nodemailer")
+    .then(({ createTransport }) =>
+      createTransport({
+        pool: true,
+        host: env.SMTP_HOST,
+        port: env.SMTP_PORT,
+        secure: env.SMTP_PORT === 465,
+        auth:
+          env.SMTP_USER && env.SMTP_PASS
+            ? {
+                user: env.SMTP_USER,
+                pass: env.SMTP_PASS,
+              }
+            : undefined,
+      })
+    )
+    .catch((error: unknown) => {
+      smtpState.__garaSmtpTransporter = undefined;
+      throw error;
+    });
+  return smtpState.__garaSmtpTransporter;
+}
+
 export class NodemailerEmailAdapter implements EmailTransportAdapter {
   public async sendEmail(message: OutboundEmailMessage): Promise<void> {
-    const transporter = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure: env.SMTP_PORT === 465,
-      auth:
-        env.SMTP_USER && env.SMTP_PASS
-          ? {
-              user: env.SMTP_USER,
-              pass: env.SMTP_PASS,
-            }
-          : undefined,
-    });
+    const transporter = await getSmtpTransporter();
 
     await transporter.sendMail({
       from: env.SMTP_FROM,

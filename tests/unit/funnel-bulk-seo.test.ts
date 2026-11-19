@@ -31,7 +31,9 @@ const {
   mockRevalidatePath: vi.fn(),
 }));
 
-vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
+vi.mock("@/lib/db", async () => ({
+  prisma: (await import("./helpers/session-access")).withSessionAccessQuery(mockPrisma),
+}));
 vi.mock("@/lib/site-url", () => ({
   getSiteUrl: () => SITE,
   absoluteUrl: (p: string) => `${SITE}${p.startsWith("/") ? p : `/${p}`}`,
@@ -335,9 +337,9 @@ describe("Hiring funnel math", () => {
     const lines = csvContent.split("\n");
     expect(lines[0]).toBe("Section,Item,Metric,Value");
     expect(lines).toHaveLength(rowCount + 1);
-    expect(csvContent).toContain(`Top openings,"'=HYPERLINK(""http://x"")",Applications,4`);
-    expect(csvContent).toContain("Stage funnel,Screening,Moved forward %,60");
-    expect(csvContent).toContain("Time to hire,All openings,Median days,23.5");
+    expect(csvContent).toContain(`"Top openings","'=HYPERLINK(""http://x"")","Applications","4"`);
+    expect(csvContent).toContain('"Stage funnel","Screening","Moved forward %","60"');
+    expect(csvContent).toContain('"Time to hire","All openings","Median days","23.5"');
     expect(csvContent).not.toMatch(/(^|,)=/m);
   });
 });

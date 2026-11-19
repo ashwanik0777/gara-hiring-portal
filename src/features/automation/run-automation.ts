@@ -10,14 +10,27 @@ export interface AutomationRunSummary {
   outbox: OutboxProcessingSummary;
 }
 
+/** Queued emails one run delivers unless the trigger asks for fewer. */
+const DEFAULT_EMAIL_BATCH_SIZE = 50;
+
+interface RunAutomationOptions {
+  now?: Date;
+  /** Most due jobs to claim. */
+  limit?: number;
+  /** Most queued emails to deliver (default {@link DEFAULT_EMAIL_BATCH_SIZE}). */
+  emailBatchSize?: number;
+}
+
 /**
  * One automation tick: seed recurring jobs, run every due job, then deliver queued email
  * through the configured SMTP account. Safe to call concurrently from any trigger.
  */
-export async function runAutomation(options: { now?: Date; limit?: number } = {}): Promise<AutomationRunSummary> {
+export async function runAutomation(options: RunAutomationOptions = {}): Promise<AutomationRunSummary> {
   const now = options.now ?? new Date();
   await ensureRecurringJobs(now);
   const jobs = await runDueJobs(automationHandlers, { now, limit: options.limit });
-  const outbox = await outboxProcessorService.processPendingBatch(50);
+  const outbox = await outboxProcessorService.processPendingBatch(
+    options.emailBatchSize ?? DEFAULT_EMAIL_BATCH_SIZE
+  );
   return { jobs, outbox };
 }

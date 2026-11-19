@@ -62,6 +62,7 @@ import {
   isInterviewerScoped,
   staffApplicationVisibility,
 } from "./application-access";
+import { clampPageNumber } from "@/lib/pagination";
 
 const STAFF_ROLES: Role[] = RECRUITMENT_STAFF_ROLES;
 const DECISION_ROLES: Role[] = [Role.ADMIN, Role.HR];
@@ -75,9 +76,9 @@ const POSITIVE_RECOMMENDATIONS: InterviewRecommendation[] = [
 ];
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** 1-based page number; anything that is not a positive integer means page 1. */
+/** 1-based page number up to MAX_PAGE_NUMBER; anything that is not a positive integer means page 1. */
 function normalizePage(page: number | undefined): number {
-  return page !== undefined && Number.isInteger(page) && page >= 1 ? page : 1;
+  return page !== undefined && Number.isInteger(page) ? clampPageNumber(page) : 1;
 }
 
 /** Rows per page, defaulting to and capped at `max` so a list never loads more than one page. */

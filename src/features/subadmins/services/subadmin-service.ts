@@ -5,6 +5,7 @@ import { ForbiddenError } from "@/lib/errors";
 import { Role, type Prisma } from "@prisma/client";
 import { z } from "zod";
 import type { PageInfo, SubAdminItem, SubAdminListPage, SubAdminPermissionFlags } from "../types";
+import { clampPageNumber } from "@/lib/pagination";
 
 /** Upper bound of one page of sub-admin accounts. */
 export const SUBADMIN_MAX_PAGE_SIZE = 50;
@@ -49,7 +50,7 @@ const permissionSelect = {
 
 function pageArgs(page?: number, pageSize?: number) {
   const size = Math.min(Math.max(1, Math.trunc(pageSize ?? SUBADMIN_DEFAULT_PAGE_SIZE)), SUBADMIN_MAX_PAGE_SIZE);
-  const current = Math.max(1, Math.trunc(page ?? 1));
+  const current = clampPageNumber(page);
   return { skip: (current - 1) * size, take: size, page: current, pageSize: size };
 }
 

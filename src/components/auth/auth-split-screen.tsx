@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth/auth-client";
 import {
   Mail,
@@ -64,12 +64,33 @@ async function runOtpCall(
   }
 }
 
+function subscribeToHistory(onChange: () => void): () => void {
+  window.addEventListener("popstate", onChange);
+  return () => window.removeEventListener("popstate", onChange);
+}
+
+function readQueryString(): string {
+  return window.location.search;
+}
+
+/**
+ * The page's query string, read in the browser only. The server renders the auth screen
+ * without it, so the whole form is part of the static HTML: it shows without JavaScript and
+ * in link previews instead of a loading placeholder (useSearchParams would make the server
+ * render a fallback). The values only matter after hydration (redirect target, Google error).
+ */
+function useBrowserQuery(): URLSearchParams {
+  const query = useSyncExternalStore(subscribeToHistory, readQueryString, () => "");
+  return new URLSearchParams(query);
+}
+
 export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const query = useBrowserQuery();
+  const rawCallbackUrl = query.get("callbackUrl");
   // Prevent open redirect: only same-origin relative paths are accepted
-  const callbackUrl = sanitizeCallbackPath(searchParams.get("callbackUrl"));
-  const hasExplicitCallback = searchParams.get("callbackUrl") !== null && callbackUrl !== "/dashboard";
+  const callbackUrl = sanitizeCallbackPath(rawCallbackUrl);
+  const hasExplicitCallback = rawCallbackUrl !== null && callbackUrl !== "/dashboard";
   // Set while this screen performs its own post-auth navigation, so the session
   // listener below does not start a second, competing navigation.
   const isNavigatingRef = useRef(false);
@@ -142,10 +163,12 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const [rememberMe, setRememberMe] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginGoogleLoading, setLoginGoogleLoading] = useState(false);
-  // A failed Google sign-in returns here with `?error=<code>`; only mapped text is shown.
-  const [loginError, setLoginError] = useState<string | null>(() =>
-    describeGoogleSignInError(searchParams.get("error"))
-  );
+  // A failed Google sign-in returns here with `?error=<code>`; only mapped text is shown,
+  // until the person starts another sign-in attempt.
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [googleErrorDismissed, setGoogleErrorDismissed] = useState(false);
+  const googleSignInError = googleErrorDismissed ? null : describeGoogleSignInError(query.get("error"));
+  const shownLoginError = loginError ?? googleSignInError;
 
   // ─── REGISTER STATE ───
   const [regName, setRegName] = useState("");
@@ -230,6 +253,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+    setGoogleErrorDismissed(true);
     setLoginLoading(true);
     isNavigatingRef.current = true;
     const email = loginEmail.trim().toLowerCase();
@@ -278,6 +302,7 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const handleLoginGoogle = async () => {
     setLoginGoogleLoading(true);
     setLoginError(null);
+    setGoogleErrorDismissed(true);
     try {
       await authClient.signIn.social({
         provider: "google",
@@ -615,10 +640,10 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                 </div>
 
                 {/* Error */}
-                {loginError && (
-                  <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2.5 animate-fade-in">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
-                    <span>{loginError}</span>
+                {shownLoginError && (
+                  <div role="alert" className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2.5 animate-fade-in">
+                    <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>{shownLoginError}</span>
                   </div>
                 )}
 
@@ -796,8 +821,8 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
 
                 {/* Error */}
                 {regError && (
-                  <div className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2.5 animate-fade-in">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
+                  <div role="alert" className="p-3.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2.5 animate-fade-in">
+                    <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
                     <span>{regError}</span>
                   </div>
                 )}
@@ -995,8 +1020,8 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                 ) : (
                   <form onSubmit={handleForgotSubmit} className="space-y-4">
                     {forgotError && (
-                      <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
-                        <AlertCircle className="h-4 w-4 shrink-0" />
+                      <div role="alert" className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                        <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
                         <span>{forgotError}</span>
                       </div>
                     )}
@@ -1136,10 +1161,10 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
                 <p className="text-xs text-muted-foreground">Sign in to your account</p>
               </div>
 
-              {loginError && (
-                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  <span>{loginError}</span>
+              {shownLoginError && (
+                <div role="alert" className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>{shownLoginError}</span>
                 </div>
               )}
 
@@ -1195,8 +1220,8 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
               </div>
 
               {regError && (
-                <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
+                <div role="alert" className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>{regError}</span>
                 </div>
               )}
@@ -1302,8 +1327,8 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
               ) : (
                 <form onSubmit={handleForgotSubmit} className="space-y-4">
                   {forgotError && (
-                    <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
-                      <AlertCircle className="h-4 w-4 shrink-0" />
+                    <div role="alert" className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
                       <span>{forgotError}</span>
                     </div>
                   )}

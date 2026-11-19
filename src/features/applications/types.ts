@@ -1,5 +1,5 @@
 import type { CareerInterest } from "@/types/enums";
-import { ApplicationStatus } from "@prisma/client";
+import { ApplicationStatus } from "@/types/enums";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
 import type { DocumentLinkView } from "./document-links";
 

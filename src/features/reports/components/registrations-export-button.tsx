@@ -25,8 +25,8 @@ export function RegistrantsExportButton({ filters }: { filters: RegistrantListFi
     startTransition(async () => {
       try {
         const response = await exportRegistrantsCsvAction({
-          startDate: filters.startDate,
-          endDate: filters.endDate,
+          startDate: filters.startDate ?? "",
+          endDate: filters.endDate ?? "",
           interest: filters.interest ?? "",
           emailVerified: yesNo(filters.emailVerified),
           applied: yesNo(filters.applied),

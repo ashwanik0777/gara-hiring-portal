@@ -81,7 +81,9 @@ export async function updatePayrollPeriodStatusAction(
 
 export async function generatePayrollRecordsAction(
   rawInput: GeneratePayrollRecordsInput
-): Promise<ActionResult<{ enrolledCount: number; skippedUnconfiguredCount: number }>> {
+): Promise<
+  ActionResult<{ enrolledCount: number; skippedUnconfiguredCount: number; skippedOwnCount: number }>
+> {
   try {
     const user = await requireAuth();
     const parsed = GeneratePayrollRecordsSchema.safeParse(rawInput);
@@ -121,7 +123,12 @@ export async function recordDisbursementAction(
 export async function bulkDisburseAction(
   rawInput: BulkDisbursementInput
 ): Promise<
-  ActionResult<{ updatedCount: number; skippedNotPaidCount: number; periodPaid: boolean }>
+  ActionResult<{
+    updatedCount: number;
+    skippedNotPaidCount: number;
+    skippedOwnCount: number;
+    periodPaid: boolean;
+  }>
 > {
   try {
     const user = await requireAuth();

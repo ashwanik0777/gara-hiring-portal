@@ -409,21 +409,19 @@ export class ApplicationService {
    * Retrieves all non-archived applications submitted by the candidate.
    */
   async getCandidateApplications(userId: string): Promise<CandidateApplicationSummary[]> {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { candidateProfile: true },
-    });
-
-    if (!user?.candidateProfile) {
-      return [];
-    }
-
+    // Ownership is a relation filter in the same statement (no separate profile lookup);
+    // a user without a candidate profile simply matches no rows.
     const applications = await prisma.application.findMany({
       where: {
-        candidateId: user.candidateProfile.id,
+        candidate: { userId },
         isArchived: false,
       },
-      include: {
+      select: {
+        id: true,
+        referenceCode: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
         opening: {
           select: {
             id: true,

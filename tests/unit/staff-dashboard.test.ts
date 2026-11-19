@@ -43,7 +43,9 @@ import {
 } from "@/features/staff-dashboard/workspace";
 import { staffDashboardService } from "@/features/staff-dashboard/services/staff-dashboard-service";
 import {
+  EvaluationCohortSection,
   MyInterviewsSection,
+  PipelineSection,
   SupervisedInternsSection,
 } from "@/features/staff-dashboard/components/staff-dashboard-sections";
 
@@ -100,6 +102,23 @@ describe("Staff workspaces and module access", () => {
 
     const hr = getStaffModuleAccess([Role.HR], { ...DEFAULT_HR_PERMISSIONS, canPayroll: true });
     expect(hr.payroll).toBe(true);
+  });
+
+  it("offers the Registrations module (names and e-mails) only to HR and ADMIN holding canReports", () => {
+    expect(getStaffModuleAccess([Role.HR], DEFAULT_HR_PERMISSIONS).registrations).toBe(true);
+    expect(getStaffModuleAccess([Role.HR], { ...DEFAULT_HR_PERMISSIONS, canReports: false }).registrations).toBe(false);
+    // Managers may see report counts, but never the registrant list.
+    expect(DEFAULT_MANAGER_PERMISSIONS.canReports).toBe(true);
+    expect(getStaffModuleAccess([Role.MANAGER], DEFAULT_MANAGER_PERMISSIONS).registrations).toBe(false);
+    expect(getStaffModuleAccess([Role.ADMIN], { ...NO_PERMISSIONS, canReports: true }).registrations).toBe(true);
+
+    const hrModules = listAccessibleStaffModules(getStaffModuleAccess([Role.HR], DEFAULT_HR_PERMISSIONS));
+    const keys = hrModules.map((module) => module.key);
+    expect(keys.indexOf("registrations")).toBe(keys.indexOf("applications") + 1);
+    expect(hrModules.find((module) => module.key === "registrations")).toMatchObject({
+      path: "/registrations",
+      iconName: "UserPlus",
+    });
   });
 
   it("lists only the mentor's evaluation module with the default mentor permissions", () => {
@@ -367,6 +386,30 @@ describe("HR overview data", () => {
     expect(result.stages[0]).toEqual(expect.objectContaining({ status: ApplicationStatus.SUBMITTED, count: 5 }));
     expect(result.stages.find((stage) => stage.status === ApplicationStatus.OFFERED)?.count).toBe(2);
     expect(result.stages.some((stage) => stage.status === ApplicationStatus.REJECTED)).toBe(false);
+  });
+
+  it("renders the pipeline stages as stat cards that open the filtered queue", async () => {
+    db.application.groupBy.mockResolvedValue([
+      { status: ApplicationStatus.SUBMITTED, _count: { status: 5 } },
+      { status: ApplicationStatus.OFFERED, _count: { status: 2 } },
+    ]);
+    render(await PipelineSection({ user: staff("hr-1", [Role.HR]), base: "/subadmin" }));
+
+    expect(screen.getByRole("group", { name: "Active applications by stage" })).toBeTruthy();
+    const submitted = screen
+      .getAllByRole("link")
+      .find((link) => link.getAttribute("href") === `/subadmin/applications?status=${ApplicationStatus.SUBMITTED}`);
+    expect(submitted?.textContent).toContain("5");
+  });
+
+  it("renders the evaluation cohort as stat cards", async () => {
+    db.internshipEnrollment.groupBy.mockResolvedValue([{ status: EvaluationStatus.IN_PROGRESS, _count: { status: 4 } }]);
+    render(await EvaluationCohortSection({ user: staff("hr-1", [Role.HR]), base: "/subadmin" }));
+
+    const group = screen.getByRole("group", { name: "Internship evaluations by status" });
+    expect(group.textContent).toContain("In progress");
+    expect(group.textContent).toContain("4");
+    expect(group.textContent).toContain("Waiting to start");
   });
 
   it("lists approved leave covering today", async () => {

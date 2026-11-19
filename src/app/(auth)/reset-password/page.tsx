@@ -3,7 +3,7 @@ import { ResetPasswordScreen } from "@/components/auth/reset-password-screen";
 export const instant = false;
 
 export const metadata = {
-  title: "Choose a New Password | GARA Innovation",
+  title: "Choose a New Password",
   description: "Complete your GARA Innovation password reset",
 };
 

@@ -108,54 +108,9 @@ describe("Prompt 10: Storage Hardening, Upload Validation & Signed URL Expiratio
     ).not.toThrow();
   });
 
-  it("generates time-limited HMAC signed download URLs and rejects expired or tampered signatures", async () => {
-    const baseTimeMs = 1_750_000_000_000;
-    const storageKey = "resumes/2026-04-15/candidate-resume.pdf";
-
-    const signedUrl = await storage.getDownloadUrl(storageKey, 900, baseTimeMs);
-    const parsedUrl = new URL(signedUrl, "http://localhost:3000");
-    const exp = Number(parsedUrl.searchParams.get("exp"));
-    const sig = parsedUrl.searchParams.get("sig") ?? "";
-
-    // Valid within 15-minute window
-    expect(
-      storage.verifySignedDownloadUrl(
-        storageKey,
-        exp,
-        sig,
-        baseTimeMs + 300_000
-      )
-    ).toBe(true);
-
-    // Expired after 15 minutes
-    expect(
-      storage.verifySignedDownloadUrl(
-        storageKey,
-        exp,
-        sig,
-        baseTimeMs + 901_000
-      )
-    ).toBe(false);
-
-    // Tampered storageKey with same signature
-    expect(
-      storage.verifySignedDownloadUrl(
-        "resumes/2026-04-15/other-candidate.pdf",
-        exp,
-        sig,
-        baseTimeMs + 100_000
-      )
-    ).toBe(false);
-
-    // Tampered signature
-    expect(
-      storage.verifySignedDownloadUrl(
-        storageKey,
-        exp,
-        "0".repeat(sig.length),
-        baseTimeMs + 100_000
-      )
-    ).toBe(false);
+  it("exposes no signed-download-URL helper: private files are served by authorized routes only", () => {
+    expect("getDownloadUrl" in storage).toBe(false);
+    expect("verifySignedDownloadUrl" in storage).toBe(false);
   });
 });
 

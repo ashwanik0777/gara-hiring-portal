@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
@@ -8,7 +9,6 @@ import {
   WorkplaceType,
   type Prisma,
 } from "@prisma/client";
-import { hashPassword } from "better-auth/crypto";
 import { Pool } from "pg";
 import { getDefaultApplicationFormSchema } from "../../../src/features/application-forms/default-form";
 import {
@@ -17,6 +17,22 @@ import {
   E2E_STAFF_PASSWORD,
   E2E_USERS,
 } from "./fixtures";
+
+/**
+ * Hashes a password exactly as Better Auth does. Playwright's TypeScript loader cannot load
+ * the ESM-only `better-auth/crypto` module, so the hash is computed by a plain Node process.
+ */
+function hashPassword(password: string): string {
+  return execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      'const { hashPassword } = await import("better-auth/crypto"); process.stdout.write(await hashPassword(process.env.E2E_HASH_INPUT));',
+    ],
+    { env: { ...process.env, E2E_HASH_INPUT: password }, encoding: "utf8" }
+  ).trim();
+}
 
 function isLocalHost(databaseUrl: string): boolean {
   const { hostname } = new URL(databaseUrl);
@@ -38,7 +54,7 @@ export async function seedE2EFixtures(databaseUrl: string): Promise<void> {
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
   try {
-    const passwordHash = await hashPassword(E2E_STAFF_PASSWORD);
+    const passwordHash = hashPassword(E2E_STAFF_PASSWORD);
     const userIds: Record<keyof typeof E2E_USERS, string> = { admin: "", hr: "", mentor: "" };
 
     for (const key of Object.keys(E2E_USERS) as Array<keyof typeof E2E_USERS>) {

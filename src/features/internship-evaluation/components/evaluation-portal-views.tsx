@@ -307,7 +307,7 @@ export async function EvaluationListView({
 
   return (
     <div className="w-full space-y-6">
-      <div className="flex flex-col justify-between gap-4 border-b border-border pb-6 sm:flex-row sm:items-center">
+      {/* <div className="flex flex-col justify-between gap-4 border-b border-border pb-6 sm:flex-row sm:items-center">
         <div>
           <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
             <Award className="h-6 w-6 text-primary" aria-hidden="true" /> Supervised Evaluations & Onboarding
@@ -318,7 +318,7 @@ export async function EvaluationListView({
               : "Interns assigned to you for supervision."}
           </p>
         </div>
-      </div>
+      </div> */}
 
       <Suspense key={`${status ?? ""}|${page}`} fallback={<EvaluationListSkeleton />}>
         <EvaluationListSection user={user} access={access} paths={paths} status={status} page={page} />

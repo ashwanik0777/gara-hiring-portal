@@ -66,6 +66,7 @@ import {
   openEmploymentPeriod,
   revokeJoiningRole,
 } from "./employment-records";
+import { clampPageNumber } from "@/lib/pagination";
 
 const EMPLOYEE_ADMIN_ROLES: Role[] = [Role.ADMIN, Role.HR];
 
@@ -229,7 +230,7 @@ function normalizePaging(
   query: { page?: number; pageSize?: number },
   defaultPageSize: number
 ): { page: number; pageSize: number; skip: number } {
-  const page = clampInt(query.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+  const page = clampPageNumber(query.page);
   const pageSize = clampInt(query.pageSize ?? defaultPageSize, 1, MAX_LIST_PAGE_SIZE);
   return { page, pageSize, skip: (page - 1) * pageSize };
 }

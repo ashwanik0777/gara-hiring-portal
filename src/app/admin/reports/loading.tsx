@@ -1,5 +1,5 @@
-import { ReportsPageSkeleton } from "@/components/feedback/page-skeletons";
+import { ReportsDashboardSkeleton } from "@/features/reports/components/reports-skeletons";
 
 export default function Loading() {
-  return <ReportsPageSkeleton label="Loading reports" />;
+  return <ReportsDashboardSkeleton label="Loading reports" />;
 }

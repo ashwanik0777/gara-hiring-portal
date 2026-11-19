@@ -1,7 +1,7 @@
 # Data Model & Entity Specifications — GARA Innovation Platform
 
 > **Status:** Architecture outline and entity design specification.
-> **Prerequisites:** Prompt 0 stack compatibility audit and Prompt 1 schema initialization.
+> **Source of truth:** `prisma/schema.prisma` and the versioned migrations in `prisma/migrations/`. The field lists below are the design outline (snake_case, simplified types); where they differ from the schema, the schema wins.
 > **Non-Negotiable Rule:** Attendance, leave, payroll, and evaluation calculation rules are **policy-gated** (see `docs/OPEN_DECISIONS.md`). Schemas define structural storage only; no unapproved calculation formulas are baked into the data model.
 
 ---
@@ -53,7 +53,7 @@ erDiagram
 
 ## 3. Core Domain Entities
 
-### 3.1 Identity & Access (`src/features/auth`)
+### 3.1 Identity & Access (`src/lib/auth`, `src/features/auth`)
 
 #### `User`
 Primary account entity for authentication (candidates, staff, mentors, employees, admins).
@@ -169,7 +169,7 @@ Audit record of every status transition in the hiring pipeline.
 
 ---
 
-### 3.4 Interviews & Evaluations (`src/features/interviews`, `src/features/internship-evaluation`)
+### 3.4 Interviews & Evaluations (`src/features/recruitment`, `src/features/internship-evaluation`)
 
 #### `InterviewSchedule`
 - `id` (UUID, PK)
@@ -441,9 +441,9 @@ Slots offered to a candidate to choose an interview time.
 
 ---
 
-### 3.7 HRMS Modules *(POLICY-GATED: OD-005, OD-006, OD-007)*
+### 3.7 HRMS Modules *(POLICY-GATED: OD-006, OD-007, OD-008)*
 
-> **Architectural Note:** Attendance, leave balances, and payroll calculations are reserved for Prompt 8 and blocked until policies are approved.
+> **Architectural Note:** The structural records and request/approval flows exist (Prompt 8); attendance, leave-balance and payroll calculations stay blocked until the policies are approved.
 
 #### `AttendanceRecord` *(POLICY-GATED: OD-006)*
 - `id` (UUID, PK)
@@ -532,12 +532,17 @@ stateDiagram-v2
     INTERVIEWED --> REJECTED : Decision rejected
     EVALUATION_SELECTED --> OFFERED : Evaluation passed
     EVALUATION_SELECTED --> REJECTED : Evaluation failed
+    EVALUATION_SELECTED --> HIRED : Intern marked as joined
     OFFERED --> OFFER_ACCEPTED : Candidate accepts
-    OFFERED --> REJECTED : Candidate declines
-    OFFER_ACCEPTED --> [*]
+    OFFERED --> REJECTED : Staff decision (a decline is recorded on the offer)
+    OFFER_ACCEPTED --> HIRED : Marked as joined
+    HIRED --> [*]
     REJECTED --> ARCHIVED : Retention policy
+    WITHDRAWN --> ARCHIVED : Retention policy
     ARCHIVED --> [*]
 ```
+
+Simplified view. Staff can also move an application back a stage (for example `INTERVIEWED → SHORTLISTED`, or `INTERVIEWED → INTERVIEW_SCHEDULED` for a further round), and `WITHDRAWN` is reachable from most stages before an offer is accepted. The complete map is `VALID_APPLICATION_TRANSITIONS` in `src/features/recruitment/schemas.ts`.
 
 ---
 
@@ -546,4 +551,4 @@ stateDiagram-v2
 1. **Versioned Migrations Only:** All database evolution happens through forward-only versioned Prisma migrations in `prisma/migrations/`.
 2. **Never Edit Applied Migrations:** Historical migration files are strictly read-only.
 3. **Additive First:** When modifying schemas in live environments, make changes backwards-compatible (e.g., add new column with default, migrate data, then deprecate old column).
-4. **Seed Segregation:** `prisma/seed.ts` is strictly for deterministic local test fixtures. Production migration runs must never execute test seeds.
+4. **Seed Segregation:** There is no seed file in `prisma/`, and production migration runs (`prisma migrate deploy`) never seed. Deterministic E2E fixtures are written by `tests/e2e/support/seed.ts` only to the dedicated test database; local seed scripts stay in the gitignored `scripts/` folder.

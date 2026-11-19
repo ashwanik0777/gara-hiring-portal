@@ -26,7 +26,12 @@ export function sanitizeCallbackPath(
     if (parsed.origin !== PLACEHOLDER_ORIGIN) {
       return fallback;
     }
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    const path = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    // Dot segments normalise away ("/.//evil.com" → "//evil.com"): re-check the result.
+    if (path.startsWith("//") || path.startsWith("/\\")) {
+      return fallback;
+    }
+    return path;
   } catch {
     return fallback;
   }

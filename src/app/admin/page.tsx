@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatCard, StatGrid, StatGridSkeleton } from "@/components/ui/stat-card";
 import { ChartGridSkeleton, ListCardSkeleton } from "@/components/feedback/page-skeletons";
 import {
   ActionCenterPanel,
@@ -107,6 +108,11 @@ function turnoutRate(present: OverviewMetric, headcount: OverviewMetric): number
   return Math.min(100, Math.round((present / Math.max(headcount, 1)) * 100));
 }
 
+/** StatCard value props for an overview figure (a failed query is flagged, not zeroed). */
+function metricValue(value: OverviewMetric): { value: number | null; unavailable: boolean } {
+  return value === UNAVAILABLE ? { value: null, unavailable: true } : { value, unavailable: false };
+}
+
 function UnavailableNotice({ children }: { children: React.ReactNode }) {
   return (
     <p role="alert" className="flex items-start gap-2 py-6 text-xs text-muted-foreground">
@@ -123,26 +129,6 @@ function StreamingFallback({ label, children }: { label: string; children: React
     <div role="status" aria-live="polite" aria-busy="true">
       <span className="sr-only">{label}</span>
       {children}
-    </div>
-  );
-}
-
-function MetricCardsSkeleton() {
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
-      {Array.from({ length: 5 }, (_, i) => (
-        <div
-          key={i}
-          className={`space-y-4 rounded-2xl border border-border/80 bg-card p-4 sm:p-5 ${i === 4 ? "col-span-2 sm:col-span-1" : ""}`}
-        >
-          <div className="flex items-center justify-between">
-            <Skeleton className="h-3 w-20" />
-            <Skeleton className="h-8 w-8 rounded-xl" />
-          </div>
-          <Skeleton className="h-8 w-16" />
-          <Skeleton className="h-3 w-28" />
-        </div>
-      ))}
     </div>
   );
 }
@@ -184,127 +170,87 @@ async function ExecutiveMetrics() {
   const turnout = turnoutRate(operations.todayAttendance, workforce.totalEmployees);
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
+    <StatGrid columns={5} label="Key metrics">
       {/* 1. Applications Pipeline */}
-      <Link
+      <StatCard
+        label="Applications"
+        {...metricValue(totalApplications)}
+        icon={FileText}
+        tone="blue"
         href="/admin/applications"
-        className="bg-card border border-border/80 border-l-4 border-l-blue-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
-      >
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-            Applications
-          </span>
-          <div className="h-8 w-8 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-            <FileText className="h-4 w-4" />
-          </div>
-        </div>
-        <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-          {metricText(totalApplications)}
-        </div>
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-          <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20">
-            {metricText(hiredCount)} Hired
-          </Badge>
-          <span className="text-muted-foreground">• {shareText(hiredCount, totalApplications)} Conv</span>
-        </div>
-      </Link>
+        hint={
+          <>
+            <Badge variant="outline" className="font-mono text-[10px] bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20">
+              {metricText(hiredCount)} Hired
+            </Badge>
+            <span className="font-mono">• {shareText(hiredCount, totalApplications)} Conv</span>
+          </>
+        }
+      />
 
       {/* 2. Total Workforce */}
-      <Link
+      <StatCard
+        label="Workforce"
+        {...metricValue(workforce.totalEmployees)}
+        icon={Users}
+        tone="violet"
         href="/admin/employees"
-        className="bg-card border border-border/80 border-l-4 border-l-purple-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
-      >
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-            Workforce
+        hint={
+          <span className="font-mono">
+            <span className="font-semibold text-violet-700 dark:text-violet-300">{metricText(workforce.fullTime)} FT</span>
+            {" • "}
+            {metricText(workforce.interns)} Interns
           </span>
-          <div className="h-8 w-8 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-            <Users className="h-4 w-4" />
-          </div>
-        </div>
-        <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-          {metricText(workforce.totalEmployees)}
-        </div>
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-          <span className="font-semibold text-purple-700 dark:text-purple-300">
-            {metricText(workforce.fullTime)} FT
-          </span>
-          <span className="text-muted-foreground">•</span>
-          <span className="text-muted-foreground">{metricText(workforce.interns)} Interns</span>
-        </div>
-      </Link>
+        }
+      />
 
       {/* 3. Published Job Openings */}
-      <Link
+      <StatCard
+        label="Job Openings"
+        {...metricValue(operations.activeOpenings)}
+        icon={Briefcase}
+        tone="emerald"
         href="/admin/openings"
-        className="bg-card border border-border/80 border-l-4 border-l-emerald-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
-      >
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-            Job Openings
-          </span>
-          <div className="h-8 w-8 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-            <Briefcase className="h-4 w-4" />
-          </div>
-        </div>
-        <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-          {metricText(operations.activeOpenings)}
-        </div>
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-          <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20">
+        hint={
+          <Badge variant="outline" className="font-mono text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20">
             {activeDepartments} Active Depts
           </Badge>
-        </div>
-      </Link>
+        }
+      />
 
       {/* 4. Attendance Today */}
-      <Link
+      <StatCard
+        label="Attendance Today"
+        {...metricValue(operations.todayAttendance)}
+        icon={Clock}
+        tone="amber"
         href="/admin/attendance"
-        className="bg-card border border-border/80 border-l-4 border-l-amber-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
-      >
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-            Attendance Today
+        hint={
+          <span className="font-mono">
+            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+              {turnout === null ? "—" : `${turnout}%`} Turnout
+            </span>
+            {" • "}
+            <span className="text-amber-600 dark:text-amber-400">{metricText(operations.todayOnLeave)} on Leave</span>
           </span>
-          <div className="h-8 w-8 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-            <Clock className="h-4 w-4" />
-          </div>
-        </div>
-        <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-          {metricText(operations.todayAttendance)}
-        </div>
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-          <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-            {turnout === null ? "—" : `${turnout}%`} Turnout
-          </span>
-          <span className="text-muted-foreground">•</span>
-          <span className="text-amber-600 dark:text-amber-400">{metricText(operations.todayOnLeave)} on Leave</span>
-        </div>
-      </Link>
+        }
+      />
 
       {/* 5. Evaluations & Interviews */}
-      <Link
+      <StatCard
+        label="7-Working-Day Evaluations"
+        {...metricValue(operations.activeEvaluations)}
+        icon={Award}
+        tone="cyan"
         href="/admin/evaluations"
-        className="col-span-2 sm:col-span-1 bg-card border border-border/80 border-l-4 border-l-cyan-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group"
-      >
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-            7-Working-Day Evaluations
-          </span>
-          <div className="h-8 w-8 rounded-xl bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-            <Award className="h-4 w-4" />
-          </div>
-        </div>
-        <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-          {metricText(operations.activeEvaluations)}
-        </div>
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-          <Badge variant="outline" className="text-[10px] bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border-cyan-500/20">
+        className="col-span-2 sm:col-span-1"
+        hint={
+          <Badge variant="outline" className="font-mono text-[10px] bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border-cyan-500/20">
             {metricText(operations.scheduledInterviews)} Scheduled Panels
           </Badge>
-        </div>
-      </Link>
-    </div>
+        }
+      />
+    </StatGrid>
   );
 }
 
@@ -882,9 +828,7 @@ export default async function AdminOverviewPage() {
       {/* ─── 5 TOP EXECUTIVE METRIC CARDS ─── */}
       <Suspense
         fallback={
-          <StreamingFallback label="Loading key metrics">
-            <MetricCardsSkeleton />
-          </StreamingFallback>
+          <StatGridSkeleton count={5} columns={5} label="Loading key metrics" />
         }
       >
         <ExecutiveMetrics />

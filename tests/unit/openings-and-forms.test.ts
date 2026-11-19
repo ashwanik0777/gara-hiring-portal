@@ -31,7 +31,9 @@ const { mockPrisma, mockSession } = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
+vi.mock("@/lib/db", async () => ({
+  prisma: (await import("./helpers/session-access")).withSessionAccessQuery(mockPrisma),
+}));
 vi.mock("next/headers", () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),

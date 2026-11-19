@@ -1,11 +1,13 @@
-import { randomBytes } from "node:crypto";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { emailOTP, twoFactor } from "better-auth/plugins";
 import { after } from "next/server";
 import { z } from "zod";
+import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
+import { defaultRateLimiter, type RateLimitPolicy } from "@/lib/security/rate-limit";
+import { RateLimitError } from "@/lib/errors";
 import { CareerInterest } from "@/types/enums";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logging/logger";
@@ -53,6 +55,21 @@ export const DISABLED_AUTH_PATHS = [
   // Link-based email verification is replaced by the emailed code.
   "/send-verification-email",
   "/verify-email",
+  // Account changes the portal does not offer. The name feeds certificates and the offer
+  // e-signature match, so it is changed only through staff-controlled records.
+  "/update-user",
+  "/change-email",
+  "/change-password",
+  "/delete-user",
+  "/delete-user/callback",
+  "/update-session",
+  // Linked OAuth accounts and their tokens are never needed in the browser.
+  "/link-social",
+  "/unlink-account",
+  "/list-accounts",
+  "/account-info",
+  "/get-access-token",
+  "/refresh-token",
 ] as const;
 
 /**
@@ -295,8 +312,48 @@ async function provisionNewAccount(
 }
 
 /**
- * Runs before every auth endpoint: no trusted devices (decision 2026-10-26), and the
- * public code endpoint only issues email-verification codes.
+ * Per-address limits for the public email-verification code endpoints, on top of the per-IP
+ * rules: an attacker rotating IP addresses still gets only a handful of codes and guesses
+ * per account per hour.
+ */
+export const OTP_EMAIL_RATE_LIMITS = {
+  SEND: { scope: "auth:otp_send_per_email", maxRequests: 5, windowSeconds: 60 * 60 },
+  VERIFY: { scope: "auth:otp_verify_per_email", maxRequests: 15, windowSeconds: 60 * 60 },
+} satisfies Record<string, RateLimitPolicy>;
+
+function normalizedEmail(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const email = value.trim().toLowerCase();
+  return email.length > 0 && email.length <= 320 ? email : null;
+}
+
+/** Only a hash of the address is stored with the rate-limit counters. */
+async function enforcePerAddressLimit(email: string, policy: RateLimitPolicy): Promise<void> {
+  const actor = createHash("sha256").update(email).digest("hex");
+  try {
+    await defaultRateLimiter.enforce(actor, policy);
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      throw new APIError("TOO_MANY_REQUESTS", {
+        code: "TOO_MANY_ATTEMPTS",
+        message: "Too many attempts. Please wait a while and try again.",
+      });
+    }
+    throw error;
+  }
+}
+
+/** True only for an existing email/password account whose email is not verified yet. */
+async function accountAwaitsEmailVerification(email: string): Promise<boolean> {
+  const account = await prisma.user.findUnique({ where: { email }, select: { emailVerified: true } });
+  return Boolean(account && !account.emailVerified);
+}
+
+/**
+ * Runs before every auth endpoint: no trusted devices (decision 2026-10-26); the public code
+ * endpoints only serve accounts that still need to verify their email. Without that check
+ * `/email-otp/verify-email` (which signs the person in) would let anyone who guesses a code
+ * sign in to an already verified account without its password.
  */
 const enforceOtpDecisions = createAuthMiddleware(async (ctx) => {
   const body = isRecord(ctx.body) ? ctx.body : {};
@@ -306,11 +363,30 @@ const enforceOtpDecisions = createAuthMiddleware(async (ctx) => {
       message: "Trusted devices are not supported. A code is required at every sign-in.",
     });
   }
-  if (ctx.path === "/email-otp/send-verification-otp" && body.type !== "email-verification") {
-    throw new APIError("BAD_REQUEST", {
-      code: "OTP_TYPE_NOT_SUPPORTED",
-      message: "Only email verification codes can be requested.",
-    });
+  if (ctx.path === "/email-otp/send-verification-otp") {
+    if (body.type !== "email-verification") {
+      throw new APIError("BAD_REQUEST", {
+        code: "OTP_TYPE_NOT_SUPPORTED",
+        message: "Only email verification codes can be requested.",
+      });
+    }
+    const email = normalizedEmail(body.email);
+    if (!email) return; // the endpoint rejects a missing or malformed address itself
+    await enforcePerAddressLimit(email, OTP_EMAIL_RATE_LIMITS.SEND);
+    if (!(await accountAwaitsEmailVerification(email))) {
+      // Same answer as a real send, so nothing reveals whether the account exists; no code
+      // is created for unknown or already verified accounts.
+      return ctx.json({ success: true });
+    }
+    return;
+  }
+  if (ctx.path === "/email-otp/verify-email") {
+    const email = normalizedEmail(body.email);
+    if (!email) return;
+    await enforcePerAddressLimit(email, OTP_EMAIL_RATE_LIMITS.VERIFY);
+    if (!(await accountAwaitsEmailVerification(email))) {
+      throw new APIError("BAD_REQUEST", { code: "INVALID_OTP", message: "Invalid OTP" });
+    }
   }
 });
 
@@ -391,7 +467,12 @@ export const auth = betterAuth({
     enabled: process.env.NODE_ENV === "production",
     // Shared across serverless instances; per-instance memory is trivially bypassed.
     storage: "database",
-    customRules: OTP_RATE_LIMIT_RULES,
+    customRules: {
+      ...OTP_RATE_LIMIT_RULES,
+      // Reading the current session is a cheap lookup made on most page views; counting it
+      // would add a database write to each of them without protecting anything.
+      "/get-session": false,
+    },
   },
   disabledPaths: [...DISABLED_AUTH_PATHS],
   hooks: {

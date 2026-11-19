@@ -1,6 +1,7 @@
 import { Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
+import { staffApplicationVisibility } from "@/features/recruitment/services/application-access";
 import {
   getUserPermissions,
   SUB_ADMIN_ROLES,
@@ -80,7 +81,6 @@ async function buildOwnNotifications(user: AuthenticatedUser): Promise<SystemNot
       type: "application",
       link: `/candidate/applications/${app.id}`,
       createdAt: app.updatedAt.toISOString(),
-      read: false,
     });
   }
 
@@ -92,7 +92,6 @@ async function buildOwnNotifications(user: AuthenticatedUser): Promise<SystemNot
       type: "interview",
       link: `/candidate/applications/${interview.applicationId}`,
       createdAt: interview.scheduledAt.toISOString(),
-      read: false,
     });
   }
 
@@ -104,7 +103,6 @@ async function buildOwnNotifications(user: AuthenticatedUser): Promise<SystemNot
       type: "application",
       link: `/candidate/applications/${offer.applicationId}`,
       createdAt: offer.updatedAt.toISOString(),
-      read: false,
     });
   }
 
@@ -112,19 +110,24 @@ async function buildOwnNotifications(user: AuthenticatedUser): Promise<SystemNot
 }
 
 /**
- * Staff-scoped events: only modules the user holds a granular permission for.
+ * Staff-scoped events: only modules the user holds a granular permission for, and only
+ * applications the staff workspace would list for this user (`staffApplicationVisibility`:
+ * never the user's own application; interviewer-scoped users only see assigned ones).
  * Leave notifications never include the leave reason.
  */
 async function buildStaffNotifications(
+  user: AuthenticatedUser,
   permissions: SubAdminPermissions,
   basePath: "/admin" | "/subadmin"
 ): Promise<SystemNotification[]> {
   const notifications: SystemNotification[] = [];
+  const visibleApplications = staffApplicationVisibility(user);
 
   const [recentApps, pendingLeaves, upcomingInterviews] = await Promise.all([
     permissions.canApplications
       ? prisma.application
           .findMany({
+            where: visibleApplications,
             take: 4,
             orderBy: { createdAt: "desc" },
             select: {
@@ -154,7 +157,7 @@ async function buildStaffNotifications(
     permissions.canInterviews
       ? prisma.interviewSchedule
           .findMany({
-            where: { status: "SCHEDULED" },
+            where: { status: "SCHEDULED", application: visibleApplications },
             take: 3,
             orderBy: { scheduledAt: "asc" },
             select: {
@@ -178,7 +181,6 @@ async function buildStaffNotifications(
       type: "application",
       link: `${basePath}/applications`,
       createdAt: app.createdAt.toISOString(),
-      read: false,
     });
   }
 
@@ -190,7 +192,6 @@ async function buildStaffNotifications(
       type: "leave",
       link: `${basePath}/leave`,
       createdAt: leave.createdAt.toISOString(),
-      read: false,
     });
   }
 
@@ -202,7 +203,6 @@ async function buildStaffNotifications(
       type: "interview",
       link: `${basePath}/interviews`,
       createdAt: interview.scheduledAt.toISOString(),
-      read: false,
     });
   }
 
@@ -226,5 +226,5 @@ export async function buildNotificationsForUser(
   }
 
   const permissions = await getUserPermissions(user.id, user.roles);
-  return buildStaffNotifications(permissions, isAdmin ? "/admin" : "/subadmin");
+  return buildStaffNotifications(user, permissions, isAdmin ? "/admin" : "/subadmin");
 }

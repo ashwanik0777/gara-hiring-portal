@@ -10,6 +10,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/feedback/empty-state";
+import { StatCard, StatGrid } from "@/components/ui/stat-card";
+import { cn } from "@/lib/utils";
 import { getManualTransitionTargets } from "@/features/recruitment/schemas";
 import {
   BulkSelectionProvider,
@@ -214,154 +216,113 @@ export default async function SubAdminApplicationsPage({
     (countByStatus[ApplicationStatus.OFFER_ACCEPTED] || 0) +
     (countByStatus[ApplicationStatus.HIRED] || 0);
 
+  /** Whole-number share of the pipeline total (0 for an empty pipeline). */
+  const shareOfTotal = (count: number) => (globalTotal ? Math.round((count / globalTotal) * 100) : 0);
+
   return (
     <div className="w-full space-y-6">
       {/* ─── 5 EXECUTIVE RECRUITMENT KPI CARDS ─── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
+      <StatGrid columns={5} label="Pipeline summary">
         {/* 1. All Applications */}
-        <Link
+        <StatCard
+          label="Total Pipeline"
+          value={globalTotal}
+          icon={FileText}
+          tone="blue"
           href="/subadmin/applications"
-          className={`bg-card border border-border/80 border-l-4 border-l-blue-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group cursor-pointer ${
-            !validStatus ? "ring-1 ring-blue-500/40" : ""
-          }`}
-        >
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Total Pipeline
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <FileText className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {globalTotal}
-          </div>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-            <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20">
-              {hiredTotal} Hired
-            </Badge>
-            <span className="text-muted-foreground">
-              • {globalTotal ? Math.round((hiredTotal / globalTotal) * 100) : 0}% Conv
-            </span>
-          </div>
-        </Link>
+          className={!validStatus ? "ring-1 ring-blue-500/40" : undefined}
+          hint={
+            <>
+              <Badge variant="outline" className="font-mono text-[10px] bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20">
+                {hiredTotal} Hired
+              </Badge>
+              <span className="font-mono">• {shareOfTotal(hiredTotal)}% Conv</span>
+            </>
+          }
+        />
 
         {/* 2. Submitted & Screening */}
-        <Link
+        <StatCard
+          label="In Screening"
+          value={screeningTotal}
+          icon={Clock}
+          tone="indigo"
           href="/subadmin/applications?status=SCREENING"
-          className={`bg-card border border-border/80 border-l-4 border-l-indigo-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group cursor-pointer ${
+          className={
             validStatus === ApplicationStatus.SCREENING || validStatus === ApplicationStatus.SUBMITTED
               ? "ring-1 ring-indigo-500/40"
-              : ""
-          }`}
-        >
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              In Screening
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Clock className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {screeningTotal}
-          </div>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-            <Badge variant="outline" className="text-[10px] bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/20">
-              Initial Intake
-            </Badge>
-            <span className="text-muted-foreground">
-              • {globalTotal ? Math.round((screeningTotal / globalTotal) * 100) : 0}%
-            </span>
-          </div>
-        </Link>
+              : undefined
+          }
+          hint={
+            <>
+              <Badge variant="outline" className="font-mono text-[10px] bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/20">
+                Initial Intake
+              </Badge>
+              <span className="font-mono">• {shareOfTotal(screeningTotal)}%</span>
+            </>
+          }
+        />
 
         {/* 3. Shortlisted & Interviews */}
-        <Link
+        <StatCard
+          label="Interview Stage"
+          value={interviewTotal}
+          icon={Calendar}
+          tone="amber"
           href="/subadmin/applications?status=INTERVIEW_SCHEDULED"
-          className={`bg-card border border-border/80 border-l-4 border-l-amber-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group cursor-pointer ${
+          className={
             validStatus === ApplicationStatus.INTERVIEW_SCHEDULED ||
             validStatus === ApplicationStatus.SHORTLISTED ||
             validStatus === ApplicationStatus.INTERVIEWED
               ? "ring-1 ring-amber-500/40"
-              : ""
-          }`}
-        >
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Interview Stage
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Calendar className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {interviewTotal}
-          </div>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-            <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20">
-              Panel Rounds
-            </Badge>
-            <span className="text-muted-foreground">
-              • {globalTotal ? Math.round((interviewTotal / globalTotal) * 100) : 0}%
-            </span>
-          </div>
-        </Link>
+              : undefined
+          }
+          hint={
+            <>
+              <Badge variant="outline" className="font-mono text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20">
+                Panel Rounds
+              </Badge>
+              <span className="font-mono">• {shareOfTotal(interviewTotal)}%</span>
+            </>
+          }
+        />
 
         {/* 4. 7-Working-Day Supervised Evaluation */}
-        <Link
+        <StatCard
+          label="7-Working-Day Eval Gate"
+          value={evaluationTotal}
+          icon={Award}
+          tone="violet"
           href="/subadmin/applications?status=EVALUATION_SELECTED"
-          className={`bg-card border border-border/80 border-l-4 border-l-purple-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group cursor-pointer ${
-            validStatus === ApplicationStatus.EVALUATION_SELECTED ? "ring-1 ring-purple-500/40" : ""
-          }`}
-        >
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              7-Working-Day Eval Gate
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Award className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {evaluationTotal}
-          </div>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-            <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20">
+          className={validStatus === ApplicationStatus.EVALUATION_SELECTED ? "ring-1 ring-violet-500/40" : undefined}
+          hint={
+            <Badge variant="outline" className="font-mono text-[10px] bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/20">
               Supervised Period
             </Badge>
-          </div>
-        </Link>
+          }
+        />
 
         {/* 5. Offered & Hired */}
-        <Link
+        <StatCard
+          label="Offered & Hired"
+          value={hiredTotal}
+          icon={CheckCircle2}
+          tone="emerald"
           href="/subadmin/applications?status=HIRED"
-          className={`col-span-2 sm:col-span-1 bg-card border border-border/80 border-l-4 border-l-emerald-500 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between group cursor-pointer ${
-            validStatus === ApplicationStatus.HIRED ||
-            validStatus === ApplicationStatus.OFFERED ||
-            validStatus === ApplicationStatus.OFFER_ACCEPTED
-              ? "ring-1 ring-emerald-500/40"
-              : ""
-          }`}
-        >
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider font-mono">
-              Offered & Hired
-            </span>
-            <div className="h-8 w-8 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <CheckCircle2 className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground tracking-tight">
-            {hiredTotal}
-          </div>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono">
-            <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20">
+          className={cn(
+            "col-span-2 sm:col-span-1",
+            (validStatus === ApplicationStatus.HIRED ||
+              validStatus === ApplicationStatus.OFFERED ||
+              validStatus === ApplicationStatus.OFFER_ACCEPTED) &&
+              "ring-1 ring-emerald-500/40"
+          )}
+          hint={
+            <Badge variant="outline" className="font-mono text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20">
               Intake Completed
             </Badge>
-          </div>
-        </Link>
-      </div>
+          }
+        />
+      </StatGrid>
 
       {/* ─── Search & Stage Filter Toolbar ─── */}
       <div className="p-4 rounded-2xl border border-border/80 bg-card/80 backdrop-blur-xs shadow-2xs flex flex-col lg:flex-row gap-4 items-stretch lg:items-center justify-between">

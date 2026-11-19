@@ -1,5 +1,6 @@
 import React from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatCardSkeleton, StatGrid } from "@/components/ui/stat-card";
 import { TableSkeleton, ToolbarSkeleton } from "@/components/feedback/page-skeletons";
 
 /** Mirrors the payroll console: header banner, five summary cards, tabs, filters and the register. */
@@ -18,18 +19,14 @@ export function PayrollPageSkeleton({ label = "Loading payroll" }: { label?: str
           <Skeleton className="h-9 w-32 rounded-xl" />
         </div>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
+      {/* Same grid as `PayrollStatsCards`; the page region above already announces the loading state. */}
+      <StatGrid columns={5}>
         {Array.from({ length: 5 }, (_, i) => (
-          <div key={i} className={`rounded-2xl border border-border/70 bg-card p-4 sm:p-5 space-y-3 ${i === 4 ? "col-span-2 sm:col-span-1" : ""}`}>
-            <div className="flex items-center justify-between">
-              <Skeleton className="h-3 w-24" />
-              <Skeleton className="h-8 w-8 rounded-xl" />
-            </div>
-            <Skeleton className="h-8 w-16" />
-            <Skeleton className="h-3 w-28" />
+          <div key={i} className={i === 4 ? "col-span-2 sm:col-span-1" : undefined}>
+            <StatCardSkeleton />
           </div>
         ))}
-      </div>
+      </StatGrid>
       <div className="flex gap-1.5 p-1 rounded-2xl bg-muted/60 border border-border/60 max-w-fit">
         {Array.from({ length: 4 }, (_, i) => (
           <Skeleton key={i} className="h-8 w-32 rounded-xl" />

@@ -42,6 +42,7 @@ import {
   toUtcDateOnly,
   utcDateKey,
 } from "@/features/attendance/services/attendance-dates";
+import { clampPageNumber } from "@/lib/pagination";
 
 /** Roles that may manage the leave-type catalogue (together with `canLeave`). */
 const LEAVE_CATALOGUE_ROLES: Role[] = [Role.ADMIN, Role.HR];
@@ -209,7 +210,7 @@ function toEmployeeOption(e: Prisma.EmployeeGetPayload<{ select: typeof employee
 /** Clamps page / page size and returns the matching Prisma `skip` / `take`. */
 function pageArgs(page?: number, pageSize?: number) {
   const size = Math.min(Math.max(1, Math.trunc(pageSize ?? LEAVE_DEFAULT_PAGE_SIZE)), LEAVE_MAX_PAGE_SIZE);
-  const current = Math.max(1, Math.trunc(page ?? 1));
+  const current = clampPageNumber(page);
   return { skip: (current - 1) * size, take: size, page: current, pageSize: size };
 }
 

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { NavbarAuthActions } from "@/components/navigation/navbar-auth-actions";
 import { Navbar } from "@/components/navigation/navbar";
+import { FloatingActions } from "@/components/navigation/floating-actions";
 import {
   LinkPendingReporter,
   NavigationProgressBar,
@@ -29,14 +30,26 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/",
 }));
 
-// Mock better-auth client
+// Mock better-auth client; tests set the session the hook reports.
 const mockSignOut = vi.fn().mockResolvedValue({ success: true });
+const sessionMock = vi.hoisted(() => ({
+  current: { data: null, isPending: false } as {
+    data: null | { user: { id: string; name: string; email: string } };
+    isPending: boolean;
+  },
+}));
 vi.mock("@/lib/auth/auth-client", () => ({
   authClient: {
-    useSession: vi.fn(() => ({ data: null, isPending: false })),
+    useSession: vi.fn(() => sessionMock.current),
     signOut: () => mockSignOut(),
   },
 }));
+
+// The floating assistant is replaced by a marker so the test sees when it is rendered.
+vi.mock("@/features/chatbot/components/portal-chatbot-widget", async () => {
+  const { createElement } = await import("react");
+  return { PortalChatbotWidget: () => createElement("p", null, "Assistant ready") };
+});
 
 describe("NavbarAuthActions UI and State", () => {
   beforeEach(() => {
@@ -206,5 +219,80 @@ describe("Navbar links and the navigation progress bar", () => {
       vi.advanceTimersByTime(500);
     });
     expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+});
+
+describe("NavbarAuthActions resolves roles without redundant requests", () => {
+  const sessionFor = (id: string, name: string) => ({
+    data: { user: { id, name, email: `${id}@gara.test` } },
+    isPending: false,
+  });
+  const meResponse = (user: { id: string; name: string; roles: Role[] }) =>
+    new Response(JSON.stringify({ user: { ...user, email: `${user.id}@gara.test` } }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  const fetchMock = vi.fn<typeof fetch>();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    sessionMock.current = { data: null, isPending: false };
+  });
+
+  it("never calls /api/auth/me when the server already rendered the signed-in user", async () => {
+    sessionMock.current = sessionFor("u123", "Ashwani Admin");
+    render(
+      <NavbarAuthActions
+        initialUser={{ id: "u123", name: "Ashwani Admin", email: "ashwani@gara.io", roles: [Role.ADMIN] }}
+      />
+    );
+    await act(async () => {});
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Admin")).toBeDefined();
+  });
+
+  it("resolves roles once per signed-in user on static pages, not on every session refetch", async () => {
+    fetchMock.mockResolvedValue(meResponse({ id: "u-hr", name: "Priya Staff", roles: [Role.HR] }));
+    sessionMock.current = sessionFor("u-hr", "Priya Staff");
+    const view = render(<NavbarAuthActions initialUser={null} />);
+
+    expect(await screen.findByText("Priya Staff")).toBeDefined();
+    expect(screen.getByText("HR")).toBeDefined();
+
+    // Better Auth hands out a new session object on refetch (e.g. window focus).
+    sessionMock.current = sessionFor("u-hr", "Priya Staff");
+    view.rerender(<NavbarAuthActions initialUser={null} />);
+    await act(async () => {});
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/me");
+  });
+
+  it("falls back to the session's basic data as a candidate when /api/auth/me is unreachable", async () => {
+    fetchMock.mockRejectedValue(new Error("offline"));
+    sessionMock.current = sessionFor("u-c", "Rohan Candidate");
+    render(<NavbarAuthActions initialUser={null} />);
+
+    expect(await screen.findByText("Rohan Candidate")).toBeDefined();
+    expect(screen.getByText("Candidate")).toBeDefined();
+  });
+});
+
+describe("FloatingActions opens the assistant on demand", () => {
+  afterEach(cleanup);
+
+  it("renders the assistant only after the visitor opens it", async () => {
+    render(<FloatingActions />);
+    expect(screen.queryByText("Assistant ready")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask GARA AI Assistant" }));
+    expect(await screen.findByText("Assistant ready")).toBeDefined();
   });
 });

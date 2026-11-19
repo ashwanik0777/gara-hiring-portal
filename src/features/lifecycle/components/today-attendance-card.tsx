@@ -70,6 +70,8 @@ export function TodayAttendanceCard({ dateKey, record, canRecord, unavailableRea
         return;
       }
       setFeedback({ kind: "success", text: kind === "in" ? "Checked in for today." : "Checked out for today." });
+      // Kept: the self-service actions revalidate only the attendance pages, not the
+      // dashboards (/hrms, /intern/dashboard, staff workspaces) that render this card.
       router.refresh();
     });
   };

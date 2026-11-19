@@ -22,7 +22,6 @@ const { mockPrisma, mockStorage, mockSession, mockRateLimiter, mockOutbox } = vi
       upload: vi.fn(),
       get: vi.fn(),
       delete: vi.fn(),
-      getDownloadUrl: vi.fn(),
     },
     mockSession: {
       current: null as null | { user: { id: string; email: string; name: string } },
@@ -32,7 +31,9 @@ const { mockPrisma, mockStorage, mockSession, mockRateLimiter, mockOutbox } = vi
   };
 });
 
-vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
+vi.mock("@/lib/db", async () => ({
+  prisma: (await import("./helpers/session-access")).withSessionAccessQuery(mockPrisma),
+}));
 vi.mock("@/infrastructure/storage", () => ({ getStorageService: () => mockStorage }));
 vi.mock("next/headers", () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -354,16 +355,40 @@ describe("Form validator hardening (BUG-16)", () => {
         type: "text",
         required: true,
         order: 1,
+        validation: { pattern: "^[a-z]+$" },
+      },
+    ]);
+
+    const result = validateFormResponses(schema, { code: "a".repeat(301) });
+    expect(result.errors.code).toBe("Code must be at most 300 characters");
+    expect(validateFormResponses(schema, { code: "a".repeat(300) }).isValid).toBe(true);
+    expect(validateFormResponses(schema, { code: "aaa1" }).errors.code).toBe("Code format is invalid");
+  });
+
+  it("never runs a stored catastrophic pattern (saved before the ReDoS check) and logs it once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const schema = schemaWith([
+      {
+        id: "r1",
+        name: "code",
+        label: "Code",
+        type: "text",
+        required: true,
+        order: 1,
         validation: { pattern: "^(a+)+$" },
       },
     ]);
 
+    // 40 characters would backtrack for hours if the pattern ran.
     const started = Date.now();
-    const result = validateFormResponses(schema, { code: `${"a".repeat(600)}!` });
+    const result = validateFormResponses(schema, { code: `${"a".repeat(40)}!` });
+    validateFormResponses(schema, { code: `${"a".repeat(40)}!` });
     expect(Date.now() - started).toBeLessThan(500);
-    expect(result.errors.code).toBe("Code must be at most 500 characters");
-
-    expect(validateFormResponses(schema, { code: "aaaa" }).isValid).toBe(true);
+    expect(result.isValid).toBe(true);
+    expect(result.sanitizedResponses.code).toBe(`${"a".repeat(40)}!`);
+    const skips = warn.mock.calls.filter((call) => String(call[0]).includes("unsafe to run"));
+    expect(skips).toHaveLength(1);
+    warn.mockRestore();
   });
 
   it("zod-parses the raw responses payload as a flat record of primitives", () => {

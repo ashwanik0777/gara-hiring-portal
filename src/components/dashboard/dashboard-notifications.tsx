@@ -4,8 +4,7 @@ import React, {
   useState,
   useEffect,
   useRef,
-  useTransition,
-  useSyncExternalStore,
+  useCallback,
 } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -19,16 +18,9 @@ import {
   CheckCheck,
   X,
 } from "lucide-react";
-import {
-  getDashboardNotificationsAction,
-  markNotificationAsReadAction,
-  markAllNotificationsAsReadAction,
-  dismissNotificationAction,
-} from "@/features/notifications/actions";
+import { getDashboardNotificationsAction } from "@/features/notifications/actions";
 import type { SystemNotification } from "@/features/notifications/types";
 import { Skeleton } from "@/components/ui/skeleton";
-
-const subscribeNoop = () => () => {};
 
 /** Reads a persisted id list from localStorage (empty on the server or on error). */
 function loadStoredIds(key: string): Set<string> {
@@ -119,16 +111,17 @@ interface DashboardNotificationsProps {
 
 export function DashboardNotifications({ userId }: DashboardNotificationsProps) {
   const router = useRouter();
-  const [, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"all" | "unread">("all");
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
-  const [loading, setLoading] = useState(false);
-  // true only on the client after hydration (server snapshot is false)
-  const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
+  // The list is fetched on mount, so it starts in the loading state.
+  const [loading, setLoading] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Only the newest request may update the list (a slow mount fetch never overwrites a refresh).
+  const latestRequestRef = useRef(0);
 
-  // Read/dismissed ids are stored per user so accounts sharing a browser do not mix.
+  // Read/dismissed ids are stored per user in this browser so accounts sharing a browser
+  // do not mix. They never round-trip to the server.
   const readKey = `gara_notifications_read_${userId ?? "anonymous"}`;
   const dismissedKey = `gara_notifications_dismissed_${userId ?? "anonymous"}`;
 
@@ -138,38 +131,35 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
     loadStoredIds(dismissedKey)
   );
 
-  // 2. Fetch notifications on mount and when popover opens
-  useEffect(() => {
-    let isMounted = true;
-    async function loadData() {
-      setLoading(true);
-      try {
-        const data = await getDashboardNotificationsAction();
-        if (isMounted) {
-          setNotifications(data);
-
-          // Merge server-persisted read statuses into client state & localStorage
-          const serverRead = data.filter((n) => n.read).map((n) => n.id);
-          if (serverRead.length > 0) {
-            setReadIds((prev) => {
-              const merged = new Set([...Array.from(prev), ...serverRead]);
-              storeIds(readKey, merged);
-              return merged;
-            });
-          }
-        }
-      } catch (err) {
+  // State is only updated from the request's callbacks, never synchronously.
+  const loadNotifications = useCallback(() => {
+    const requestId = ++latestRequestRef.current;
+    const isLatest = () => requestId === latestRequestRef.current;
+    getDashboardNotificationsAction()
+      .then((data) => {
+        if (isLatest()) setNotifications(data);
+      })
+      .catch((err: unknown) => {
         console.error("Failed to fetch notifications:", err);
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    }
+      })
+      .finally(() => {
+        if (isLatest()) setLoading(false);
+      });
+  }, []);
 
-    loadData();
-    return () => {
-      isMounted = false;
-    };
-  }, [open, readKey]);
+  // 2. Fetch once on mount (for the unread badge); opening the bell refreshes the list.
+  useEffect(() => {
+    loadNotifications();
+  }, [loadNotifications]);
+
+  const toggleOpen = () => {
+    const next = !open;
+    setOpen(next);
+    if (next) {
+      setLoading(true);
+      loadNotifications();
+    }
+  };
 
   // 3. Handle outside click & Escape key to close popover
   useEffect(() => {
@@ -201,14 +191,11 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
     (n) => !dismissedIds.has(n.id)
   );
 
-  // Compute unread count (if item is marked read either in state or from server)
-  const isItemUnread = (n: SystemNotification) => {
-    return !n.read && !readIds.has(n.id);
-  };
+  // Unread unless marked read in this browser. The list is empty until the client fetch
+  // resolves, so the server render and hydration always agree on the badge.
+  const isItemUnread = (n: SystemNotification) => !readIds.has(n.id);
 
-  const unreadCount = mounted
-    ? visibleNotifications.filter(isItemUnread).length
-    : visibleNotifications.filter((n) => !n.read).length;
+  const unreadCount = visibleNotifications.filter(isItemUnread).length;
 
   const displayedNotifications = visibleNotifications.filter((n) => {
     if (activeTab === "unread") {
@@ -217,41 +204,29 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
     return true;
   });
 
-  // Mark single notification as read (client + localStorage + server cookie)
+  // Mark single notification as read (client state + localStorage)
   const markAsRead = (id: string) => {
     const next = new Set(readIds);
     next.add(id);
     setReadIds(next);
     storeIds(readKey, next);
-
-    startTransition(async () => {
-      await markNotificationAsReadAction(id);
-    });
   };
 
-  // Mark all visible notifications as read (client + localStorage + server cookie)
+  // Mark all visible notifications as read (client state + localStorage)
   const markAllAsRead = () => {
     const next = new Set(readIds);
     visibleNotifications.forEach((n) => next.add(n.id));
     setReadIds(next);
     storeIds(readKey, next);
-
-    startTransition(async () => {
-      await markAllNotificationsAsReadAction(visibleNotifications.map((n) => n.id));
-    });
   };
 
-  // Dismiss a notification so it never shows up again
+  // Dismiss a notification so it never shows up again in this browser
   const dismissNotification = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     const next = new Set(dismissedIds);
     next.add(id);
     setDismissedIds(next);
     storeIds(dismissedKey, next);
-
-    startTransition(async () => {
-      await dismissNotificationAction(id);
-    });
   };
 
   // Handle click on a notification item
@@ -271,7 +246,7 @@ export function DashboardNotifications({ userId }: DashboardNotificationsProps) 
         title="View Notifications"
         aria-label="View Notifications"
         aria-expanded={open}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={toggleOpen}
         className={`relative h-8 w-8 rounded-xl border transition-all flex items-center justify-center cursor-pointer shadow-2xs ${
           open
             ? "border-blue-600 bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400"

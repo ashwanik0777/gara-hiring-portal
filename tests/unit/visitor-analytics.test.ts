@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { NextRequest } from "next/server";
+import { connection, NextRequest } from "next/server";
+import { cacheLife } from "next/cache";
 import {
   isBot,
   normalizeUserAgent,
@@ -10,8 +11,9 @@ import {
 } from "@/features/analytics/services/visitor-service";
 import { getClientIpHash } from "@/lib/security/client-ip";
 import { RateLimitError } from "@/lib/errors";
-import { POST as visitorPost } from "@/app/api/analytics/visitors/route";
+import { GET as visitorGet, POST as visitorPost } from "@/app/api/analytics/visitors/route";
 import { parseWhatsAppUrl } from "@/lib/constants";
+import { getSiteUrl } from "@/lib/site-url";
 
 const mockSiteVisitorCount = vi.fn();
 const mockSiteVisitorFindUnique = vi.fn();
@@ -30,6 +32,13 @@ vi.mock("@/lib/db", () => ({
       update: (...args: unknown[]) => mockSiteVisitorUpdate(...args),
     },
   },
+}));
+
+// `cacheLife` and `connection` only work inside a Next.js request; the tests record the calls.
+vi.mock("next/cache", () => ({ cacheLife: vi.fn() }));
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  connection: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/lib/security/rate-limit", async (importOriginal) => {
@@ -219,12 +228,59 @@ describe("POST /api/analytics/visitors", () => {
     vi.clearAllMocks();
   });
 
+  const APP_ORIGIN = new URL(getSiteUrl()).origin;
+
+  /** A same-origin browser request (what the visitor counter on the site's pages sends). */
   function buildRequest(headers: Record<string, string> = {}) {
     return new NextRequest("http://localhost/api/analytics/visitors", {
       method: "POST",
-      headers: { "x-real-ip": "203.0.113.7", "user-agent": "Mozilla/5.0 Chrome/124.0", ...headers },
+      headers: {
+        "x-real-ip": "203.0.113.7",
+        "user-agent": "Mozilla/5.0 Chrome/124.0",
+        origin: APP_ORIGIN,
+        "sec-fetch-site": "same-origin",
+        ...headers,
+      },
     });
   }
+
+  function crossSiteRequest(headers: Record<string, string | null>) {
+    const request = buildRequest();
+    for (const [name, value] of Object.entries(headers)) {
+      if (value === null) request.headers.delete(name);
+      else request.headers.set(name, value);
+    }
+    return request;
+  }
+
+  it.each([
+    ["another site (Sec-Fetch-Site)", { "sec-fetch-site": "cross-site", origin: "https://evil.example" }],
+    ["a sibling subdomain", { "sec-fetch-site": "same-site", origin: "https://sub.example.test" }],
+    ["a foreign Origin without Sec-Fetch-Site", { "sec-fetch-site": null, origin: "https://evil.example" }],
+    ["an opaque Origin", { "sec-fetch-site": null, origin: "null" }],
+    ["no Origin and no Sec-Fetch-Site", { "sec-fetch-site": null, origin: null }],
+    ["a same-origin claim with a foreign Origin", { origin: "https://evil.example" }],
+  ])("refuses a POST from %s before rate limiting or touching the database", async (_label, headers) => {
+    const response = await visitorPost(crossSiteRequest(headers));
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(mockEnforce).not.toHaveBeenCalled();
+    expect(mockSiteVisitorCreate).not.toHaveBeenCalled();
+    expect(mockSiteVisitorCount).not.toHaveBeenCalled();
+  });
+
+  it("accepts a same-origin POST from a browser that sends only one of the two headers", async () => {
+    for (let i = 0; i < 2; i += 1) {
+      mockEnforce.mockResolvedValueOnce({ allowed: true, remaining: 9, retryAfterSeconds: 0 });
+      mockSiteVisitorFindFirst.mockResolvedValueOnce(null);
+      mockSiteVisitorCreate.mockResolvedValueOnce({ id: `rec-${i}` });
+      mockSiteVisitorCount.mockResolvedValueOnce(4);
+    }
+
+    expect((await visitorPost(crossSiteRequest({ "sec-fetch-site": null }))).status).toBe(200);
+    expect((await visitorPost(crossSiteRequest({ origin: null }))).status).toBe(200);
+  });
 
   it("rate limits by the keyed client-IP hash and returns 429 without touching the database", async () => {
     mockEnforce.mockRejectedValueOnce(new RateLimitError(120));
@@ -257,6 +313,37 @@ describe("POST /api/analytics/visitors", () => {
     };
     expect(createArgs.data.ipHash).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(createArgs)).not.toContain("203.0.113.7");
+  });
+});
+
+describe("GET /api/analytics/visitors (public counter)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("serves the count from a minutes-long cache with a shared-cache header", async () => {
+    mockSiteVisitorCount.mockResolvedValueOnce(42);
+
+    const response = await visitorGet();
+
+    expect(await response.json()).toEqual({ success: true, count: 42 });
+    // Rendered per request (never prerendered at build time); the count is "use cache".
+    expect(connection).toHaveBeenCalledTimes(1);
+    expect(cacheLife).toHaveBeenCalledWith({ stale: 300, revalidate: 300, expire: 3600 });
+    expect(response.headers.get("Cache-Control")).toBe(
+      "public, max-age=0, s-maxage=300, stale-while-revalidate=600"
+    );
+  });
+
+  it("never caches a failed read and never fabricates a number", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mockSiteVisitorCount.mockRejectedValueOnce(new Error("DB connection timeout"));
+
+    const response = await visitorGet();
+
+    expect(await response.json()).toEqual({ success: false, count: null });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    consoleError.mockRestore();
   });
 });
 

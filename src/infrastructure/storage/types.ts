@@ -31,9 +31,4 @@ export interface StorageService {
    * Removes a file by its unique storage key.
    */
   delete(storageKey: string): Promise<void>;
-
-  /**
-   * Generates a time-limited or authenticated access URL/token.
-   */
-  getDownloadUrl(storageKey: string, expiresInSeconds?: number): Promise<string>;
 }

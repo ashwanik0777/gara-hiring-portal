@@ -3,6 +3,8 @@
  * back button and shared links reproduce the same view. Pure and client-safe.
  */
 
+import { clampPageNumber } from "@/lib/pagination";
+
 export type RawSearchParams = Record<string, string | string[] | undefined>;
 
 /** First value of a search param (repeated keys arrive as arrays). */
@@ -10,10 +12,9 @@ export function firstParam(value: string | string[] | undefined): string {
   return (Array.isArray(value) ? value[0] : value) ?? "";
 }
 
-/** 1-based page number; anything missing or malformed means the first page. */
+/** 1-based page number up to MAX_PAGE_NUMBER; anything missing or malformed means the first page. */
 export function parsePositivePage(value: string | string[] | undefined): number {
-  const parsed = Number.parseInt(firstParam(value), 10);
-  return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+  return clampPageNumber(Number.parseInt(firstParam(value), 10));
 }
 
 /** `basePath?key=value…`, leaving out empty values so the canonical URL stays short. */

@@ -8,7 +8,7 @@ import { outboxProcessorService } from "./outbox-processor";
  * after a transaction that enqueued notifications has committed.
  *
  * Delivery failures never affect the request; failed rows stay in the outbox
- * and are retried by the `/api/cron/outbox` job.
+ * and are retried by the job runner (`/api/jobs/run`, `npm run worker` or the traffic-triggered automation tick).
  */
 export function scheduleOutboxFlush(): void {
   try {

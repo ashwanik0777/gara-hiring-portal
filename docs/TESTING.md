@@ -1,6 +1,6 @@
 # Testing Strategy — GARA Innovation Platform
 
-> **Status:** Test strategy documentation. Test framework selection and initial setup occur during Prompt 0/1.
+> **Status:** Test strategy and current suites. Vitest unit tests (`tests/unit`) and Playwright end-to-end tests (`tests/e2e`) are committed. CI (`.github/workflows/ci.yml`) runs the unit tests; the end-to-end suites run locally (`docs/RUNBOOK.md` §3.1). There is no integration suite yet.
 
 ---
 
@@ -12,25 +12,26 @@
 
 **What to test:**
 - Business logic in `src/features/*/services/`
-- Validation schemas (`src/features/*/schemas/`)
-- Utility functions (`src/lib/utils/`)
+- Server Actions and their authorization checks (`src/features/*/actions.ts`)
+- Validation schemas (`src/features/*/schemas.ts`)
+- Utility functions (`src/lib/`)
 - Error handling and edge cases
 - State transition validation logic
 - Data transformation functions
 
 **Characteristics:**
-- No database, no network, no filesystem
+- No real database and no external services: files that need persistence replace the Prisma client with `vi.mock("@/lib/db")`
+- A few tests use a temporary directory or a local fake socket (storage and virus-scan tests)
 - Fast execution (< 1 second per test)
-- Mock external dependencies
 - High coverage of business rules
 
-**Framework:** Vitest (recommended — to be validated in Prompt 0 for Next.js 16.4 compatibility)
+**Framework:** Vitest (`vitest.config.ts`: jsdom environment, globals, `@` → `src`). Component tests use `@testing-library/react`. Files are `*.test.ts` / `*.test.tsx`; Vitest never collects the `*.e2e.ts` Playwright specs.
 
-### Integration Tests (`tests/integration/`)
+### Integration Tests (not set up)
 
-**Purpose:** Test database-backed flows, authorization, API routes, and cross-module interactions.
+There is no `tests/integration/` directory. Database-level behaviour (constraints, locks, conditional updates) is exercised only by the E2E journeys, which run against a real PostgreSQL test database. A dedicated integration suite remains open (`docs/SECURITY_REMEDIATION_CHECKLIST.md`, ENG-07).
 
-**What to test:**
+**What it should cover once added:**
 - Server Actions with real database operations
 - Route Handlers with authentication/authorization
 - Database constraints and unique violations
@@ -38,33 +39,41 @@
 - Role-based access control (permitted + forbidden)
 - Record-level ownership enforcement
 
-**Characteristics:**
-- Use a test database (same schema, separate instance)
-- Run migrations before test suite
+**Characteristics (target):**
+- Use a dedicated test database (same schema, separate instance), guarded like the E2E database
+- Run migrations before the suite
 - Each test gets a clean state (transaction rollback or truncation)
-- Slower than unit tests but necessary for confidence
-
-**Framework:** Vitest with test database setup (to be validated)
 
 ### End-to-End Tests (`tests/e2e/`)
 
 **Purpose:** Test critical user journeys in a real browser at realistic viewports.
 
-**What to test:**
-- Candidate registration → application submission → status tracking
-- Staff login → review application → schedule interview → provide feedback
-- Intern task completion → progress view
-- Certificate verification (public)
-- Authentication flows (login, logout, password reset)
-- Responsive behavior (mobile, tablet, desktop)
-- Accessibility (keyboard navigation, screen reader basics)
+**Public suite (`tests/e2e/public/`, no database):**
+- Home, careers, login, reset-password (invalid link) and registration form validation (nothing is submitted)
+- Protected routes send anonymous visitors to `/login` with a `callbackUrl`
+- Security headers and the production CSP; `/api/jobs/run` rejects calls without the secret
+- Help centre, certificate verification form and an unknown code, `robots.txt`, `sitemap.xml`, client-side navigation
+- No horizontal overflow at 375 px
+
+**Journey suite (`tests/e2e/journeys/`, dedicated test database):**
+- Internship: candidate applies, HR runs the pipeline and the evaluation, the intern joins
+- Full-time: candidate applies, HR extends an offer, the candidate accepts, HR marks the employee as joined
 
 **Characteristics:**
-- Run against a running application with seeded test data
-- Test at multiple viewports: mobile (375px), tablet (768px), desktop (1280px)
-- Slower; run in CI but not on every keystroke
+- Playwright starts the app itself (`next dev` by default, `next start` with `E2E_SERVER_MODE=production`)
+- Projects: `chromium` (Desktop Chrome, 1280 × 720) and `mobile-375` (375 × 667 touch profile); the journeys run on desktop only
+- Not run in CI; run locally before releases that touch user flows
 
-**Framework:** Playwright (adopted 2026-10-25; `playwright.config.ts`, specs in `tests/e2e`, usage in `docs/RUNBOOK.md` §3.1). Projects: desktop Chromium and a 375 px mobile profile.
+**Framework:** Playwright (adopted 2026-10-25; `playwright.config.ts`, specs `tests/e2e/**/*.e2e.ts`, usage in `docs/RUNBOOK.md` §3.1).
+
+### How the Journeys Run Against a Test Database
+
+1. Start a throwaway PostgreSQL database whose host or database name contains `test`, for example a local PGlite socket server or a Neon test branch (e.g. database `e2e_test`).
+2. Run `E2E_DATABASE_URL=<that URL> npm run test:e2e`. Without `E2E_DATABASE_URL` every journey is skipped.
+3. `tests/e2e/support/database-guard.ts` refuses the URL if it equals or points at the same host, port and database as `DATABASE_URL` (in `.env` or the environment), or if neither host nor database name contains `test`. The check runs in `playwright.config.ts` and again in global setup.
+4. `tests/e2e/global-setup.ts` runs `prisma migrate deploy` against that database and seeds the deterministic fixtures (`tests/e2e/support/seed.ts`, idempotent upserts).
+5. The app server is started with `DATABASE_URL` set to the test database and `E2E_FIXED_OTP` set to the fixed test code from `tests/e2e/support/fixtures.ts`, so the journeys can pass the emailed sign-in code step. The server honours that code only outside production (`NODE_ENV` not `production`, not on Vercel) and only while connected to the same dedicated test database (`resolveFixedTestOtp` in `src/lib/auth/auth.ts`).
+6. Journeys run one at a time (one worker) against the shared test database.
 
 ---
 
@@ -72,57 +81,42 @@
 
 ```
 tests/
-├── unit/
-│   ├── features/
-│   │   ├── auth/
-│   │   │   └── auth-service.test.ts
-│   │   ├── applications/
-│   │   │   ├── application-service.test.ts
-│   │   │   └── application-schema.test.ts
-│   │   └── ...
-│   ├── lib/
-│   │   ├── validation.test.ts
-│   │   └── utils.test.ts
-│   └── infrastructure/
-│       └── email-adapter.test.ts
+├── unit/                          # Vitest, flat folder of files grouped by domain
+│   ├── applications.test.ts
+│   ├── recruitment.test.ts
+│   ├── security-core.test.ts
+│   ├── navbar-and-auth-redirect.test.tsx
+│   ├── ...                        # *.test.ts / *.test.tsx
+│   └── helpers/                   # Shared mock adapters (e.g. session-access.ts for the session query)
 │
-├── integration/
-│   ├── features/
-│   │   ├── auth/
-│   │   │   ├── login.test.ts
-│   │   │   └── registration.test.ts
-│   │   ├── applications/
-│   │   │   ├── submit-application.test.ts
-│   │   │   └── application-access.test.ts
-│   │   └── ...
-│   ├── api/
-│   │   └── verify-certificate.test.ts
-│   └── setup.ts              # DB connection, migration, cleanup
-│
-├── e2e/
-│   ├── candidate-journey.spec.ts
-│   ├── recruitment-workflow.spec.ts
-│   ├── auth-flow.spec.ts
-│   ├── certificate-verification.spec.ts
-│   └── responsive.spec.ts
-│
-├── fixtures/
-│   ├── users.ts              # Test user data
-│   ├── openings.ts           # Test openings data
-│   └── applications.ts       # Test application data
-│
-└── helpers/
-    ├── db.ts                 # Test database utilities
-    ├── auth.ts               # Test authentication helpers
-    ├── factories.ts          # Test data factories
-    └── matchers.ts           # Custom test matchers
+└── e2e/                           # Playwright
+    ├── global-setup.ts            # Guard, migrate and seed the dedicated test database
+    ├── public/                    # No database
+    │   ├── public-pages.e2e.ts
+    │   ├── security.e2e.ts
+    │   ├── site-files-and-help.e2e.ts
+    │   └── mobile-layout.e2e.ts
+    ├── journeys/                  # Dedicated test database
+    │   ├── internship-journey.e2e.ts
+    │   └── full-time-journey.e2e.ts
+    └── support/
+        ├── database-guard.ts      # Refuses anything that could be a real database
+        ├── env.ts                 # Skip conditions (no test database, production server)
+        ├── fixtures.ts            # Fixed test users, openings, OTP and passwords
+        ├── seed.ts                # Writes the fixtures to the test database
+        ├── auth-ui.ts             # Sign-in helpers
+        └── journey-ui.ts          # Shared journey steps
 ```
+
+Run output goes to `tests/.e2e-results/` (and the HTML report on CI-mode runs to `tests/.e2e-report/`); both are gitignored.
 
 ---
 
 ## 3. Critical Test Journeys
 
 ### Must-Have Test Coverage
+
+The "Test Type" column is the target. Until an integration suite exists, the Integration rows are covered by unit tests with mocked persistence and, where a journey passes through them, by the E2E journeys.
 
 | Journey | Test Type | Priority |
 |---|---|---|
@@ -164,35 +158,30 @@ tests/
 
 ## 4. Quality Gate Commands
 
-To be configured during Prompt 0/1 after framework selection. Target pipeline:
+CI (`.github/workflows/ci.yml`) runs steps 1–4 on every push to `main` and every pull request, with an unreachable placeholder `DATABASE_URL` and no secrets.
 
 ```bash
-# 1. Format check
-npx prettier --check .
+# 1. TypeScript type check
+npm run typecheck
 
 # 2. Lint
-npx eslint .
+npm run lint
 
-# 3. TypeScript type check
-npx tsc --noEmit
+# 3. Unit tests (Vitest)
+npm test
 
-# 4. Unit tests
-npx vitest run --project unit
-
-# 5. Integration tests
-npx vitest run --project integration
-
-# 6. Production build
+# 4. Production build
 npm run build
 
-# 7. E2E tests (against built app)
-npx playwright test
+# 5. E2E tests (local; journeys need E2E_DATABASE_URL, see §1)
+npm run test:e2e:install   # once: downloads Chromium
+npm run test:e2e
 
-# 8. Migration check (ensure schema and migrations are in sync)
-npx prisma migrate diff --from-migrations ./prisma/migrations --to-schema-datamodel ./prisma/schema.prisma --exit-code
+# 6. Migration check against a migrated test database (exit code 0 = in sync, 2 = drift)
+DATABASE_URL=<test database URL> npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
 ```
 
-> Exact commands depend on tooling selected in Prompt 0. These are representative targets.
+> No formatter check is configured (there is no Prettier in the project).
 
 ---
 
@@ -224,37 +213,31 @@ npx prisma migrate diff --from-migrations ./prisma/migrations --to-schema-datamo
 ### Principles
 
 - Test data is **deterministic** — same input always produces same state.
-- Test data is **clearly identified** — factory functions, fixture files, or seed scripts labeled as test-only.
+- Test data is **clearly identified** — fixture files labeled as test-only.
 - Test data **never** contains real candidate/employee information.
-- `prisma/seed.ts` is for development/test only — it must be clearly marked and never run against production.
-- Each integration test cleans up after itself (transaction rollback or truncation).
+- There is no seed file in `prisma/`; the only automated seed is `tests/e2e/support/seed.ts`, which writes to the dedicated test database only.
+- Unit tests build their inputs inline in each test file (there are no shared factories).
 - E2E tests use a dedicated test database, seeded before the test run.
 
-### Test Data Factories
+### E2E Fixtures
 
-Use factory functions (in `tests/helpers/factories.ts`) to create test entities with sensible defaults but customizable fields:
+`tests/e2e/support/fixtures.ts` defines everything the journeys rely on:
 
-```typescript
-// Example pattern (not implemented yet)
-function createTestUser(overrides?: Partial<UserInput>): UserInput {
-  return {
-    email: `test-${randomId()}@example.com`,
-    name: 'Test User',
-    role: 'CANDIDATE',
-    ...overrides,
-  };
-}
-```
+- Seeded staff accounts (admin, HR, mentor) and two published openings (internship, full-time) with fixed UUIDs and `E2E` names
+- Email addresses on the reserved `.test` domain (e.g. `e2e-hr@example.test`)
+- The test-only fixed one-time code and staff password (overridable with `E2E_STAFF_PASSWORD`)
+- `newCandidateIdentity()` for the candidate each journey registers, with a unique run suffix so repeated runs on the same database never collide
 
 ---
 
 ## 7. Test Environment Rules
 
-- Test database is separate from development database.
-- Test environment variables are in `.env.test` (not committed; variables documented in `docs/RUNBOOK.md` section 2).
-- Tests must not depend on external services (email, AI, storage) being available. Mock infrastructure adapters.
+- The E2E test database is separate from the development database; the database guard enforces it.
+- There is no `.env.test`. E2E variables are set in the shell (`E2E_DATABASE_URL`, optional `E2E_SERVER_MODE`, `E2E_PORT`, `E2E_STAFF_PASSWORD`); `playwright.config.ts` gives the app server its own environment.
+- Tests must not depend on external services (email, AI, storage) being available. Unit tests mock infrastructure adapters; the E2E app server gets SMTP pointed at a closed local port, link-only document storage and virus scanning off.
+- Without a test database, the E2E app server's `DATABASE_URL` points at a closed local port, so the public suite can never reach a real database.
 - Tests must not depend on specific data in the development database.
-- CI runs tests in an isolated environment with its own database.
+- CI has no database: unit tests mock it and the build uses an unreachable placeholder URL.
 
 ---
 
@@ -263,7 +246,7 @@ function createTestUser(overrides?: Partial<UserInput>): UserInput {
 - Do not skip tests to make CI green. Fix the test or document why it's temporarily disabled.
 - Do not claim an OAuth/email/storage integration works unless tested with relevant configuration.
 - Do not mock the database in integration tests (that defeats the purpose).
-- Do not use `Math.random()` for test data — use deterministic factories.
+- Do not use `Math.random()` for fixture data — seeded fixtures use fixed UUIDs and names. The only exception is the unique run suffix of journey candidates (`newCandidateIdentity`), which keeps repeated runs on the same test database apart.
 - Do not test implementation details (internal function call order). Test behavior and outcomes.
 - Do not write tests that depend on execution order.
 - Do not commit test database credentials.

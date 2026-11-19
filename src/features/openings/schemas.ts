@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { OpeningStatus, OpeningType, WorkplaceType } from "@prisma/client";
+import { OpeningStatus, OpeningType, WorkplaceType } from "@/types/enums";
 
 export const VALID_STATUS_TRANSITIONS: Record<OpeningStatus, OpeningStatus[]> = {
   [OpeningStatus.DRAFT]: [OpeningStatus.PUBLISHED],

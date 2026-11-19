@@ -40,7 +40,9 @@ const { db, state } = vi.hoisted(() => {
   return { db, state };
 });
 
-vi.mock("@/lib/db", () => ({ prisma: db }));
+vi.mock("@/lib/db", async () => ({
+  prisma: (await import("./helpers/session-access")).withSessionAccessQuery(db),
+}));
 vi.mock("next/headers", () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth/auth", () => ({

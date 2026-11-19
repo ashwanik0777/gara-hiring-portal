@@ -6,7 +6,7 @@ import { resolveHomePath } from "@/features/lifecycle/services/lifecycle-service
 export const instant = false;
 
 export const metadata = {
-  title: "Set Permanent Password | GARA Innovation",
+  title: "Set Permanent Password",
   description: "Set your permanent password on first sign-in",
 };
 

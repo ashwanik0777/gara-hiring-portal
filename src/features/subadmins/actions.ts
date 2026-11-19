@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireAuth, type AuthenticatedUser } from "@/lib/auth/guards";
 import { SUB_ADMIN_ROLES } from "@/lib/auth/permissions";
-import { toActionError } from "@/lib/errors";
+import { ForbiddenError, toActionError } from "@/lib/errors";
 import { Role } from "@prisma/client";
 import { hashPassword } from "better-auth/crypto";
 import { NodemailerEmailAdapter } from "@/infrastructure/email/outbox-processor";
@@ -180,6 +180,9 @@ export async function createSubAdminAction(formData: z.infer<typeof createSubAdm
   }
 }
 
+const NOT_STAFF_MESSAGE =
+  "This account does not hold a staff role. Create a Sub-Admin account instead of promoting a candidate, intern or employee.";
+
 const updatePermissionsSchema = z.object({
   subAdminId: z.string().uuid(),
   role: z.enum([Role.HR, Role.MANAGER, Role.INTERVIEWER, Role.MENTOR]),
@@ -215,10 +218,11 @@ export async function updateSubAdminPermissionsAction(
     return { success: false, error: "You cannot change your own roles or permissions." };
   }
 
-  // Prevent modifying accounts that hold the ADMIN role
+  // Only existing staff accounts are edited here: Super Admins are never modified, and a
+  // candidate, intern or employee can never be turned into staff through this action.
   const target = await prisma.user.findUnique({
     where: { id: subAdminId },
-    select: { id: true, roles: { select: { role: true } }, subAdminPermission: true },
+    select: { id: true, roles: { select: { role: true } } },
   });
   if (!target) {
     return { success: false, error: "Sub-Admin account not found." };
@@ -226,13 +230,20 @@ export async function updateSubAdminPermissionsAction(
   if (target.roles.some((r) => r.role === Role.ADMIN)) {
     return { success: false, error: "Cannot modify a Super Admin's roles or permissions." };
   }
+  if (!target.roles.some((r) => SUB_ADMIN_ROLES.includes(r.role))) {
+    return { success: false, error: NOT_STAFF_MESSAGE };
+  }
 
   try {
     await prisma.$transaction(async (tx) => {
       // 1. Replace only the staff role; non-staff roles (EMPLOYEE, INTERN, CANDIDATE) are preserved.
-      await tx.userRole.deleteMany({
+      const removed = await tx.userRole.deleteMany({
         where: { userId: subAdminId, role: { in: SUB_ADMIN_ROLES } },
       });
+      // Staff access revoked since the check above: roll back instead of re-granting it.
+      if (removed.count === 0) {
+        throw new ForbiddenError(NOT_STAFF_MESSAGE);
+      }
 
       await tx.userRole.create({
         data: {

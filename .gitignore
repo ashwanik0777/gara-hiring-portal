@@ -41,8 +41,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-/app/generated/prisma
-
 # private storage
 /.storage/
 /storage/
@@ -52,6 +50,6 @@ next-env.d.ts
 
 # test run output (the tests themselves are committed since 2026-10-26)
 /tests/.e2e-results/
+/tests/.e2e-report/
 /playwright-report/
 /test-results/
-/coverage/

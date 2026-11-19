@@ -1,4 +1,4 @@
-import { CertificateStatus, CompletionStatus } from "@prisma/client";
+import { CertificateStatus, CompletionStatus } from "@/types/enums";
 
 export { CertificateStatus, CompletionStatus };
 

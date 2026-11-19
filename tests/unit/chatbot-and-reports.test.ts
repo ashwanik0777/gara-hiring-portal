@@ -541,7 +541,7 @@ describe("Prompt 9: Operational Reports RBAC, Private-Field Redaction & Audited 
     expect(csvResult.csvContent).toContain(
       "EmployeeCode,EmployeeName,Department,Designation,Status,JoiningDate,ManagerName"
     );
-    expect(csvResult.csvContent).toContain("GARA-EMP-001,Rohan Verma,Engineering");
+    expect(csvResult.csvContent).toContain('"GARA-EMP-001","Rohan Verma","Engineering"');
     expect(csvResult.csvContent).not.toContain("personalPhone");
     expect(csvResult.csvContent).not.toContain("emergencyContact");
     expect(csvResult.csvContent).not.toContain("internalNotes");
@@ -706,12 +706,18 @@ describe("Remediation: Reports permission gates, payroll redaction & CSV hardeni
 
   it("neutralises CSV formula injection including leading tab and carriage return", () => {
     expect(escapeCsvCell("=HYPERLINK(\"http://evil\")")).toBe('"\'=HYPERLINK(""http://evil"")"');
-    expect(escapeCsvCell("+1")).toBe("'+1");
-    expect(escapeCsvCell("-2")).toBe("'-2");
-    expect(escapeCsvCell("@SUM(A1)")).toBe("'@SUM(A1)");
+    expect(escapeCsvCell("+1")).toBe(`"'+1"`);
+    expect(escapeCsvCell("-2")).toBe(`"'-2"`);
+    expect(escapeCsvCell("@SUM(A1)")).toBe(`"'@SUM(A1)"`);
     expect(escapeCsvCell("\t=cmd")).toBe('"\'\t=cmd"');
     expect(escapeCsvCell("\r=cmd")).toBe('"\'\r=cmd"');
-    expect(escapeCsvCell("Plain Name")).toBe("Plain Name");
+    // Every cell is quoted, so separators and line breaks never split a cell or a row.
+    expect(escapeCsvCell("Plain Name")).toBe('"Plain Name"');
+    expect(escapeCsvCell('Say "hi", then\nleave')).toBe('"Say ""hi"", then\nleave"');
+    expect(escapeCsvCell(42)).toBe('"42"');
+    expect(escapeCsvCell(false)).toBe('"false"');
+    expect(escapeCsvCell(null)).toBe('""');
+    expect(escapeCsvCell(undefined)).toBe('""');
   });
 
   it("does not export certificate verification codes in the internship lifecycle CSV", async () => {
@@ -815,6 +821,47 @@ describe("Remediation: Notification bell scoping (SEC-08)", () => {
     expect(items[0].message).not.toContain("medical");
     expect(items[0].link).toBe("/subadmin/leave");
   });
+
+  it("never lists the viewer's own application or interview to staff", async () => {
+    const items = await buildNotificationsForUser(adminUser);
+
+    const ownExcluded = { AND: [{ candidate: { userId: { not: adminUser.id } } }] };
+    expect(mockApplicationFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: ownExcluded }));
+    expect(mockInterviewFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { status: "SCHEDULED", application: ownExcluded } })
+    );
+    expect(items).toEqual([]);
+  });
+
+  it("limits interviewer-scoped staff to applications they are assigned to", async () => {
+    const interviewer: AuthenticatedUser = {
+      id: "user-interviewer-1",
+      name: "Iqbal Interviewer",
+      email: "iqbal@example.test",
+      roles: [Role.INTERVIEWER],
+    };
+    mockSubAdminPermissionFindUnique.mockResolvedValue(
+      permissionRow(interviewer.id, false, { canApplications: true, canInterviews: true })
+    );
+
+    await buildNotificationsForUser(interviewer);
+
+    const scoped = {
+      AND: [
+        { candidate: { userId: { not: interviewer.id } } },
+        {
+          OR: [
+            { assignedRecruiterId: interviewer.id },
+            { interviewSchedules: { some: { interviewerId: interviewer.id } } },
+          ],
+        },
+      ],
+    };
+    expect(mockApplicationFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: scoped }));
+    expect(mockInterviewFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { status: "SCHEDULED", application: scoped } })
+    );
+  });
 });
 
 describe("Remediation: Chatbot guest rate-limit keying", () => {
@@ -886,7 +933,98 @@ describe("Reports tabs: the server-rendered Registrations tab (round 6)", () => 
 
     // Without the server-rendered section the dashboard falls back to the overview.
     expect(screen.getByText("30 Days")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /Registrations/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Registrations/ }));
     expect(mockRouterPush).toHaveBeenCalledWith("/admin/reports?startDate=2026-10-01&tab=registrations");
+  });
+});
+
+describe("Reports tab bar (round 7): one full-width ARIA tablist above the filters", () => {
+  const reports = new ReportService();
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    cleanup();
+    mockSubAdminPermissionFindUnique.mockResolvedValue(null);
+    mockEmptyAnalyticsQueries();
+  });
+
+  async function renderDashboard(user: AuthenticatedUser = adminUser) {
+    const data = await reports.getComprehensiveAnalytics(user, {});
+    render(createElement(AnalyticsDashboardClient, { initialData: data, basePath: "/admin" }));
+    return screen.getAllByRole("tab");
+  }
+
+  it("exposes every section as a tab in a tablist with one selected tab and a labelled panel", async () => {
+    const tabs = await renderDashboard();
+    expect(screen.getByRole("tablist", { name: "Report sections" })).toBeTruthy();
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Overview",
+      "Recruitment & Pipeline (0)",
+      "Hiring Funnel",
+      "Registrations",
+      "Workforce & HR (0)",
+      "Payroll & Finance",
+      "Audited CSV Exports",
+    ]);
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual([
+      "true",
+      "false",
+      "false",
+      "false",
+      "false",
+      "false",
+      "false",
+    ]);
+    // Roving tab stop: only the selected tab is in the Tab order.
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1, -1, -1, -1, -1]);
+    const panel = screen.getByRole("tabpanel");
+    for (const tab of tabs) {
+      expect(tab.getAttribute("aria-controls")).toBe(panel.id);
+    }
+    expect(panel.getAttribute("aria-labelledby")).toBe(tabs[0].id);
+  });
+
+  it("moves focus with the arrow keys (wrapping), Home and End without activating", async () => {
+    const tabs = await renderDashboard();
+    tabs[0].focus();
+
+    fireEvent.keyDown(tabs[0], { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[1]);
+    fireEvent.keyDown(tabs[1], { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tabs[0]);
+    fireEvent.keyDown(tabs[0], { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tabs[tabs.length - 1]);
+    fireEvent.keyDown(tabs[tabs.length - 1], { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[0]);
+    fireEvent.keyDown(tabs[0], { key: "End" });
+    expect(document.activeElement).toBe(tabs[tabs.length - 1]);
+    fireEvent.keyDown(tabs[tabs.length - 1], { key: "Home" });
+    expect(document.activeElement).toBe(tabs[0]);
+
+    // Manual activation: moving focus alone neither selects a tab nor navigates.
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    expect(mockRouterPush).not.toHaveBeenCalled();
+  });
+
+  it("activates a tab on click, keeps the strip and the period toolbar in place, and hides payroll without the permission", async () => {
+    const tabs = await renderDashboard();
+    expect(screen.getByRole("group", { name: "Period" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "All Time" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("tab", { name: /Workforce & HR/ }));
+    const workforce = screen.getByRole("tab", { name: /Workforce & HR/ });
+    expect(workforce.getAttribute("aria-selected")).toBe("true");
+    expect(workforce.tabIndex).toBe(0);
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(workforce.id);
+    // Same tabs, and the filters stay on their own row below the strip.
+    expect(screen.getAllByRole("tab")).toHaveLength(tabs.length);
+    expect(screen.getByText("30 Days")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Custom Filter/ }).getAttribute("aria-expanded")).toBe("false");
+
+    cleanup();
+    mockSubAdminPermissionFindUnique.mockResolvedValue(permissionRow(hrUser.id, true, { canPayroll: false }));
+    const hrTabs = await renderDashboard(hrUser);
+    expect(hrTabs.map((tab) => tab.textContent)).not.toContain("Payroll & Finance");
+    expect(screen.getAllByText("Restricted").length).toBeGreaterThan(0);
   });
 });

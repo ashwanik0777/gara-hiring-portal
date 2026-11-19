@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
+import { getSiteUrl } from "@/lib/site-url";
 import { FloatingSocialDock } from "@/components/navigation/floating-social-dock";
 import { FloatingActions } from "@/components/navigation/floating-actions";
 
@@ -15,13 +16,33 @@ const spaceGrotesk = Space_Grotesk({
   variable: "--font-display",
 });
 
+const SITE_TITLE = "GARA Innovation — Careers, Internships & Verified Credentials";
+const SITE_DESCRIPTION =
+  "Apply for internship cohorts and full-time roles at GARA Innovation, track your application and verify GARA certificates.";
+
 export const metadata: Metadata = {
+  // Absolute base for every relative metadata URL (Open Graph images, canonical links).
+  metadataBase: new URL(getSiteUrl()),
+  applicationName: "GARA Innovation",
   title: {
-    default: "GARA Innovation — Recruitment, Internship & HRMS Platform",
+    default: SITE_TITLE,
     template: "%s | GARA Innovation",
   },
-  description:
-    "Enterprise Recruitment, Internship Lifecycle and HRMS Platform for GARA Innovation.",
+  description: SITE_DESCRIPTION,
+  // Link previews (WhatsApp, LinkedIn, Slack, X) read these tags from the server HTML; the
+  // image comes from src/app/opengraph-image.tsx unless a page provides its own.
+  openGraph: {
+    type: "website",
+    locale: "en_IN",
+    siteName: "GARA Innovation",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+  },
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },

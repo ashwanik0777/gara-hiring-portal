@@ -7,11 +7,13 @@ import {
   type RawSearchParams,
 } from "../services/attendance-page-data";
 import { AttendanceManagementClient } from "./attendance-management-client";
+import { AttendanceStatsCards } from "./attendance-stats-cards";
 
 /**
  * Streams the data-dependent part of an attendance page: reads the URL filters (month,
- * status, search, page) and loads one page server-side. The page itself only performs the
- * authentication and role guards and wraps this in `<Suspense>`.
+ * status, search, page), loads one page server-side and renders the team summary cards on
+ * the server. The page itself only performs the authentication and role guards and wraps
+ * this in `<Suspense>`.
  */
 export async function AttendancePageSection({
   user,
@@ -31,5 +33,11 @@ export async function AttendancePageSection({
     return <UnauthorizedState message={pageData.message} />;
   }
 
-  return <AttendanceManagementClient pageData={pageData} portalRole={portalRole} />;
+  return (
+    <AttendanceManagementClient
+      pageData={pageData}
+      portalRole={portalRole}
+      statsSlot={pageData.view === "team" ? <AttendanceStatsCards pageData={pageData} /> : null}
+    />
+  );
 }

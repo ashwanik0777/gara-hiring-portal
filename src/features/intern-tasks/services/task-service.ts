@@ -19,6 +19,7 @@ import {
   rethrowUniqueAsConflict,
 } from "@/features/internship-evaluation/services/enrollment-access";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
+import { clampPageNumber } from "@/lib/pagination";
 
 interface EnrollmentRef {
   id: string;
@@ -35,7 +36,7 @@ export const SUBMISSION_HISTORY_LIMIT = 10;
 function normalizePaging(query: ListPageQuery): { page: number; pageSize: number; skip: number } {
   const clamp = (value: number, min: number, max: number) =>
     Number.isFinite(value) ? Math.min(max, Math.max(min, Math.trunc(value))) : min;
-  const page = clamp(query.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+  const page = clampPageNumber(query.page);
   const pageSize = clamp(query.pageSize ?? TASK_LIST_PAGE_SIZE, 1, TASK_LIST_MAX_PAGE_SIZE);
   return { page, pageSize, skip: (page - 1) * pageSize };
 }

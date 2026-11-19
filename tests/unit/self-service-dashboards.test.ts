@@ -688,7 +688,8 @@ describe("My Journey (read-only history after joining)", () => {
 });
 
 describe("CareerInterestPrompt", () => {
-  it("saves the chosen interest and refreshes the dashboard", async () => {
+  it("saves the chosen interest without a second client refresh (the action revalidates the dashboard)", async () => {
+    mockRefresh.mockClear();
     mockSaveCareerInterest.mockResolvedValue({ success: true });
     render(React.createElement(CareerInterestPrompt));
 
@@ -698,7 +699,10 @@ describe("CareerInterestPrompt", () => {
 
     fireEvent.click(screen.getByLabelText(/Internship/));
     fireEvent.click(screen.getByRole("button", { name: /save preference/i }));
-    await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
-    expect(mockSaveCareerInterest).toHaveBeenCalledWith({ careerInterest: "INTERNSHIP" });
+    await waitFor(() =>
+      expect(mockSaveCareerInterest).toHaveBeenCalledWith({ careerInterest: "INTERNSHIP" })
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: /save preference/i })).toHaveProperty("disabled", false));
+    expect(mockRefresh).not.toHaveBeenCalled();
   });
 });

@@ -38,15 +38,13 @@ import { ValidationError } from "@/lib/errors";
 /**
  * Escapes a CSV cell and neutralises spreadsheet formula injection: cells that
  * start with `=`, `+`, `-`, `@`, a tab or a carriage return are prefixed with `'`.
+ * Every cell is quoted (inner quotes doubled), so no value can end a cell or a row
+ * early; empty values become `""`.
  */
 export function escapeCsvCell(value: string | number | boolean | null | undefined): string {
-  if (value === null || value === undefined) return "";
-  const str = String(value);
+  const str = value === null || value === undefined ? "" : String(value);
   const safeStr = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
-  if (/[",\n\r\t]/.test(safeStr)) {
-    return `"${safeStr.replace(/"/g, '""')}"`;
-  }
-  return safeStr;
+  return `"${safeStr.replace(/"/g, '""')}"`;
 }
 
 /** Timestamp literal for the `timestamp(3)` columns, which store UTC wall-clock time. */

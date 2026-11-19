@@ -1,5 +1,7 @@
 import { FormSchemaDefinition, FormFieldDefinition, DocumentStorageMode } from "../types";
 import { documentLinkSchema, DOCUMENT_LINK_INVALID_MESSAGE, DOCUMENT_LINK_REQUIRED_MESSAGE } from "../schemas";
+import { checkFieldPatternSafety, MAX_PATTERN_INPUT_LENGTH } from "../pattern-safety";
+import { logger } from "@/lib/logging/logger";
 
 export interface ValidationResult {
   isValid: boolean;
@@ -34,11 +36,30 @@ export const DEFAULT_MAX_FILE_SIZE_MB = 5;
 /** Hard cap for any free-text answer, independent of admin-configured limits. */
 export const MAX_TEXT_ANSWER_LENGTH = 5_000;
 
+/** Compiled field patterns by source; `null` marks a stored pattern that is never run. */
+const compiledFieldPatterns = new Map<string, RegExp | null>();
+const MAX_COMPILED_FIELD_PATTERNS = 200;
+
 /**
- * Admin-configured regular expressions are only evaluated against inputs up to this
- * length, bounding the cost of pathological patterns.
+ * Compiles a stored field pattern once. Patterns that are invalid or fail the ReDoS check
+ * (stored before the save-time check existed) are skipped: they are never run against
+ * candidate input, and the skip is logged once per pattern.
  */
-export const MAX_PATTERN_INPUT_LENGTH = 500;
+function compileFieldPattern(pattern: string): RegExp | null {
+  const cached = compiledFieldPatterns.get(pattern);
+  if (cached !== undefined) return cached;
+  const safety = checkFieldPatternSafety(pattern);
+  const regex = safety.safe ? new RegExp(pattern) : null;
+  if (!safety.safe) {
+    logger.warn("Skipping a stored application form field pattern that is unsafe to run", {
+      reason: safety.reason,
+      patternLength: pattern.length,
+    });
+  }
+  if (compiledFieldPatterns.size >= MAX_COMPILED_FIELD_PATTERNS) compiledFieldPatterns.clear();
+  compiledFieldPatterns.set(pattern, regex);
+  return regex;
+}
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -299,19 +320,14 @@ export function validateFormResponses(
       errors[field.name] = `${field.label} must be at most ${field.validation.max} characters`;
       continue;
     }
-    if (field.validation?.pattern) {
+    const regex = field.validation?.pattern ? compileFieldPattern(field.validation.pattern) : null;
+    if (regex) {
+      // The input cap bounds the cost of the (already checked) pattern.
       if (strVal.length > MAX_PATTERN_INPUT_LENGTH) {
         errors[field.name] = `${field.label} must be at most ${MAX_PATTERN_INPUT_LENGTH} characters`;
         continue;
       }
-      let regex: RegExp | null = null;
-      try {
-        regex = new RegExp(field.validation.pattern);
-      } catch {
-        // Invalid patterns are rejected when the form is saved; ignore legacy ones here.
-        regex = null;
-      }
-      if (regex && !regex.test(strVal)) {
+      if (!regex.test(strVal)) {
         errors[field.name] = `${field.label} format is invalid`;
         continue;
       }

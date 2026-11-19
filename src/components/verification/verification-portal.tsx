@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useTransition } from "react";
+import React, { useState, useEffect, useTransition, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   ShieldCheck,
   AlertTriangle,
@@ -37,19 +37,32 @@ interface VerificationResult {
 
 const MAX_CODE_LENGTH = 64;
 
-export function VerificationPortal() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const initialCode = searchParams.get("code") || "";
+function subscribeToHistory(onChange: () => void): () => void {
+  window.addEventListener("popstate", onChange);
+  return () => window.removeEventListener("popstate", onChange);
+}
 
-  const [inputCode, setInputCode] = useState(initialCode);
+function readCodeFromLocation(): string {
+  return new URLSearchParams(window.location.search).get("code") ?? "";
+}
+
+export function VerificationPortal() {
+  const router = useRouter();
+  // `?code=` is read in the browser only: the server renders the empty form, so the page is
+  // part of the static HTML (visible without JavaScript and in link previews) instead of a
+  // loading placeholder, which useSearchParams would cause.
+  const initialCode = useSyncExternalStore(subscribeToHistory, readCodeFromLocation, () => "");
+
+  // The field shows the URL code until the person edits it.
+  const [editedCode, setInputCode] = useState<string | null>(null);
+  const inputCode = editedCode ?? initialCode;
   const [result, setResult] = useState<VerificationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [, startTransition] = useTransition();
 
-  // If initial code is in URL on mount, auto-verify
+  // If a code is in the URL, verify it.
   useEffect(() => {
     if (initialCode.trim()) {
       handleVerify(initialCode.trim());

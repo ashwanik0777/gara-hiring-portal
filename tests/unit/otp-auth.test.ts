@@ -26,7 +26,6 @@ const h = vi.hoisted(() => ({
     emailOtp: { verifyEmail: vi.fn(), sendVerificationOtp: vi.fn() },
   },
   router: { replace: vi.fn(), push: vi.fn(), refresh: vi.fn() },
-  search: { value: "" },
   getPostLoginRedirectAction: vi.fn(),
 }));
 
@@ -45,7 +44,6 @@ vi.mock("@/infrastructure/email/outbox-processor", () => ({
 vi.mock("@/lib/auth/auth-client", () => ({ authClient: h.authClient }));
 vi.mock("next/navigation", () => ({
   useRouter: () => h.router,
-  useSearchParams: () => new URLSearchParams(h.search.value),
 }));
 vi.mock("next/image", async () => {
   const { createElement } = await import("react");
@@ -125,7 +123,7 @@ function post(path: string, body: unknown): Promise<Response> {
 beforeEach(() => {
   vi.clearAllMocks();
   h.afterTasks.length = 0;
-  h.search.value = "";
+  window.history.replaceState({}, "", "/");
   h.prisma.twoFactor.create.mockResolvedValue({});
   h.prisma.candidateProfile.upsert.mockResolvedValue({});
   h.sendEmail.mockResolvedValue(undefined);
@@ -222,8 +220,10 @@ describe("Auth configuration", () => {
       "/two-factor/send-otp": { window: 60, max: 3 },
       "/email-otp/verify-email": { window: 60, max: 10 },
       "/two-factor/verify-otp": { window: 60, max: 10 },
+      // Session reads are not counted (no database write per page view).
+      "/get-session": false,
     });
-    expect(OTP_RATE_LIMIT_RULES).toBe(auth.options.rateLimit.customRules);
+    expect(auth.options.rateLimit.customRules).toEqual({ ...OTP_RATE_LIMIT_RULES, "/get-session": false });
   });
 
   it("never links Google to a password account whose email is not verified", () => {
@@ -755,7 +755,8 @@ describe("AuthSplitScreen sign-in branching", () => {
   });
 
   it("explains a Google sign-in that could not link to an unverified password account", () => {
-    h.search.value = "error=account_not_linked";
+    // The auth screen reads the query from the browser location (not useSearchParams).
+    window.history.replaceState({}, "", "/login?error=account_not_linked");
     renderAuthScreen("login");
     expect(screen.getAllByText(/Sign in with your email and password first/).length).toBeGreaterThan(0);
     expect(document.body.textContent).not.toContain("account_not_linked");

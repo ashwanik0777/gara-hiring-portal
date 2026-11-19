@@ -91,13 +91,6 @@ export function capabilitiesForStage(stage: LifecycleStage): PortalCapability[] 
   return [...STAGE_CAPABILITIES[stage]];
 }
 
-export function hasCapability(
-  capabilities: readonly PortalCapability[],
-  capability: PortalCapability
-): boolean {
-  return capabilities.includes(capability);
-}
-
 /** Applications can be managed only before joining; afterwards they are history. */
 export function isApplicationsReadOnly(stage: LifecycleStage): boolean {
   return !STAGE_CAPABILITIES[stage].includes("applications");

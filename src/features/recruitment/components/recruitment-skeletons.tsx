@@ -1,9 +1,11 @@
 import * as React from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatCardSkeleton } from "@/components/ui/stat-card";
+import { StatCardsSkeleton } from "@/components/feedback/page-skeletons";
 
 /*
  * Loading skeletons for the application queue and the interview board. They mirror the
- * real page markup (KPI grid, toolbar, row cards) so nothing jumps when the data streams
+ * real page markup (stat-card grid, toolbar, row cards) so nothing jumps when the data streams
  * in; the region announces the loading state and the blocks are aria-hidden.
  */
 
@@ -16,17 +18,13 @@ function LoadingRegion({ label, children }: { label: string; children: React.Rea
   );
 }
 
-function KpiCardsSkeleton({ count, className }: { count: number; className: string }) {
+/** Same grid as the queue's five-column `StatGrid` (the last card spans a phone row). */
+function QueueStatCardsSkeleton() {
   return (
-    <div className={className}>
-      {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="rounded-2xl border border-border/80 bg-card p-4 sm:p-5 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <Skeleton className="h-3 w-24" />
-            <Skeleton className="h-8 w-8 rounded-xl" />
-          </div>
-          <Skeleton className="h-8 w-16" />
-          <Skeleton className="h-3 w-28" />
+    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 sm:gap-4 lg:grid-cols-5">
+      {Array.from({ length: 5 }, (_, i) => (
+        <div key={i} className={i === 4 ? "col-span-2 sm:col-span-1" : undefined}>
+          <StatCardSkeleton />
         </div>
       ))}
     </div>
@@ -68,10 +66,7 @@ function RowCardsSkeleton({ rows, withCheckbox }: { rows: number; withCheckbox: 
 export function ApplicationQueueSkeleton({ label = "Loading applications" }: { label?: string }) {
   return (
     <LoadingRegion label={label}>
-      <KpiCardsSkeleton
-        count={5}
-        className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4"
-      />
+      <QueueStatCardsSkeleton />
       <div className="p-4 rounded-2xl border border-border/80 bg-card/80 flex flex-col lg:flex-row gap-4 lg:items-center justify-between">
         <div className="flex flex-1 items-center gap-2">
           <Skeleton className="h-9 flex-1 rounded-xl" />
@@ -95,7 +90,7 @@ export function ApplicationQueueSkeleton({ label = "Loading applications" }: { l
 export function InterviewBoardSkeleton({ label = "Loading interviews" }: { label?: string }) {
   return (
     <LoadingRegion label={label}>
-      <KpiCardsSkeleton count={4} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" />
+      <StatCardsSkeleton count={4} />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Skeleton className="h-4 w-72 max-w-full" />
         <Skeleton className="h-8 w-40 rounded-xl" />

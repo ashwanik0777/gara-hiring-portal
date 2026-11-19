@@ -1,4 +1,3 @@
-import qrcode from "qrcode";
 import { CertificatePdfPayload } from "./types";
 
 /**
@@ -60,8 +59,9 @@ export class VectorPdfBuilder {
     const pageWidth = 842;
     const pageHeight = 595;
 
-    // Generate QR matrix
-    const qr = qrcode.create(payload.verificationUrl, { errorCorrectionLevel: "M" });
+    // Generate QR matrix. qrcode is loaded only when a certificate is rendered, not on cold start.
+    const { create: createQrCode } = await import("qrcode");
+    const qr = createQrCode(payload.verificationUrl, { errorCorrectionLevel: "M" });
     const qrModules = qr.modules;
     const qrSize = qrModules.size;
 

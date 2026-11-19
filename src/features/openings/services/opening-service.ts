@@ -234,23 +234,34 @@ export type PublicOpening = Awaited<ReturnType<typeof getPublicOpeningBySlug>>;
 // Staff reads and mutations (never cached)
 // -----------------------------------------------------------------------------
 
+/** Upper bound for the staff openings table (newest first); the table has no pagination. */
+export const ADMIN_OPENINGS_LIMIT = 500;
+
 /**
- * Administrative Query: Lists all openings across all lifecycle statuses.
+ * Administrative Query: Lists openings across all lifecycle statuses, newest first.
+ * Selects only the table columns plus the highest published ("Live") form version, never
+ * every form version or its schema.
  */
 export async function getAdminOpenings(user: AuthenticatedUser) {
   await assertOpeningsAccess(user);
 
   return prisma.opening.findMany({
-    include: {
-      createdBy: {
-        select: { id: true, name: true, email: true },
-      },
+    select: {
+      id: true,
+      title: true,
+      slug: true,
+      department: true,
+      type: true,
+      status: true,
       formVersions: {
+        where: { isPublished: true },
         select: { id: true, versionNumber: true, isPublished: true },
         orderBy: { versionNumber: "desc" },
+        take: 1,
       },
     },
     orderBy: { createdAt: "desc" },
+    take: ADMIN_OPENINGS_LIMIT,
   });
 }
 

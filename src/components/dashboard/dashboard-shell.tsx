@@ -39,6 +39,7 @@ import {
   SlidersHorizontal,
   History,
   House,
+  UserPlus,
   LucideIcon,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
@@ -110,6 +111,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Eye,
   Plus,
   ArrowLeft,
+  UserPlus,
 };
 
 interface TabMeta {
@@ -130,6 +132,7 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
     },
   },
   "/admin/applications": { label: "Applications", iconName: "FileText" },
+  "/admin/registrations": { label: "Registrations", iconName: "UserPlus" },
   "/admin/openings": {
     label: "Job Openings",
     iconName: "Briefcase",
@@ -237,6 +240,7 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
     },
   },
   "/subadmin/applications": { label: "Applications", iconName: "FileText" },
+  "/subadmin/registrations": { label: "Registrations", iconName: "UserPlus" },
   "/subadmin/interviews": { label: "Interviews", iconName: "Calendar" },
   "/subadmin/evaluations": { label: "Evaluations", iconName: "Award" },
   "/subadmin/employees": { label: "Employees", iconName: "UserCheck" },

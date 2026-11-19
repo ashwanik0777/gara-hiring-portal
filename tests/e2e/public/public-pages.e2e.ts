@@ -13,18 +13,15 @@ test.describe("Public pages", () => {
     await expect(page.getByRole("link", { name: /Explore Opportunities/ }).first()).toBeVisible();
   });
 
-  test("careers page serves its heading in the prerendered shell", async ({ request }) => {
-    // The heading is part of the static shell; the openings list streams in below it.
+  test("careers page serves its heading in the server HTML", async ({ request }) => {
+    // The page renders in the first response (no JavaScript needed for its content).
     const response = await request.get("/careers");
     expect(response.status()).toBe(200);
     expect(await response.text()).toContain("Current Openings &amp; Internship Cohorts");
   });
 
   test("careers page shows its heading", async ({ page }) => {
-    // Without a database the openings stream fails and the route's error boundary replaces
-    // the page after hydration, so the rendered heading needs the test database.
-    test.skip(!hasE2EDatabase, NO_DATABASE_SKIP_REASON);
-
+    // Without a database the list shows a short message; the heading and navigation stay.
     await page.goto("/careers");
     await expect(
       page.getByRole("heading", { level: 1, name: "Current Openings & Internship Cohorts" })
@@ -66,7 +63,10 @@ test.describe("Login", () => {
     await form.getByPlaceholder("••••••••").fill("Wrong-Password-123!");
     await form.getByRole("button", { name: "Sign In", exact: true }).click();
 
-    await expect(form.getByText(/Invalid email or password/)).toBeVisible();
+    // The message sits above the form and is announced to screen readers.
+    await expect(
+      page.getByRole("alert").filter({ hasText: /Invalid email or password/ }).filter({ visible: true })
+    ).toBeVisible();
     await expect(page).toHaveURL(/\/login/);
   });
 });

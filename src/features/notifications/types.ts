@@ -1,3 +1,4 @@
+/** One header notification. Read / dismissed state lives in the browser, not here. */
 export interface SystemNotification {
   id: string;
   title: string;
@@ -5,5 +6,4 @@ export interface SystemNotification {
   type: "application" | "interview" | "evaluation" | "leave" | "security" | "system";
   link: string;
   createdAt: string;
-  read: boolean;
 }

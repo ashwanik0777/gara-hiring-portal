@@ -4,7 +4,7 @@ import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { STAFF_ROLES } from "@/lib/auth/permissions";
 import { AnalyticsDashboardSection } from "@/features/reports/components/analytics-dashboard-section";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
-import { ReportsPageSkeleton } from "@/components/feedback/page-skeletons";
+import { ReportsDashboardSkeleton } from "@/features/reports/components/reports-skeletons";
 
 export const instant = false;
 
@@ -28,10 +28,6 @@ interface SubAdminReportsPageProps {
     regStart?: string;
     regEnd?: string;
     regInterest?: string;
-    regVerified?: string;
-    regApplied?: string;
-    regQ?: string;
-    regPage?: string;
   }>;
 }
 
@@ -61,7 +57,7 @@ export default async function SubAdminReportsPage({
 
   return (
     <div className="w-full">
-      <Suspense fallback={<ReportsPageSkeleton label="Loading reports" />}>
+      <Suspense fallback={<ReportsDashboardSkeleton label="Loading reports" />}>
         {/* Payroll figures are omitted by the service unless the user also holds canPayroll. */}
         <AnalyticsDashboardSection user={user} basePath="/subadmin" searchParams={resolvedParams} />
       </Suspense>

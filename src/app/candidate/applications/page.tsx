@@ -5,6 +5,7 @@ import { applicationService } from "@/features/applications/services/application
 import { ApplicationStatus } from "@/features/applications/types";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/feedback/empty-state";
+import { StatCard, StatGrid } from "@/components/ui/stat-card";
 import {
   ApplicationStatusBadge,
   applicationStatusSummary,
@@ -83,55 +84,12 @@ export default async function CandidateApplicationsPage() {
       </header>
 
       {/* KPI Stat Cards (counts of the listed applications only) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-        <div className="p-4 rounded-xl border border-border/70 bg-card shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-muted-foreground uppercase">
-              Total Applied
-            </span>
-            <FileCheck2 className="h-4 w-4 text-blue-500" aria-hidden="true" />
-          </div>
-          <p className="text-2xl font-bold font-mono text-foreground mt-2">
-            {applications.length}
-          </p>
-        </div>
-
-        <div className="p-4 rounded-xl border border-border/70 bg-card shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-muted-foreground uppercase">
-              {readOnly ? "Not Closed" : "In Review"}
-            </span>
-            <Clock className="h-4 w-4 text-amber-500" aria-hidden="true" />
-          </div>
-          <p className="text-2xl font-bold font-mono text-foreground mt-2">
-            {activeCount}
-          </p>
-        </div>
-
-        <div className="p-4 rounded-xl border border-border/70 bg-card shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-muted-foreground uppercase">
-              Interviews
-            </span>
-            <Calendar className="h-4 w-4 text-purple-500" aria-hidden="true" />
-          </div>
-          <p className="text-2xl font-bold font-mono text-foreground mt-2">
-            {interviewCount}
-          </p>
-        </div>
-
-        <div className="p-4 rounded-xl border border-border/70 bg-card shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-muted-foreground uppercase">
-              Offers
-            </span>
-            <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
-          </div>
-          <p className="text-2xl font-bold font-mono text-foreground mt-2">
-            {offerCount}
-          </p>
-        </div>
-      </div>
+      <StatGrid columns={4} label="Application summary">
+        <StatCard label="Total Applied" value={applications.length} icon={FileCheck2} tone="blue" />
+        <StatCard label={readOnly ? "Not Closed" : "In Review"} value={activeCount} icon={Clock} tone="amber" />
+        <StatCard label="Interviews" value={interviewCount} icon={Calendar} tone="violet" />
+        <StatCard label="Offers" value={offerCount} icon={CheckCircle2} tone="emerald" />
+      </StatGrid>
 
       {/* Applications List */}
       <section className="space-y-4" aria-labelledby="applications-list-heading">

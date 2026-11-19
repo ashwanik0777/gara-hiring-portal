@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import Link from "next/link";
 import { headers } from "next/headers";
 import { Navbar } from "@/components/navigation/navbar";
@@ -10,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { getPublicOpenings } from "@/features/openings/services/opening-service";
 import { Briefcase, Building, ArrowRight } from "lucide-react";
-import { CardGridSkeleton } from "@/components/feedback/page-skeletons";
 import { getSiteUrl } from "@/lib/site-url";
 import {
   externalReferrerHost,
@@ -28,9 +26,8 @@ export const instant = false;
 
 async function OpeningsList({ searchParams }: { searchParams: CareersSearchParams }) {
   // Campaign parameters (and an external referrer host) are carried to the opening pages.
-  // They are request data, read before the openings so this component always streams at
-  // request time: the list below comes from the shared public-openings cache (not a
-  // database query per visit) and is never evaluated during the build-time prerender.
+  // They are request data, so the page renders per request; the list below comes from the
+  // shared public-openings cache (not a database query per visit).
   const attribution = pickAttributionParams(await searchParams);
   if (!attribution.ref) {
     const referrerHost = externalReferrerHost((await headers()).get("referer"), getSiteUrl());
@@ -38,7 +35,17 @@ async function OpeningsList({ searchParams }: { searchParams: CareersSearchParam
   }
   const attributionQuery = toAttributionQuery(attribution);
 
-  const openings = await getPublicOpenings();
+  let openings: Awaited<ReturnType<typeof getPublicOpenings>>;
+  try {
+    openings = await getPublicOpenings();
+  } catch {
+    // Keep the page (heading, navigation, footer) and explain, instead of the error screen.
+    return (
+      <p role="status" className="mx-auto max-w-xl rounded-2xl border border-border/70 bg-card p-6 text-center text-sm text-muted-foreground">
+        Openings could not be loaded right now. Please refresh the page in a moment.
+      </p>
+    );
+  }
 
   if (openings.length === 0) {
     return (
@@ -107,10 +114,9 @@ export default function CareersPage({ searchParams }: { searchParams: CareersSea
             </h1>
           </div>
 
-          {/* Openings grid streamed inside Suspense (cached data, request-time attribution) */}
-          <Suspense fallback={<CardGridSkeleton />}>
-            <OpeningsList searchParams={searchParams} />
-          </Suspense>
+          {/* Rendered into the first HTML response (no JavaScript needed), so link previews,
+              crawlers and slow phones see the openings; the list itself comes from the cache. */}
+          <OpeningsList searchParams={searchParams} />
         </div>
       </main>
 

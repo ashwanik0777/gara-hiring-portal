@@ -41,6 +41,7 @@ import {
   openEmploymentPeriod,
   revokeJoiningRole,
 } from "./employment-records";
+import { clampPageNumber } from "@/lib/pagination";
 
 /*
  * Intern progress review and full-time conversion (product-owner decisions of 2026-10-25):
@@ -328,7 +329,7 @@ export class ConversionService {
 
     const now = query.now ?? new Date();
     const view: InternReviewView = query.view ?? "due";
-    const page = clampInt(query.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+    const page = clampPageNumber(query.page);
     const pageSize = clampInt(query.pageSize ?? REVIEW_BOARD_PAGE_SIZE, 1, REVIEW_BOARD_MAX_PAGE_SIZE);
 
     const todayStart = parseCalendarDay(businessDateKey(now));

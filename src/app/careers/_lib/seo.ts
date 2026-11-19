@@ -171,7 +171,6 @@ export function buildOpeningMetadata(opening: PublicOpeningSeoInput): Metadata {
       siteName: ORGANIZATION_NAME,
       title: `${opening.title} — ${kind} at ${ORGANIZATION_NAME}`,
       description,
-      images: [{ url: absoluteUrl(ORGANIZATION_LOGO_PATH), alt: `${ORGANIZATION_NAME} logo` }],
     },
   };
 }
@@ -191,7 +190,6 @@ export function buildCareersIndexMetadata(): Metadata {
       siteName: ORGANIZATION_NAME,
       title: `Careers at ${ORGANIZATION_NAME}`,
       description,
-      images: [{ url: absoluteUrl(ORGANIZATION_LOGO_PATH), alt: `${ORGANIZATION_NAME} logo` }],
     },
   };
 }

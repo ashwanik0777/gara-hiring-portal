@@ -33,10 +33,21 @@ import type {
 } from "../types";
 import {
   PolicyBlockedError,
+  ForbiddenError,
   NotFoundError,
   ValidationError,
   ConflictError,
 } from "@/lib/errors";
+import { clampPageNumber } from "@/lib/pagination";
+
+/**
+ * Separation of duties: payroll staff never change their own payout profile and never
+ * enrol or disburse their own payroll record. Bulk actions skip and report such records.
+ */
+export const OWN_PAYOUT_PROFILE_MESSAGE =
+  "You cannot edit your own payout profile. Another payroll user must make this change.";
+export const OWN_PAYROLL_RECORD_MESSAGE =
+  "You cannot record a disbursement for your own payroll record. Another payroll user must record it.";
 
 /** Employee statuses that can be enrolled into a payroll period by an explicit staff action. */
 const ENROLLABLE_EMPLOYEE_STATUSES: EmployeeStatus[] = [
@@ -214,7 +225,7 @@ function changedPayoutFields(
 /** Clamps page / page size and returns the matching Prisma `skip` / `take`. */
 function pageArgs(page: number | undefined, defaultSize: number, pageSize?: number) {
   const size = Math.min(Math.max(1, Math.trunc(pageSize ?? defaultSize)), PAYROLL_MAX_PAGE_SIZE);
-  const current = Math.max(1, Math.trunc(page ?? 1));
+  const current = clampPageNumber(page);
   return { skip: (current - 1) * size, take: size, page: current, pageSize: size };
 }
 
@@ -785,12 +796,13 @@ export class PayrollService {
 
   /**
    * Explicit staff action: enrolls active employees whose payout profile is configured
-   * as paid into a DRAFT period. Employees without a configured profile are skipped.
+   * as paid into a DRAFT period. Employees without a configured profile are skipped, and
+   * so is the acting user's own employee row (separation of duties).
    */
   async generatePayrollRecordsForPeriod(
     user: AuthenticatedUser,
     periodId: string
-  ): Promise<{ enrolledCount: number; skippedUnconfiguredCount: number }> {
+  ): Promise<{ enrolledCount: number; skippedUnconfiguredCount: number; skippedOwnCount: number }> {
     await this.assertPayrollAccess(user);
 
     return prisma.$transaction(async (tx) => {
@@ -817,17 +829,20 @@ export class PayrollService {
         status: { in: ENROLLABLE_EMPLOYEE_STATUSES },
         payrollRecords: { none: { payrollPeriodId: period.id } },
       };
-      const paidEligible = await tx.employee.findMany({
+      const paidCandidates = await tx.employee.findMany({
         where: { ...notYetEnrolled, ...PAID_PROFILE_WHERE },
-        select: { id: true },
+        select: { id: true, userId: true },
         orderBy: { id: "asc" },
       });
+      // The acting user's own employee row is never enrolled by themselves.
+      const paidEligible = paidCandidates.filter((emp) => emp.userId !== user.id);
+      const skippedOwnCount = paidCandidates.length - paidEligible.length;
       const skippedUnconfiguredCount = await tx.employee.count({
         where: { ...notYetEnrolled, payoutProfile: { is: null } },
       });
 
       if (paidEligible.length === 0) {
-        return { enrolledCount: 0, skippedUnconfiguredCount };
+        return { enrolledCount: 0, skippedUnconfiguredCount, skippedOwnCount };
       }
 
       const created = await tx.payrollRecord.createMany({
@@ -843,9 +858,10 @@ export class PayrollService {
         periodCode: period.code,
         enrolledCount: created.count,
         employeeIds: paidEligible.map((emp) => emp.id),
+        skippedOwnCount,
       });
 
-      return { enrolledCount: created.count, skippedUnconfiguredCount };
+      return { enrolledCount: created.count, skippedUnconfiguredCount, skippedOwnCount };
     });
   }
 
@@ -888,7 +904,17 @@ export class PayrollService {
 
       const now = new Date();
       let affectedRecords = 0;
+      // Finalizing locks the whole period, including the finalizer's own record when they are on
+      // payroll (product-owner decision 2026-11-01: allowed, so a one-person payroll team is not
+      // blocked). The separation of duties sits where money is decided and moved: nobody can edit
+      // their own payout profile or record a disbursement on their own record. The audit row
+      // states when the finalizer's own record was included.
+      let includesOwnRecord = false;
       if (target === PayrollStatus.FINALIZED) {
+        includesOwnRecord =
+          (await tx.payrollRecord.count({
+            where: { payrollPeriodId: period.id, status: PayrollStatus.DRAFT, employee: { userId: user.id } },
+          })) > 0;
         const res = await tx.payrollRecord.updateMany({
           where: { payrollPeriodId: period.id, status: PayrollStatus.DRAFT },
           data: { status: PayrollStatus.FINALIZED, finalizedById: user.id, finalizedAt: now },
@@ -927,6 +953,7 @@ export class PayrollService {
         from: period.status,
         to: target,
         affectedRecords,
+        ...(target === PayrollStatus.FINALIZED ? { includesFinalizerOwnRecord: includesOwnRecord } : {}),
         notes: input.notes?.trim() || null,
       });
 
@@ -951,11 +978,14 @@ export class PayrollService {
         where: { id: input.payrollRecordId },
         include: {
           payrollPeriod: { select: { id: true, code: true } },
-          employee: { select: { payoutProfile: { select: payoutEligibilitySelect } } },
+          employee: { select: { userId: true, payoutProfile: { select: payoutEligibilitySelect } } },
         },
       });
       if (!record) {
         throw new NotFoundError("Payroll record not found.");
+      }
+      if (record.employee.userId === user.id) {
+        throw new ForbiddenError(OWN_PAYROLL_RECORD_MESSAGE);
       }
       if (record.status === PayrollStatus.PAID) {
         throw new ConflictError(
@@ -1013,12 +1043,13 @@ export class PayrollService {
 
   /**
    * Records one staff-entered batch reference for every FINALIZED record of a FINALIZED
-   * period whose employee is configured as paid. All-or-nothing.
+   * period whose employee is configured as paid. All-or-nothing. The acting user's own
+   * record is skipped and reported (separation of duties).
    */
   async bulkDisburseRecords(
     user: AuthenticatedUser,
     input: BulkDisbursementData
-  ): Promise<{ updatedCount: number; skippedNotPaidCount: number; periodPaid: boolean }> {
+  ): Promise<{ updatedCount: number; skippedNotPaidCount: number; skippedOwnCount: number; periodPaid: boolean }> {
     await this.assertPayrollAccess(user);
 
     const reference = input.disbursementReference.trim();
@@ -1052,29 +1083,47 @@ export class PayrollService {
       }
 
       // Only records of employees configured as paid (SQL join), with their amounts.
-      const eligible = await tx.payrollRecord.findMany({
+      const paidRecords = await tx.payrollRecord.findMany({
         where: { ...finalizedWhere, employee: PAID_PROFILE_WHERE },
-        select: { id: true, employee: { select: { payoutProfile: { select: payoutEligibilitySelect } } } },
+        select: {
+          id: true,
+          employee: { select: { userId: true, payoutProfile: { select: payoutEligibilitySelect } } },
+        },
         orderBy: { id: "asc" },
       });
-      const skippedNotPaidCount = finalizedCount - eligible.length;
-      if (eligible.length === 0) {
+      const skippedNotPaidCount = finalizedCount - paidRecords.length;
+      if (paidRecords.length === 0) {
         throw new ValidationError(
           "None of the FINALIZED records belong to employees configured as paid."
         );
       }
+      // The acting user's own record stays FINALIZED for another payroll user to record.
+      const eligible = paidRecords.filter((rec) => rec.employee.userId !== user.id);
+      const skippedOwnCount = paidRecords.length - eligible.length;
+      if (eligible.length === 0) {
+        throw new ForbiddenError(OWN_PAYROLL_RECORD_MESSAGE);
+      }
 
       const now = new Date();
-      let updatedCount = 0;
+      // Each record snapshots its own amount, so later profile edits never change history.
+      // Records sharing an amount are written by one conditional update (a handful of
+      // statements per period instead of one per record inside the transaction).
+      const idsByAmount = new Map<number | null, string[]>();
       for (const rec of eligible) {
-        // Each record snapshots its own amount, so later profile edits never change history.
+        const amount = configuredAmount(rec.employee.payoutProfile);
+        const ids = idsByAmount.get(amount);
+        if (ids) ids.push(rec.id);
+        else idsByAmount.set(amount, [rec.id]);
+      }
+      let updatedCount = 0;
+      for (const [disbursedAmount, ids] of idsByAmount) {
         const updated = await tx.payrollRecord.updateMany({
-          where: { id: rec.id, status: PayrollStatus.FINALIZED },
+          where: { id: { in: ids }, status: PayrollStatus.FINALIZED },
           data: {
             status: PayrollStatus.PAID,
             disbursementReference: reference,
             disbursedAt: now,
-            disbursedAmount: configuredAmount(rec.employee.payoutProfile),
+            disbursedAmount,
             ...(input.notes?.trim() ? { notes: input.notes.trim() } : {}),
           },
         });
@@ -1095,11 +1144,13 @@ export class PayrollService {
         updatedCount,
         recordIds: eligible.map((r) => r.id),
         skippedNotPaidCount,
+        skippedOwnCount,
         periodPaid,
       });
 
-      return { updatedCount, skippedNotPaidCount, periodPaid };
-    });
+      return { updatedCount, skippedNotPaidCount, skippedOwnCount, periodPaid };
+      // Explicit budget for a large period (Prisma's interactive default is 5 s).
+    }, { timeout: 15_000 });
   }
 
   /** Moves a FINALIZED period to PAID once no DRAFT/FINALIZED records remain. */
@@ -1139,10 +1190,13 @@ export class PayrollService {
     return prisma.$transaction(async (tx) => {
       const emp = await tx.employee.findUnique({
         where: { id: input.employeeId },
-        select: { id: true, payoutProfile: { select: payoutReadSelect } },
+        select: { id: true, userId: true, payoutProfile: { select: payoutReadSelect } },
       });
       if (!emp) {
         throw new NotFoundError("Employee not found.");
+      }
+      if (emp.userId === user.id) {
+        throw new ForbiddenError(OWN_PAYOUT_PROFILE_MESSAGE);
       }
       const current = emp.payoutProfile;
 

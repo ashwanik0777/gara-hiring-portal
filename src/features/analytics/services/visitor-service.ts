@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { cacheLife } from "next/cache";
 import { prisma } from "@/lib/db";
 
 /** Maximum stored user-agent length (characters). */
@@ -62,6 +63,35 @@ export async function getUniqueVisitorCount(): Promise<number | null> {
   } catch (error) {
     console.error(
       "[VisitorService] Failed to read visitor count from database:",
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+/**
+ * How long the public visitor count is reused: public page views read this figure, so
+ * they must not count the whole `site_visitors` table on every request.
+ */
+const PUBLIC_VISITOR_COUNT_CACHE_LIFE = { stale: 300, revalidate: 300, expire: 3600 } as const;
+
+async function countVisitorsCached(): Promise<number> {
+  "use cache";
+  cacheLife(PUBLIC_VISITOR_COUNT_CACHE_LIFE);
+  // A failed count throws, so an error is never cached as the public figure.
+  return prisma.siteVisitor.count();
+}
+
+/**
+ * Visitor count for the public counter: the recorded row count reused for up to five
+ * minutes (`"use cache"`), or `null` when the database cannot be read.
+ */
+export async function getPublicVisitorCount(): Promise<number | null> {
+  try {
+    return await countVisitorsCached();
+  } catch (error) {
+    console.error(
+      "[VisitorService] Failed to read the public visitor count:",
       error instanceof Error ? error.message : error
     );
     return null;

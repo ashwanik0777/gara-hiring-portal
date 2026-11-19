@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { env } from "@/lib/env";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logging/logger";
 import { StorageService, StorageUploadResult, StorageGetResult } from "./types";
@@ -237,51 +236,5 @@ export class LocalStorageService implements StorageService {
     } catch {
       // Ignore if file doesn't exist or path is invalid
     }
-  }
-
-  private signPayload(storageKey: string, expiresAtMs: number): string {
-    return crypto
-      .createHmac("sha256", env.BETTER_AUTH_SECRET)
-      .update(`${storageKey}:${expiresAtMs}`)
-      .digest("hex");
-  }
-
-  /**
-   * Generates a time-limited HMAC-SHA256 signed download URL (default 15 minutes).
-   */
-  async getDownloadUrl(
-    storageKey: string,
-    expiresInSeconds = 900,
-    nowMs = Date.now()
-  ): Promise<string> {
-    const expiresAtMs = nowMs + expiresInSeconds * 1000;
-    const signature = this.signPayload(storageKey, expiresAtMs);
-    return `/api/documents/download?key=${encodeURIComponent(
-      storageKey
-    )}&exp=${expiresAtMs}&sig=${signature}`;
-  }
-
-  /**
-   * Verifies that a signed download URL token has not been tampered with and has not expired.
-   */
-  public verifySignedDownloadUrl(
-    storageKey: string,
-    expiresAtMs: number,
-    signature: string,
-    nowMs = Date.now()
-  ): boolean {
-    if (!storageKey || !signature || !Number.isFinite(expiresAtMs)) {
-      return false;
-    }
-    if (nowMs > expiresAtMs) {
-      return false;
-    }
-    const expected = this.signPayload(storageKey, expiresAtMs);
-    const expectedBuf = Buffer.from(expected, "utf8");
-    const providedBuf = Buffer.from(signature, "utf8");
-    if (expectedBuf.length !== providedBuf.length) {
-      return false;
-    }
-    return crypto.timingSafeEqual(expectedBuf, providedBuf);
   }
 }

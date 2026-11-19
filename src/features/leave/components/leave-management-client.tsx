@@ -180,7 +180,6 @@ export function LeaveManagementClient({ pageData, initialTab, statsSlot }: Leave
         }
       }
       showFeedback("success", message);
-      router.refresh();
     });
   };
 
@@ -200,7 +199,6 @@ export function LeaveManagementClient({ pageData, initialTab, statsSlot }: Leave
       }
       switchTab("requests");
       showFeedback("success", "Leave request submitted successfully for approval.");
-      router.refresh();
     });
   };
 
@@ -223,7 +221,6 @@ export function LeaveManagementClient({ pageData, initialTab, statsSlot }: Leave
       }
       setTypeDialogOpen(false);
       showFeedback("success", `Leave category "${draft.name}" added successfully.`);
-      router.refresh();
     });
   };
 
@@ -235,7 +232,6 @@ export function LeaveManagementClient({ pageData, initialTab, statsSlot }: Leave
         return;
       }
       showFeedback("success", "Leave type status updated.");
-      router.refresh();
     });
   };
 
@@ -250,7 +246,6 @@ export function LeaveManagementClient({ pageData, initialTab, statsSlot }: Leave
         "success",
         `${res.data.created} suggested leave categories loaded. They remain pending product-owner approval (OD-007).`
       );
-      router.refresh();
     });
   };
 

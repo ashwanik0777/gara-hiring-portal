@@ -6,14 +6,15 @@ Enterprise full-stack recruitment, internship evaluation, and human resource man
 
 ## Technical Stack
 
-- **Framework:** [Next.js 16.4.0 (App Router)](https://nextjs.org/) + React 19
+- **Framework:** [Next.js 16.4.3 (App Router)](https://nextjs.org/) + React 19.3
 - **Architecture:** Modular Monolith under `src/` with isolated domain feature modules
 - **Database:** PostgreSQL + [Prisma ORM 7](https://www.prisma.io/) with `@prisma/adapter-pg`
-- **Authentication:** [Better Auth](https://www.better-auth.com/) (Email/Password + Google OAuth)
+- **Authentication:** [Better Auth](https://www.better-auth.com/) (Email/Password + Google OAuth; emailed one-time code on every password sign-in)
 - **Styling:** Tailwind CSS v4 + GARA Design Tokens (restrained palette, zero gradients)
 - **Icons:** [Lucide React](https://lucide.dev/)
 - **Validation:** [Zod](https://zod.dev/) + React Hook Form
-- **Testing:** [Vitest](https://vitest.dev/) unit tests with mocked persistence in `tests/unit/` (kept local, not committed). Integration and end-to-end suites are not set up yet (see `docs/SECURITY_REMEDIATION_CHECKLIST.md`, ENG-07).
+- **Testing:** [Vitest](https://vitest.dev/) unit tests with mocked persistence in `tests/unit/` and [Playwright](https://playwright.dev/) end-to-end tests in `tests/e2e/` (a public suite that needs no database, and two hiring journeys that run only against a dedicated test database). Both are committed. There is no database-backed integration suite yet (see `docs/SECURITY_REMEDIATION_CHECKLIST.md`, ENG-07). Details: `docs/TESTING.md`.
+- **CI:** `.github/workflows/ci.yml` runs typecheck, lint, unit tests and the production build on every push to `main` and every pull request (no secrets, no database). The Playwright suites run locally.
 
 ---
 
@@ -64,12 +65,18 @@ npm run typecheck
 # Linting
 npm run lint
 
-# Automated unit & integration tests
+# Unit tests (Vitest)
 npm test
 
 # Production build
 npm run build
+
+# End-to-end tests (Playwright; journeys need E2E_DATABASE_URL, see docs/TESTING.md)
+npm run test:e2e:install   # once: downloads Chromium
+npm run test:e2e
 ```
+
+CI runs the first four on every push to `main` and every pull request.
 
 ---
 
@@ -80,11 +87,11 @@ npm run build
 | [`CLAUDE.md`](CLAUDE.md) | Persistent rules and non-negotiable guidelines for AI assistants |
 | [`docs/PROJECT_BASELINE.md`](docs/PROJECT_BASELINE.md) | Product source of truth and master phased prompt pack |
 | [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) | Engineering standards and developer rules (Sections A–K) |
-| [`docs/FOLDER_STRUCTURE.md`](docs/FOLDER_STRUCTURE.md) | Target directory blueprint and dependency rules |
+| [`docs/FOLDER_STRUCTURE.md`](docs/FOLDER_STRUCTURE.md) | Repository layout, route map, and dependency rules |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System layers, domain boundaries, and provider adapters |
 | [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) | Relational database schema outline and state machines |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Security policy, RBAC hierarchy, and document privacy |
-| [`docs/TESTING.md`](docs/TESTING.md) | Testing strategy across unit, integration, and E2E layers |
+| [`docs/TESTING.md`](docs/TESTING.md) | Test suites (unit, E2E), test database setup, and quality gates |
 | [`docs/OPEN_DECISIONS.md`](docs/OPEN_DECISIONS.md) | Active policy questions and unresolved blockers (OD-001–OD-020) |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Deployment runbook, secret hygiene, and incident handling |
 | [`docs/SECURITY_REMEDIATION_CHECKLIST.md`](docs/SECURITY_REMEDIATION_CHECKLIST.md) | Audit findings, fix status, and required owner actions |

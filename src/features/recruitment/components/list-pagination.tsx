@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/feedback/empty-state";
+import { clampPageNumber } from "@/lib/pagination";
 
 /*
  * Server-rendered pagination for the recruitment lists. Pages and filters travel in the
@@ -10,10 +11,12 @@ import { EmptyState } from "@/components/feedback/empty-state";
  * client state is needed.
  */
 
-/** Parses a `?page=` search param into a 1-based page number; anything invalid is page 1. */
+/**
+ * Parses a `?page=` search param into a 1-based page number up to MAX_PAGE_NUMBER;
+ * anything invalid is page 1.
+ */
 export function parsePageParam(value: string | undefined): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+  return clampPageNumber(Number.parseInt(value ?? "", 10));
 }
 
 /**

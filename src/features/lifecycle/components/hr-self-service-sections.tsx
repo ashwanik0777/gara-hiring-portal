@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { StatCard, StatGrid } from "@/components/ui/stat-card";
 import { EmployeeStatus, EmploymentType, PayrollStatus } from "@/types/enums";
 import {
   getOwnEmploymentProfile,
@@ -166,16 +167,11 @@ export async function LeaveSummarySection({ userId }: { userId: string }) {
         </Link>
       }
     >
-      <dl className="grid grid-cols-2 gap-3 text-xs">
-        <div className="rounded-xl border border-border/60 bg-muted/30 p-3">
-          <dt className="text-muted-foreground">Pending</dt>
-          <dd className="mt-0.5 text-lg font-bold text-foreground">{summary.pending}</dd>
-        </div>
-        <div className="rounded-xl border border-border/60 bg-muted/30 p-3">
-          <dt className="text-muted-foreground">Approved</dt>
-          <dd className="mt-0.5 text-lg font-bold text-foreground">{summary.approved}</dd>
-        </div>
-      </dl>
+      {/* Two columns on phones too: the figures are short. */}
+      <StatGrid columns={2} label="Leave summary" className="grid-cols-2">
+        <StatCard label="Pending" value={summary.pending} icon={Clock} tone="slate" size="compact" />
+        <StatCard label="Approved" value={summary.approved} icon={CheckCircle2} tone="slate" size="compact" />
+      </StatGrid>
       <p className="mt-3 text-[11px] text-muted-foreground">
         Leave balances are not shown because leave entitlements have not been configured yet.
       </p>

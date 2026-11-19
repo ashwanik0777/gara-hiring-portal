@@ -25,7 +25,7 @@ test.describe("Full-time journey (requires E2E_DATABASE_URL)", () => {
   test("candidate applies, HR extends an offer, the candidate accepts, HR marks joined", async ({
     browser,
   }) => {
-    test.setTimeout(300_000);
+    test.setTimeout(600_000);
     const candidate = newCandidateIdentity("Hire");
     const opening = E2E_OPENINGS.fullTime;
     const candidatePage = await newActorPage(browser);

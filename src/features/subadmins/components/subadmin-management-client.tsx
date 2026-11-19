@@ -4,12 +4,12 @@ import React, { useCallback, useEffect, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { createSubAdminAction, updateSubAdminPermissionsAction, deleteSubAdminAction } from "../actions";
-import type { PageInfo, SubAdminItem, SubAdminStats } from "../types";
+import type { PageInfo, SubAdminItem } from "../types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PaginationNav } from "@/components/ui/pagination-nav";
 import { DialogFallback } from "@/components/ui/dialog-fallback";
-import { Trash2, Lock, Settings2, AlertCircle, CheckCircle2, Users, UserCheck, Search, X } from "lucide-react";
+import { Trash2, Settings2, AlertCircle, CheckCircle2, Search, X } from "lucide-react";
 import { initialsOf, isStaffRole } from "./subadmin-ui";
 import type { CreateSubAdminValues } from "./create-subadmin-dialog";
 
@@ -29,7 +29,8 @@ interface SubAdminManagementClientProps {
   /** One page of staff accounts (server-bounded). */
   items: SubAdminItem[];
   page: PageInfo;
-  stats: SubAdminStats;
+  /** Server-rendered summary cards (`SubAdminStatsCards`). */
+  statsSlot: React.ReactNode;
   search?: string;
 }
 
@@ -45,7 +46,7 @@ const MODULE_BADGES: Array<{ key: keyof SubAdminItem["permissions"]; label: stri
   { key: "canReports", label: "Reports", className: "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300" },
 ];
 
-export function SubAdminManagementClient({ items, page, stats, search }: SubAdminManagementClientProps) {
+export function SubAdminManagementClient({ items, page, statsSlot, search }: SubAdminManagementClientProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [isCreating, setIsCreating] = useState(false);
@@ -103,7 +104,6 @@ export function SubAdminManagementClient({ items, page, stats, search }: SubAdmi
       }
       setSuccessMsg(res.message || "Sub-Admin successfully created!");
       setIsCreating(false);
-      router.refresh();
     });
   };
 
@@ -127,7 +127,6 @@ export function SubAdminManagementClient({ items, page, stats, search }: SubAdmi
       }
       setSuccessMsg(`Permissions updated successfully for ${subAdmin.name}.`);
       setEditingSubAdmin(null);
-      router.refresh();
     });
   };
 
@@ -143,7 +142,6 @@ export function SubAdminManagementClient({ items, page, stats, search }: SubAdmi
       }
       setSuccessMsg(`Staff access for ${name} revoked.`);
       if (editingSubAdmin?.id === id) setEditingSubAdmin(null);
-      router.refresh();
     });
   };
 
@@ -162,41 +160,8 @@ export function SubAdminManagementClient({ items, page, stats, search }: SubAdmi
         </div>
       )}
 
-      {/* 4 KPI Statistics Cards (counted in the database) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-card border border-border/70 border-l-4 border-l-blue-500 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">Total Sub-Admins</p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">{stats.total}</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Configured delegates</p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400 flex items-center justify-center shrink-0"><Users className="h-4 w-4" /></div>
-        </div>
-        <div className="bg-card border border-border/70 border-l-4 border-l-emerald-500 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">HR Specialists</p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">{stats.hrCount}</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Hiring & onboarding</p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 flex items-center justify-center shrink-0"><UserCheck className="h-4 w-4" /></div>
-        </div>
-        <div className="bg-card border border-border/70 border-l-4 border-l-violet-500 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">Managers & Reviewers</p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">{stats.reviewerCount}</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Evaluations & reviews</p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-violet-50 text-violet-600 dark:bg-violet-950/60 dark:text-violet-400 flex items-center justify-center shrink-0"><Settings2 className="h-4 w-4" /></div>
-        </div>
-        <div className="bg-card border border-border/70 border-l-4 border-l-amber-500 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">Multi-Module Scope</p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">{stats.multiModuleCount}</p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">4+ module permissions</p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 flex items-center justify-center shrink-0"><Lock className="h-4 w-4" /></div>
-        </div>
-      </div>
+      {/* Summary figures, rendered on the server (subadmin-stats-cards.tsx). */}
+      {statsSlot}
 
       {isCreating && (
         <CreateSubAdminDialog isPending={isPending} errorMsg={errorMsg} onClose={closeCreate} onSubmit={handleCreateSubmit} />

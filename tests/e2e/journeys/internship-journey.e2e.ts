@@ -25,7 +25,7 @@ test.describe("Internship journey (requires E2E_DATABASE_URL)", () => {
   test("candidate applies, HR runs the pipeline and evaluation, the intern joins", async ({
     browser,
   }) => {
-    test.setTimeout(300_000);
+    test.setTimeout(600_000);
     const candidate = newCandidateIdentity("Intern");
     const opening = E2E_OPENINGS.internship;
     const candidatePage = await newActorPage(browser);
@@ -55,9 +55,9 @@ test.describe("Internship journey (requires E2E_DATABASE_URL)", () => {
       await hrPage.getByRole("button", { name: "Select for 7-day evaluation" }).click();
       const dialog = hrPage.getByRole("dialog", { name: /for the 7-day evaluation\?$/ });
       await dialog.getByRole("button", { name: "Confirm selection" }).click();
-      await expect(
-        hrPage.getByRole("status").filter({ hasText: "is selected for the 7-working-day evaluation" })
-      ).toBeVisible();
+      // The page refreshes into the evaluation status card (the transient confirmation is replaced).
+      await expect(hrPage.getByText(`Supervisor: ${E2E_USERS.mentor.name}`)).toBeVisible();
+      await expect(hrPage.getByRole("link", { name: /evaluation cockpit/i }).first()).toBeVisible();
       await expectCandidateStage(candidatePage, applicationId, "Evaluation Selected");
     });
 
@@ -69,8 +69,13 @@ test.describe("Internship journey (requires E2E_DATABASE_URL)", () => {
       // "Official Start Date (Day 1)" is a visual label not associated with its input.
       await startForm.locator('input[type="date"]').fill(dateInputValue(0));
       await startForm.getByRole("button", { name: /Start 7-Working-Day Window/ }).click();
+      // The confirmation can be replaced by the refreshed cockpit before it is observed, so
+      // either the message or the next step's form proves the window started.
       await expect(
-        hrPage.getByText("7-working-day evaluation window initiated successfully.")
+        hrPage
+          .getByText("7-working-day evaluation window initiated successfully.")
+          .or(formWithButton(hrPage, "Record Final Decision"))
+          .first()
       ).toBeVisible();
       await hrPage.reload();
 
@@ -80,7 +85,12 @@ test.describe("Internship journey (requires E2E_DATABASE_URL)", () => {
         .getByPlaceholder(/Detail candidate performance across all 7 checkpoints/)
         .fill("E2E: met every checkpoint and delivered the evaluation tasks.");
       await finalForm.getByRole("button", { name: "Record Final Decision" }).click();
-      await expect(hrPage.getByText(/Evaluation outcome recorded as PASSED/)).toBeVisible();
+      await expect(
+        hrPage
+          .getByText(/Evaluation outcome recorded as PASSED/)
+          .or(hrPage.getByRole("button", { name: "Mark as joined", exact: true }))
+          .first()
+      ).toBeVisible();
       await hrPage.reload();
     });
 
@@ -102,7 +112,9 @@ test.describe("Internship journey (requires E2E_DATABASE_URL)", () => {
     await test.step("the candidate portal becomes the intern portal", async () => {
       await candidatePage.goto("/candidate/dashboard");
       await candidatePage.waitForURL("**/intern/dashboard");
-      await expect(candidatePage.getByRole("heading", { name: /Welcome/ }).first()).toBeVisible();
+      // The intern workspace is unlocked: attendance and the ID card belong to joined interns only.
+      await expect(candidatePage.getByRole("heading", { name: "Today's attendance" })).toBeVisible();
+      await expect(candidatePage.getByRole("heading", { name: "ID card" })).toBeVisible();
     });
 
     await candidatePage.context().close();

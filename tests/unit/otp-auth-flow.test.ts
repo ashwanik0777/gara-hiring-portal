@@ -239,6 +239,45 @@ describe("Sign-up email verification by emailed code", () => {
   });
 });
 
+describe("Email-verification codes cannot sign in to an already verified account", () => {
+  it("creates no code for a verified account and refuses verify-email without a session", async () => {
+    const email = "verified.victim@example.test";
+    await signUp(email);
+    const originalCode = lastEmailedCode();
+    await post("/email-otp/verify-email", { email, otp: originalCode });
+    const verificationRowsBefore = memoryDb.verification.length;
+    sentEmails.length = 0;
+
+    // An attacker asks for a fresh code for the victim: same answer, but nothing is created or sent.
+    const send = await post("/email-otp/send-verification-otp", { email, type: "email-verification" });
+    await flushAfterResponse();
+    expect(send.status).toBe(200);
+    expect(await send.json()).toEqual({ success: true });
+    expect(memoryDb.verification.length).toBe(verificationRowsBefore);
+    expect(sentEmails).toHaveLength(0);
+
+    // Guessing (or replaying the old code) never yields a session for a verified account.
+    for (const otp of [originalCode, "000000", "123456"]) {
+      const attempt = await post("/email-otp/verify-email", { email, otp });
+      expect(attempt.status).toBe(400);
+      expect(await attempt.json()).toMatchObject({ code: "INVALID_OTP" });
+      expect(cookieNames(attempt)).not.toContain("better-auth.session_token");
+    }
+  });
+
+  it("limits code requests per email address, whatever the IP", async () => {
+    const email = "flooded@example.test";
+    await signUp(email);
+    const statuses: number[] = [];
+    for (let request = 0; request < 6; request += 1) {
+      const response = await post("/email-otp/send-verification-otp", { email, type: "email-verification" });
+      statuses.push(response.status);
+    }
+    expect(statuses.slice(0, 5)).toEqual([200, 200, 200, 200, 200]);
+    expect(statuses[5]).toBe(429);
+  });
+});
+
 describe("Password sign-in always asks for the emailed code", () => {
   it("refuses an unverified account with EMAIL_NOT_VERIFIED and emails a fresh verification code", async () => {
     const email = "unverified@example.test";

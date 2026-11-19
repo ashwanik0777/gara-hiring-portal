@@ -26,6 +26,32 @@ export interface RequireAuthOptions {
   allowPendingPasswordChange?: boolean;
 }
 
+interface SessionAccessRow {
+  mustChangePassword: boolean;
+  roles: Role[];
+}
+
+/**
+ * Loads the temporary-password flag and the assigned roles (in assignment order) in one
+ * parameterised statement. A `user.findUnique` that selects the roles relation costs two
+ * round trips because Prisma's relationJoins is not enabled. Roles are cast to text so
+ * the driver returns a plain string array; no row means the user no longer exists.
+ */
+async function loadSessionAccess(userId: string): Promise<SessionAccessRow | null> {
+  const rows = await prisma.$queryRaw<SessionAccessRow[]>`
+    SELECT u."mustChangePassword" AS "mustChangePassword",
+           ARRAY(
+             SELECT ur."role"::text
+             FROM "user_roles" ur
+             WHERE ur."userId" = u."id"
+             ORDER BY ur."assignedAt", ur."id"
+           ) AS "roles"
+    FROM "users" u
+    WHERE u."id" = ${userId}
+  `;
+  return rows[0] ?? null;
+}
+
 /**
  * Retrieves the current session from request headers.
  * Memoized per request with React `cache()`: layouts, pages and services that each
@@ -41,22 +67,12 @@ export const getCurrentUser = cache(async (): Promise<AuthenticatedUser | null> 
       return null;
     }
 
-    // Fetch user details and roles from the database
-    const dbUser = await prisma.user.findUnique({
-      where: { id: session.user.id },
-      select: {
-        mustChangePassword: true,
-        roles: {
-          select: { role: true },
-        },
-      },
-    });
-
+    const dbUser = await loadSessionAccess(session.user.id);
     if (!dbUser) {
       return null;
     }
 
-    const roles = dbUser.roles.map((r: { role: Role }) => r.role);
+    const roles = [...dbUser.roles];
     // If no roles are explicitly assigned, candidate is default
     if (roles.length === 0) {
       roles.push(Role.CANDIDATE);

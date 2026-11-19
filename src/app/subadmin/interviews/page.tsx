@@ -22,6 +22,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/feedback/empty-state";
+import { StatCard, StatGrid } from "@/components/ui/stat-card";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import {
   Calendar,
@@ -100,79 +101,30 @@ export default async function SubAdminInterviewsPage({ searchParams }: SubAdminI
   return (
     <div className="w-full space-y-6">
       {/* 4 KPI Statistics Cards (all-time, aggregated in the database) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Total Interviews */}
-        <div className="bg-card border border-border/70 border-l-4 border-l-blue-500 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">
-              Total Sessions
-            </p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">
-              {stats.total}
-            </p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Scheduled interview sessions
-            </p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400 flex items-center justify-center shrink-0">
-            <Calendar className="h-4 w-4" />
-          </div>
-        </div>
-
-        {/* Card 2: Upcoming / Scheduled */}
-        <div className="bg-card border border-border/70 border-l-4 border-l-amber-500 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">
-              Upcoming Rounds
-            </p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">
-              {stats.upcoming}
-            </p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Scheduled & pending evaluation
-            </p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 flex items-center justify-center shrink-0">
-            <Clock className="h-4 w-4" />
-          </div>
-        </div>
-
-        {/* Card 3: Completed Reviews */}
-        <div className="bg-card border border-border/70 border-l-4 border-l-emerald-500 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">
-              Completed Reviews
-            </p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">
-              {stats.completed}
-            </p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Evaluation feedback logged
-            </p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <CheckCircle2 className="h-4 w-4" />
-          </div>
-        </div>
-
-        {/* Card 4: Positive Recommendations */}
-        <div className="bg-card border border-border/70 border-l-4 border-l-violet-500 rounded-xl p-4 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">
-              Positive Endorsements
-            </p>
-            <p className="text-2xl sm:text-3xl font-extrabold font-mono text-foreground mt-1">
-              {stats.positive}
-            </p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Hire & Strong Hire
-            </p>
-          </div>
-          <div className="h-9 w-9 rounded-xl bg-violet-50 text-violet-600 dark:bg-violet-950/60 dark:text-violet-400 flex items-center justify-center shrink-0">
-            <UserCheck className="h-4 w-4" />
-          </div>
-        </div>
-      </div>
+      <StatGrid columns={4} label="Interview summary">
+        <StatCard label="Total Sessions" value={stats.total} icon={Calendar} tone="blue" hint="Scheduled interview sessions" />
+        <StatCard
+          label="Upcoming Rounds"
+          value={stats.upcoming}
+          icon={Clock}
+          tone="amber"
+          hint="Scheduled & pending evaluation"
+        />
+        <StatCard
+          label="Completed Reviews"
+          value={stats.completed}
+          icon={CheckCircle2}
+          tone="emerald"
+          hint="Evaluation feedback logged"
+        />
+        <StatCard
+          label="Positive Endorsements"
+          value={stats.positive}
+          icon={UserCheck}
+          tone="violet"
+          hint="Hire & Strong Hire"
+        />
+      </StatGrid>
 
       {/* Interview times still waiting for candidates (self-scheduling). Renders nothing
           when there are none, so no skeleton: it would flash and collapse on most loads. */}

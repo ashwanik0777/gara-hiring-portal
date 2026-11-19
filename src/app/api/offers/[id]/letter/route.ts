@@ -1,16 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth/guards";
-import { AppError } from "@/lib/errors";
+import { AppError, RateLimitError } from "@/lib/errors";
 import { logger } from "@/lib/logging/logger";
+import { defaultRateLimiter, type RateLimitPolicy } from "@/lib/security/rate-limit";
 import { OfferReferenceSchema } from "@/features/employees/schemas";
 import { offerService } from "@/features/employees/services/offer-service";
 
 const NO_STORE = "private, no-cache, no-store, must-revalidate";
 
-function jsonError(message: string, status: number, code?: string): NextResponse {
+/** The PDF is rendered on every request: at most 20 downloads per user per minute. */
+const OFFER_LETTER_PDF_RATE_LIMIT: RateLimitPolicy = {
+  scope: "pdf:offer_letter",
+  maxRequests: 20,
+  windowSeconds: 60,
+};
+
+function jsonError(
+  message: string,
+  status: number,
+  code?: string,
+  headers: Record<string, string> = {}
+): NextResponse {
   return NextResponse.json(
     { error: message, ...(code ? { code } : {}) },
-    { status, headers: { "Cache-Control": NO_STORE, "X-Content-Type-Options": "nosniff" } }
+    { status, headers: { "Cache-Control": NO_STORE, "X-Content-Type-Options": "nosniff", ...headers } }
   );
 }
 
@@ -32,6 +45,8 @@ export async function GET(
       return jsonError("This offer letter could not be found.", 404, "NOT_FOUND");
     }
 
+    await defaultRateLimiter.enforce(user.id, OFFER_LETTER_PDF_RATE_LIMIT);
+
     const { pdf, filename } = await offerService.getOfferLetterPdf(user, parsed.data.offerId);
 
     return new Response(new Uint8Array(pdf), {
@@ -46,6 +61,11 @@ export async function GET(
       },
     });
   } catch (error: unknown) {
+    if (error instanceof RateLimitError) {
+      return jsonError("Too many downloads. Please wait a minute and try again.", 429, error.code, {
+        "Retry-After": String(error.retryAfterSeconds),
+      });
+    }
     if (error instanceof AppError && error.isOperational) {
       return jsonError(error.message, error.statusCode, error.code);
     }

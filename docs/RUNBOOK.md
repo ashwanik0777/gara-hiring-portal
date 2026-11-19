@@ -36,7 +36,7 @@ npm run dev
 
 | Variable | Required in Prod | Description |
 |---|---|---|
-| `NODE_ENV` | Yes | Set to `production` |
+| `NODE_ENV` | Local `.env` only | `development` locally. **Do not set it in Vercel**: the platform sets `production` itself, and a build with `development` fails while prerendering |
 | `DATABASE_URL` | Yes | Managed PostgreSQL connection string (`sslmode=verify-full`) |
 | `BETTER_AUTH_SECRET` | Yes | Cryptographic secret ($\ge 32$ chars; must NOT be `DEV_DEFAULT_AUTH_SECRET`) |
 | `BETTER_AUTH_URL` | Yes | Canonical HTTPS origin (e.g. `https://portal.garainnovation.com`) |
@@ -103,7 +103,7 @@ npm run test:e2e           # public suite: no database needed
 - Never set `NODE_ENV` in Vercel environment variables; Vercel sets it to `production` itself. A build with `NODE_ENV=development` fails while prerendering.
 
 - The public suite starts the app with `DATABASE_URL` pointed at a closed local port, so it can never touch a real database. It covers public pages, the 375 px mobile layout, auth form validation and security headers.
-- The journey suite (candidate → evaluation → intern, and candidate → offer → employee) runs only when `E2E_DATABASE_URL` points at a **dedicated test database**: the URL must differ from `DATABASE_URL` in `.env` and its database name must contain `test`. Global setup applies the migrations to that database and idempotently seeds deterministic fixtures (staff accounts and two published openings). Never point it at production.
+- The journey suite (candidate → evaluation → intern, and candidate → offer → employee) runs only when `E2E_DATABASE_URL` points at a **dedicated test database**: the URL must differ from `DATABASE_URL` in `.env` and its host or database name must contain `test` (a local PGlite server works: `node node_modules/@electric-sql/pglite-socket/dist/scripts/server.js --port=55432 --max-connections=20`, then `E2E_DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:55432/e2e_test?sslmode=disable" npm run test:e2e`). Global setup applies the migrations to that database and idempotently seeds deterministic fixtures (staff accounts and two published openings). Never point it at production.
 - Optional: `E2E_SERVER_MODE=production` (run `npm run build` first) and `E2E_PORT`.
 - Journeys pass the sign-in code step with `E2E_FIXED_OTP=<6 digits>`; it only takes effect against the dedicated test database outside production (see `docs/SECURITY.md`).
 
@@ -170,7 +170,7 @@ DATABASE_URL="$RECOVERY_DATABASE_URL" npx prisma migrate status
 
 ### 5.1 Health Endpoint (`GET /api/health`)
 - Returns HTTP `200` (`status: "ok"`) when PostgreSQL is reachable (`SELECT 1`), or HTTP `503` (`status: "degraded"`) if the database is unreachable.
-- Reports `productionCredentialsReady` and the active `policyGatesEnforced` list (`OD-001` through `OD-013`) without exposing secrets.
+- Anonymous callers get only `{ status, timestamp }` (point uptime monitors here). With `Authorization: Bearer <CRON_SECRET>` it also returns the environment, `productionCredentialsReady`, the `productionBlockers` list and the enforced policy gates — check this once after every deployment.
 
 ### 5.2 Durable Notification Outbox (`src/infrastructure/email/outbox-processor.ts`)
 - Transactional workflows write outbound email events to `notification_outbox` (`status = 'PENDING'`).
@@ -248,9 +248,14 @@ Until the organisation runs its own server, keep `DOCUMENT_STORAGE_MODE=link`. T
 
 ### 6.3 Loading experience
 - Portal layouts render the auth-dependent shell inside `<Suspense>` with `DashboardShellSkeleton`, so the prerendered static shell paints immediately and the session streams in.
-- Every dashboard route has a `loading.tsx` that mirrors its layout (`src/components/feedback/page-skeletons.tsx`); public and auth routes have matching skeletons. Skeleton blocks pulse only when the user allows motion (`motion-safe`) and each region announces its loading state to screen readers.
+- Every dashboard route has a `loading.tsx` that mirrors its layout (`src/components/feedback/page-skeletons.tsx`). Skeleton blocks pulse only when the user allows motion (`motion-safe`) and each region announces its loading state to screen readers.
 - After sign-in the client navigates once, straight to the user's portal (`getHomePathForUser`), instead of bouncing through `/dashboard`.
-- Public and auth routes (`/careers`, `/careers/<slug>`, `/help`, `/verify`, sign-in screens) have their own `loading.tsx`; a thin top progress bar (`src/components/navigation/navigation-progress.tsx`) appears when a navigation takes longer than 120 ms.
+- Public and sign-in pages (`/`, `/careers`, `/careers/<slug>`, `/help`, `/verify`, `/verify/<code>`, `/login`, `/register`, `/forgot-password`, `/reset-password`) deliberately have **no** `loading.tsx`: their real content is in the first HTML response, so it shows without JavaScript and in link previews. Client components on these pages read the query string in the browser (`useSyncExternalStore`) instead of `useSearchParams`, which would make the server render a placeholder. A thin top progress bar (`src/components/navigation/navigation-progress.tsx`) appears when a navigation takes longer than 120 ms.
+
+### 6.3a Link previews (WhatsApp, LinkedIn, Slack, X)
+- Previews read only the server HTML `<head>`. The root layout sets `metadataBase` (from `BETTER_AUTH_URL`), Open Graph and `twitter:card=summary_large_image`; images are generated with `next/og`: `src/app/opengraph-image.tsx` (site), `src/app/careers/opengraph-image.tsx` (careers page) and `src/app/careers/[slug]/opengraph-image.tsx` (one per opening, with its title and location). Each is 1200×630 and about 60 KB.
+- `BETTER_AUTH_URL` must be set for the **build** as well (Vercel applies environment variables to builds): static pages bake the absolute image URL at build time.
+- Check a deployment: `curl -s -A "WhatsApp/2.23" https://<domain>/ | grep og:image`, then open the image URL. After changing the image, WhatsApp and LinkedIn may show a cached preview for a while; LinkedIn's Post Inspector refreshes it.
 
 ### 6.4 Bounded queries and pagination (2026-10-26)
 - Every staff list loads one page from the database (`skip`/`take`, at most 50 rows, total from a `count` in the same `Promise.all`); filters, page, month and tab travel in the URL. This covers the application queue, interview board (default window: 30 days back to 60 days ahead, `?range=all` for everything), employee directory, evaluation list, intern review board, intern tasks, leave, attendance (one business month at a time), payroll and sub-admins.
