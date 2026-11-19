@@ -13,7 +13,7 @@ const PREVIEW_BOTS = {
   linkedin: "LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)",
 };
 
-const SHAREABLE_PAGES = ["/", "/careers", "/login", "/register", "/help", "/verify"];
+const SHAREABLE_PAGES = ["/", "/careers", "/login", "/register", "/help", "/verify", "/privacy", "/refund-policy", "/contact"];
 
 function metaContent(html: string, key: string): string | null {
   const head = html.slice(0, html.indexOf("</head>"));
@@ -27,7 +27,8 @@ function metaContent(html: string, key: string): string | null {
 async function expectPreviewImage(request: APIRequestContext, imageUrl: string) {
   // Previews need an absolute URL; the test server answers for it (BETTER_AUTH_URL = baseURL).
   expect(imageUrl).toMatch(/^https?:\/\//);
-  const response = await request.get(new URL(imageUrl).pathname + new URL(imageUrl).search);
+  // The dev server compiles the next/og image route on first use, which can take a while.
+  const response = await request.get(new URL(imageUrl).pathname + new URL(imageUrl).search, { timeout: 60_000 });
   expect(response.status()).toBe(200);
   expect(response.headers()["content-type"]).toContain("image/png");
   const body = await response.body();
@@ -93,9 +94,8 @@ test.describe("Content without JavaScript", () => {
     const opening = E2E_OPENINGS.internship;
     await page.goto(`/careers/${opening.slug}`);
     await expect(page.getByRole("heading", { level: 1, name: opening.title })).toBeVisible();
-    // Internships are always free: the tag and the fraud alert are part of the server HTML.
-    await expect(page.getByText("No fee", { exact: true }).first()).toBeVisible();
-    await expect(page.getByRole("note", { name: "Fraud alert" }).first()).toBeVisible();
+    // The role summary beside the details is part of the server HTML too.
+    await expect(page.getByRole("heading", { level: 2, name: "Role summary" })).toBeVisible();
     await expect(page.getByRole("link", { name: /Apply Now/ })).toHaveAttribute(
       "href",
       `/careers/${opening.slug}/apply`

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { absoluteUrl, getSiteUrl } from "@/lib/site-url";
+import { ORGANIZATION_LOGO_PATH, ORGANIZATION_NAME } from "@/lib/seo/json-ld";
 
 /**
  * Search-engine metadata for the public careers pages: page metadata, Open Graph and the
@@ -7,8 +8,8 @@ import { absoluteUrl, getSiteUrl } from "@/lib/site-url";
  * ever reach these builders (the public opening queries filter on status).
  */
 
-export const ORGANIZATION_NAME = "GARA Innovation";
-export const ORGANIZATION_LOGO_PATH = "/brand/gara-logo.png";
+export { ORGANIZATION_LOGO_PATH, ORGANIZATION_NAME, serializeJsonLd } from "@/lib/seo/json-ld";
+
 const META_DESCRIPTION_LENGTH = 160;
 
 export interface PublicOpeningSeoInput {
@@ -23,8 +24,11 @@ export interface PublicOpeningSeoInput {
   workplaceType: "REMOTE" | "HYBRID" | "ON_SITE";
   createdAt: Date;
   updatedAt: Date;
-  /** Application deadline; the Opening model has none yet, so callers pass null. */
+  /** Application deadline (Opening.applyDeadline). */
   closesAt?: Date | null;
+  skills?: string[];
+  eligibility?: string | null;
+  openingsCount?: number | null;
 }
 
 /** Collapses whitespace and cuts text to a meta-description length on a word boundary. */
@@ -122,6 +126,16 @@ export function buildJobPostingJsonLd(opening: PublicOpeningSeoInput): Record<st
     directApply: true,
   };
 
+  if (opening.skills && opening.skills.length > 0) {
+    jsonLd.skills = opening.skills.join(", ");
+  }
+  if (opening.eligibility) {
+    jsonLd.qualifications = opening.eligibility;
+  }
+  if (opening.openingsCount) {
+    jsonLd.totalJobOpenings = opening.openingsCount;
+  }
+
   if (opening.closesAt) {
     jsonLd.validThrough = opening.closesAt.toISOString();
   }
@@ -140,20 +154,6 @@ export function buildJobPostingJsonLd(opening: PublicOpeningSeoInput): Record<st
   }
 
   return jsonLd;
-}
-
-/**
- * Serializes structured data for an inline `<script type="application/ld+json">`.
- * `<`, `>` and `&` (and the JS line separators) become unicode escapes, so no value can
- * close the script element or start markup; JSON parsers decode them back unchanged.
- */
-export function serializeJsonLd(value: unknown): string {
-  return JSON.stringify(value)
-    .replace(/</g, "\\u003c")
-    .replace(/>/g, "\\u003e")
-    .replace(/&/g, "\\u0026")
-    .replace(new RegExp("\\u2028", "g"), "\\u2028")
-    .replace(new RegExp("\\u2029", "g"), "\\u2029");
 }
 
 /** Page metadata (title, description, canonical URL and Open Graph) for an opening. */

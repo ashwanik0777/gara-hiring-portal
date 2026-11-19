@@ -80,6 +80,9 @@ test.describe("Crawler files", () => {
     }
     expect(body).not.toContain("/apply</loc>");
     expect(body).not.toContain("/admin");
+    for (const policyPath of ["/privacy", "/terms", "/refund-policy", "/shipping-policy", "/cookie-policy", "/contact"]) {
+      expect(body).toContain(`${policyPath}</loc>`);
+    }
   });
 });
 

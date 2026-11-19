@@ -312,6 +312,8 @@ export class RecruitmentService {
         submittedResponses: true,
         resumeStorageKey: true,
         assignedRecruiterId: true,
+        consentAt: true,
+        consentVersion: true,
         opening: {
           select: {
             id: true,
@@ -327,6 +329,10 @@ export class RecruitmentService {
             id: true,
             phone: true,
             location: true,
+            branch: true,
+            yearOfStudy: true,
+            graduationYear: true,
+            college: { select: { name: true, status: true } },
             user: {
               select: {
                 id: true,
@@ -493,6 +499,15 @@ export class RecruitmentService {
         schemaDefinition: app.formVersion.schemaDefinition as unknown as FormSchemaDefinition,
       },
       submittedResponses: (app.submittedResponses ?? {}) as Record<string, unknown>,
+      applicantDetails: {
+        collegeName: app.candidate.college?.name ?? null,
+        collegePending: app.candidate.college?.status === "PENDING",
+        branch: app.candidate.branch,
+        yearOfStudy: app.candidate.yearOfStudy,
+        graduationYear: app.candidate.graduationYear,
+        consentAt: app.consentAt,
+        consentVersion: app.consentVersion,
+      },
       resumeStorageKey: app.resumeStorageKey,
       resumeDownloadUrl: `/api/candidate/applications/${app.id}/resume`,
       evaluation: enrollment

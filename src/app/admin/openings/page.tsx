@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { Role } from "@prisma/client";
 import { getAdminOpenings } from "@/features/openings/services/opening-service";
+import { listTracksForStaff } from "@/features/openings/services/track-service";
+import { TrackManager, type TrackManagerRow } from "@/features/openings/components/track-manager";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,7 +36,10 @@ export default async function AdminOpeningsPage() {
     return <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />;
   }
 
-  const openings = await getAdminOpenings(user);
+  const [openings, tracks] = await Promise.all([
+    getAdminOpenings(user),
+    listTracksForStaff(user).then(toTrackRows),
+  ]);
 
   return (
     <div className="w-full space-y-6">
@@ -126,6 +131,22 @@ export default async function AdminOpeningsPage() {
               </div>
             </CardContent>
           </Card>
+
+          <TrackManager tracks={tracks} />
     </div>
   );
 }
+
+/** Staff track rows as plain data for the client-side track manager. */
+function toTrackRows(tracks: Awaited<ReturnType<typeof listTracksForStaff>>): TrackManagerRow[] {
+  return tracks.map((track) => ({
+    id: track.id,
+    slug: track.slug,
+    name: track.name,
+    description: track.description,
+    sortOrder: track.sortOrder,
+    isActive: track.isActive,
+    openingsCount: track._count.openings,
+  }));
+}
+

@@ -725,38 +725,65 @@ describe("Google Jobs structured data and metadata", () => {
     expect(metadata.openGraph).toMatchObject({ url: `${SITE}/careers/frontend-intern`, siteName: "GARA Innovation" });
   });
 
-  it("uses dangerouslySetInnerHTML only for the escaped JSON-LD on the careers pages", () => {
-    const careersDir = path.join(process.cwd(), "src/app/careers");
+  it("writes raw script content only through the escaped JsonLd component (and the static theme script)", () => {
+    const srcDir = path.join(process.cwd(), "src");
     const files = fs
-      .readdirSync(careersDir, { recursive: true, encoding: "utf8" })
+      .readdirSync(srcDir, { recursive: true, encoding: "utf8" })
       .filter((file) => file.endsWith(".tsx"));
     const uses = files.flatMap((file) => {
-      const content = fs.readFileSync(path.join(careersDir, file), "utf8");
+      const content = fs.readFileSync(path.join(srcDir, file), "utf8");
       return content.includes("dangerouslySetInnerHTML") ? [{ file, content }] : [];
     });
-    expect(uses.map((u) => u.file)).toEqual([path.join("[slug]", "page.tsx")]);
-    expect(uses[0].content.match(/dangerouslySetInnerHTML/g)).toHaveLength(1);
-    expect(uses[0].content).toContain("serializeJsonLd(buildJobPostingJsonLd(opening))");
+    expect(uses.map((u) => u.file).sort()).toEqual(
+      [path.join("app", "layout.tsx"), path.join("components", "seo", "json-ld.tsx")].sort()
+    );
+    const jsonLd = uses.find((u) => u.file.endsWith("json-ld.tsx"));
+    expect(jsonLd?.content).toContain("__html: serializeJsonLd(data)");
+
+    const detailPage = fs.readFileSync(path.join(srcDir, "app", "careers", "[slug]", "page.tsx"), "utf8");
+    expect(detailPage).toContain("data={buildJobPostingJsonLd(");
   });
 });
 
 describe("sitemap.xml and robots.txt", () => {
-  it("lists home, careers and only PUBLISHED openings, resolved at request time", async () => {
-    mockPrisma.opening.findMany.mockResolvedValueOnce([
-      { slug: "frontend-intern", updatedAt: new Date("2026-10-05T00:00:00Z") },
-      { slug: "backend-engineer", updatedAt: new Date("2026-10-02T00:00:00Z") },
-    ]);
+  it("lists home, careers, open PUBLISHED openings, their tracks and the policy pages, resolved at request time", async () => {
+    const future = new Date(Date.now() + 86_400_000);
+    const past = new Date(Date.now() - 86_400_000);
+    mockPrisma.opening.findMany
+      // Sitemap slugs (listPublishedOpeningSlugs)
+      .mockResolvedValueOnce([
+        { slug: "frontend-intern", updatedAt: new Date("2026-10-05T00:00:00Z"), applyDeadline: future },
+        { slug: "backend-engineer", updatedAt: new Date("2026-10-02T00:00:00Z"), applyDeadline: null },
+        { slug: "expired-intern", updatedAt: new Date("2026-10-01T00:00:00Z"), applyDeadline: past },
+      ])
+      // Listing (getPublicOpenings), which carries the track of each opening
+      .mockResolvedValueOnce([
+        { slug: "frontend-intern", updatedAt: new Date("2026-10-05T00:00:00Z"), applyDeadline: future, track: { slug: "full-stack", name: "Full Stack & Web" } },
+        { slug: "expired-intern", updatedAt: new Date("2026-10-01T00:00:00Z"), applyDeadline: past, track: { slug: "ai-ml", name: "AI & Machine Learning" } },
+        { slug: "backend-engineer", updatedAt: new Date("2026-10-02T00:00:00Z"), applyDeadline: null, track: null },
+      ]);
     const entries = await sitemap();
 
     expect(mockConnection).toHaveBeenCalled();
     expect(mockPrisma.opening.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { status: "PUBLISHED" }, select: { slug: true, updatedAt: true } })
+      expect.objectContaining({
+        where: { status: "PUBLISHED" },
+        select: { slug: true, updatedAt: true, applyDeadline: true },
+      })
     );
     expect(entries.map((e) => e.url)).toEqual([
       `${SITE}/`,
       `${SITE}/careers`,
       `${SITE}/careers/frontend-intern`,
       `${SITE}/careers/backend-engineer`,
+      // Only tracks with an open opening; the expired opening and its track are left out.
+      `${SITE}/careers/tracks/full-stack`,
+      `${SITE}/privacy`,
+      `${SITE}/terms`,
+      `${SITE}/refund-policy`,
+      `${SITE}/shipping-policy`,
+      `${SITE}/cookie-policy`,
+      `${SITE}/contact`,
     ]);
     expect(entries[1].lastModified).toEqual(new Date("2026-10-05T00:00:00Z"));
     expect(entries[2].lastModified).toEqual(new Date("2026-10-05T00:00:00Z"));

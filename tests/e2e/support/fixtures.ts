@@ -57,6 +57,11 @@ export const E2E_OPENINGS = {
     title: "E2E Software Engineering Intern",
     type: "INTERNSHIP",
     department: "Engineering",
+    // Listing details (track seeded by the Phase 2 migration; deadline relative to the run).
+    trackSlug: "software",
+    deadlineDaysFromNow: 30,
+    durationText: "3 months",
+    skills: ["TypeScript", "React"],
   },
   fullTime: {
     id: "00000000-0000-4000-8000-00000000e302",
@@ -65,7 +70,28 @@ export const E2E_OPENINGS = {
     title: "E2E Backend Engineer",
     type: "FULL_TIME",
     department: "Engineering",
+    trackSlug: null,
+    deadlineDaysFromNow: null,
+    durationText: null,
+    skills: [],
   },
+} as const;
+
+/**
+ * A published opening whose last date to apply has passed: it must not be listed, must show a
+ * closed notice and must refuse applications. Kept out of E2E_OPENINGS (which are all open).
+ */
+export const E2E_EXPIRED_OPENING = {
+  id: "00000000-0000-4000-8000-00000000e303",
+  formVersionId: "00000000-0000-4000-8000-00000000e313",
+  slug: "e2e-expired-design-intern",
+  title: "E2E Expired Design Intern",
+  type: "INTERNSHIP",
+  department: "Design",
+  trackSlug: "software",
+  deadlineDaysFromNow: -2,
+  durationText: null,
+  skills: [],
 } as const;
 
 /** A unique, valid identity for a candidate created during one test. */

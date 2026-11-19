@@ -54,7 +54,7 @@ export default async function SubAdminPreviewOpeningPage({
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="w-full space-y-6">
       <div className="rounded-lg bg-primary/10 border border-primary/20 py-2.5 px-4 text-center text-xs font-medium text-foreground flex items-center justify-center gap-2">
         <Eye className="h-4 w-4 text-primary" />
         <span>

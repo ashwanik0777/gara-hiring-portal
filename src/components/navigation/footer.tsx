@@ -8,11 +8,13 @@ import {
   ArrowRight,
   MapPin,
   HelpCircle,
+  Heart,
   Briefcase,
 } from "lucide-react";
 import { VisitorBeacon } from "@/components/analytics/visitor-beacon";
-import { FraudAlert } from "@/components/marketing/fraud-alert";
-import { COMPANY } from "@/config/site";
+import { COMPANY, confirmedCompanyFacts } from "@/config/site";
+import { POLICY_PAGES } from "@/components/legal/policy-pages";
+import { PAGE_GUTTER } from "@/components/layout/page-gutter";
 import { SOCIAL_LINKS } from "@/lib/constants";
 
 interface FooterSocialLink {
@@ -40,12 +42,7 @@ function CopyrightYear() {
 }
 
 /** Statutory company details; only the values the product owner has confirmed are shown. */
-const COMPANY_FACTS = [
-  { label: "Registered name", value: COMPANY.registeredName },
-  { label: "CIN", value: COMPANY.cin },
-  { label: "Udyam Registration No.", value: COMPANY.udyamNumber },
-  { label: "Registered office", value: COMPANY.registeredAddress },
-].filter((fact): fact is { label: string; value: string } => Boolean(fact.value));
+const COMPANY_FACTS = confirmedCompanyFacts();
 
 export function Footer() {
   const socialLinks: FooterSocialLink[] = [
@@ -119,7 +116,7 @@ export function Footer() {
     <footer className="border-t border-border/80 bg-card/60">
       {/* ──────────────── TOP HIRING & COHORT ALERTS BANNER ──────────────── */}
       <div className="border-b border-border/60 bg-muted/20 dark:bg-muted/10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 lg:py-12">
+        <div className={`${PAGE_GUTTER} py-10 lg:py-12`}>
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
             {/* Left: Heading & Pill */}
             <div className="lg:col-span-6 space-y-2.5">
@@ -151,10 +148,10 @@ export function Footer() {
       </div>
 
       {/* ──────────────── MAIN MULTI-COLUMN FOOTER ──────────────── */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14 lg:py-16">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-10 lg:gap-8">
+      <div className={`${PAGE_GUTTER} py-14 lg:py-16`}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-10 lg:gap-8">
           {/* Column 1: Brand Info & Socials (Span 4) */}
-          <div className="lg:col-span-4 space-y-5">
+          <div className="sm:col-span-2 lg:col-span-4 space-y-5">
             <Link href="/" className="inline-flex items-center gap-3 group">
               <div className="relative h-11 w-11 overflow-hidden rounded-xl border border-border/60 bg-white p-1 shadow-2xs">
                 <Image
@@ -207,27 +204,27 @@ export function Footer() {
             </p>
             <ul className="space-y-2.5 text-xs text-muted-foreground">
               <li>
-                <Link href="/careers" className="hover:text-foreground transition-colors">
+                <Link href="/careers/tracks/software" className="hover:text-foreground transition-colors">
                   Software Engineering
                 </Link>
               </li>
               <li>
-                <Link href="/careers" className="hover:text-foreground transition-colors">
+                <Link href="/careers/tracks/full-stack" className="hover:text-foreground transition-colors">
                   Full Stack & Web
                 </Link>
               </li>
               <li>
-                <Link href="/careers" className="hover:text-foreground transition-colors">
+                <Link href="/careers/tracks/ui-ux" className="hover:text-foreground transition-colors">
                   UI/UX & Product Design
                 </Link>
               </li>
               <li>
-                <Link href="/careers" className="hover:text-foreground transition-colors">
+                <Link href="/careers/tracks/ai-ml" className="hover:text-foreground transition-colors">
                   AI & Machine Learning
                 </Link>
               </li>
               <li>
-                <Link href="/careers" className="hover:text-foreground transition-colors">
+                <Link href="/careers/tracks/cloud-backend" className="hover:text-foreground transition-colors">
                   Cloud & Backend
                 </Link>
               </li>
@@ -240,8 +237,8 @@ export function Footer() {
             </ul>
           </div>
 
-          {/* Column 3: CANDIDATE LIFECYCLE (Span 3) */}
-          <div className="lg:col-span-3 space-y-3.5">
+          {/* Column 3: CANDIDATE LIFECYCLE (Span 2) */}
+          <div className="lg:col-span-2 space-y-3.5">
             <p className="font-[family-name:var(--font-display)] text-xs font-bold tracking-wider uppercase text-foreground">
               Candidate Lifecycle
             </p>
@@ -279,8 +276,29 @@ export function Footer() {
             </ul>
           </div>
 
-          {/* Column 4: GET IN TOUCH & METRICS (Span 3) */}
-          <div className="lg:col-span-3 space-y-4">
+          {/* Column 4: POLICIES (Span 2) */}
+          <nav aria-label="Policies" className="lg:col-span-2 space-y-3.5">
+            <p className="font-[family-name:var(--font-display)] text-xs font-bold tracking-wider uppercase text-foreground">
+              Policies
+            </p>
+            <ul className="space-y-2.5 text-xs text-muted-foreground">
+              {POLICY_PAGES.map((page) => (
+                <li key={page.href}>
+                  <Link href={page.href} className="hover:text-foreground transition-colors">
+                    {page.label}
+                  </Link>
+                </li>
+              ))}
+              <li>
+                <a href="/sitemap.xml" className="hover:text-foreground transition-colors">
+                  Sitemap
+                </a>
+              </li>
+            </ul>
+          </nav>
+
+          {/* Column 5: GET IN TOUCH (Span 2) */}
+          <div className="lg:col-span-2 space-y-4">
             <p className="font-[family-name:var(--font-display)] text-xs font-bold tracking-wider uppercase text-foreground">
               Support & Status
             </p>
@@ -334,38 +352,44 @@ export function Footer() {
         </div>
       </div>
 
-      {/* ──────────────── FRAUD ALERT & COMPANY DETAILS ──────────────── */}
-      <div className="border-t border-border/60">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 space-y-3">
-          <FraudAlert variant="compact" />
-          {COMPANY_FACTS.length > 0 && (
-            <address className="not-italic flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-muted-foreground">
-              {COMPANY_FACTS.map((fact) => (
-                <span key={fact.label}>
-                  <span className="font-semibold text-foreground">{fact.label}:</span> {fact.value}
-                </span>
-              ))}
-            </address>
-          )}
+      {/* ──────────────── COMPANY DETAILS (only the confirmed values) ──────────────── */}
+      {COMPANY_FACTS.length > 0 && (
+        <div className="border-t border-border/60">
+          <address className={`${PAGE_GUTTER} py-5 not-italic flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-muted-foreground`}>
+            {COMPANY_FACTS.map((fact) => (
+              <span key={fact.label}>
+                <span className="font-semibold text-foreground">{fact.label}:</span> {fact.value}
+              </span>
+            ))}
+          </address>
         </div>
-      </div>
+      )}
 
       {/* Records the visit for the admin visitor report; renders nothing. */}
       <VisitorBeacon />
 
       {/* ──────────────── BOTTOM ATTRIBUTION & LEGAL BAR ──────────────── */}
       <div className="border-t border-border/80 bg-background/80 py-6">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Same edges as PAGE_GUTTER, plus room on the right for the floating help buttons. */}
+        <div className="w-full px-4 sm:px-6 md:px-14 lg:pl-16 lg:pr-24 xl:pl-20 2xl:px-32">
           <div className="grid grid-cols-1 lg:grid-cols-3 items-center gap-4 text-xs text-muted-foreground">
             {/* Left: Copyright */}
             <div className="text-center lg:text-left justify-self-center lg:justify-self-start order-2 lg:order-1">
-              <span>© <CopyrightYear /> <strong>GARA INNOVATION</strong>. All rights reserved.</span>
+              <span>© <CopyrightYear /> <strong>{COMPANY.brandName}</strong>. All rights reserved.</span>
             </div>
 
-            {/* Middle: attribution */}
+            {/* Middle: attribution (the screen-reader text reads "with love by") */}
             <div className="text-center justify-self-center order-1 lg:order-2">
-              <span className="font-medium text-foreground/80">
-                Built by{" "}
+              <span className="inline-flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 font-medium text-foreground/80">
+                {/* Real spaces between the parts keep the sentence intact as plain text. */}
+                <span>Architected &amp; Engineered with</span>{" "}
+                <span
+                  className="inline-flex items-center justify-center rounded-full bg-pink-500/10 p-1 shadow-[0_0_10px_rgba(244,114,182,0.3)] transition-transform hover:scale-110 dark:bg-pink-500/15"
+                >
+                  <Heart className="h-3.5 w-3.5 fill-red-500 stroke-red-500" aria-hidden="true" />
+                  <span className="sr-only">love</span>
+                </span>{" "}
+                <span>by</span>{" "}
                 <a
                   href={COMPANY.websiteUrl}
                   target="_blank"
@@ -377,21 +401,18 @@ export function Footer() {
               </span>
             </div>
 
-            {/* Right: Legal links from reference */}
-            <div className="flex flex-wrap items-center justify-center lg:justify-end gap-4 text-[11px] justify-self-center lg:justify-self-end order-3">
-              <Link href="/help" className="hover:text-foreground transition-colors">
+            {/* Right: the two main legal links (all policies are in the Policies column) */}
+            <nav
+              aria-label="Legal"
+              className="flex flex-wrap items-center justify-center lg:justify-end gap-4 text-[11px] justify-self-center lg:justify-self-end order-3"
+            >
+              <Link href="/privacy" className="hover:text-foreground transition-colors">
                 Privacy Policy
               </Link>
-              <Link href="/help" className="hover:text-foreground transition-colors">
+              <Link href="/terms" className="hover:text-foreground transition-colors">
                 Terms of Service
               </Link>
-              <Link href="/help" className="hover:text-foreground transition-colors">
-                Cookie Policy
-              </Link>
-              <a href="/sitemap.xml" className="hover:text-foreground transition-colors">
-                Sitemap
-              </a>
-            </div>
+            </nav>
           </div>
         </div>
       </div>

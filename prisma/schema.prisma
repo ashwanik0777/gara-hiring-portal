@@ -58,6 +58,7 @@ model User {
   interviewBookingRequests     InterviewBookingRequest[]  @relation("InterviewBookingInterviewer")
   twoFactors                   TwoFactor[]
   updatedPayoutProfiles        EmployeePayoutProfile[]    @relation("PayoutProfileEditors")
+  suggestedColleges            College[]                  @relation("SuggestedColleges")
 
   @@index([createdAt])
 
@@ -210,6 +211,12 @@ model CandidateProfile {
   portfolioUrl        String?
   // What the candidate signed up for; drives recommended openings (null = not chosen yet)
   careerInterest      CareerInterest?
+  // Education details asked on the apply form (careers plan, 2026-11-19)
+  collegeId           String?
+  college             College?      @relation(fields: [collegeId], references: [id], onDelete: SetNull)
+  branch              String?
+  yearOfStudy         Int?
+  graduationYear      Int?
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
 
@@ -217,7 +224,34 @@ model CandidateProfile {
 
   @@index([careerInterest])
   @@index([createdAt])
+  @@index([collegeId])
   @@map("candidate_profiles")
+}
+
+enum CollegeStatus {
+  APPROVED
+  PENDING
+}
+
+// College master list. Students pick an approved college or add a new one, which waits for
+// staff approval before other students can find it.
+model College {
+  id             String             @id @default(uuid())
+  name           String
+  // Lower-case name without punctuation; one row per college name
+  normalizedName String             @unique
+  city           String?
+  state          String?
+  status         CollegeStatus      @default(PENDING)
+  createdById    String?
+  createdBy      User?              @relation("SuggestedColleges", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  candidates     CandidateProfile[]
+
+  @@index([status, name])
+  @@map("colleges")
 }
 
 enum EmploymentType {
@@ -389,6 +423,21 @@ model Opening {
   description         String
   requirements        String
   responsibilities    String?
+  // Careers listing details (product owner plan, 2026-11-19). All optional: older openings
+  // simply do not show them.
+  trackId             String?
+  track               Track?               @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  // One or two sentences for the listing card
+  summary             String?
+  skills              String[]             @default([])
+  // Who can apply, e.g. years of study and branches (free text written by staff)
+  eligibility         String?
+  durationText        String?
+  stipendPolicyText   String?
+  // Number of positions; null when not stated
+  openingsCount       Int?
+  // Last moment to apply: the end of the chosen day in the business time zone
+  applyDeadline       DateTime?
   status              OpeningStatus        @default(DRAFT)
   activeFormVersionId String?
   createdById         String
@@ -400,8 +449,28 @@ model Opening {
   applications        Application[]
 
   @@index([status])
+  @@index([trackId])
+  @@index([status, applyDeadline])
 
   @@map("openings")
+}
+
+// Career tracks that group openings (and, later, training programmes). Managed by staff.
+model Track {
+  id          String    @id @default(uuid())
+  // URL segment of the track page: /careers/tracks/{slug}
+  slug        String    @unique
+  name        String
+  description String?
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  openings    Opening[]
+
+  @@index([isActive, sortOrder])
+  @@map("tracks")
 }
 
 model OpeningFormVersion {
@@ -473,7 +542,12 @@ model Application {
   employmentPeriods  EmploymentPeriod[]         @relation("PeriodApplication")
   interviewBookingRequests InterviewBookingRequest[]
 
-  @@index([openingId, candidateId])
+  // One application per candidate per opening, ever (product owner, 2026-11-19)
+  // Privacy Policy and Terms accepted on the apply form, and the policy version accepted
+  consentAt          DateTime?
+  consentVersion     String?
+
+  @@unique([openingId, candidateId])
   @@index([source])
   @@index([candidateId])
   @@index([status])

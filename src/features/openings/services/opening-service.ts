@@ -22,6 +22,7 @@ import {
 import { getDefaultApplicationFormSchema } from "@/features/application-forms/default-form";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
 import { NotFoundError, ValidationError, ConflictError } from "@/lib/errors";
+import { deadlineFromDateKey, normalizeSkills } from "../listing";
 import { assertPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { logger } from "@/lib/logging/logger";
 
@@ -50,6 +51,74 @@ function isUniqueConstraintViolation(error: unknown): boolean {
     "code" in error &&
     (error as { code: unknown }).code === "P2002"
   );
+}
+
+/** Empty text from a form clears the field. */
+function blankToNull(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Database values of the optional listing fields present in the input (absent keys are left
+ * untouched on update). The deadline is stored as the end of the chosen day.
+ */
+function listingFieldsData(input: UpdateOpeningInput) {
+  const data: {
+    trackId?: string | null;
+    summary?: string | null;
+    skills?: string[];
+    eligibility?: string | null;
+    durationText?: string | null;
+    stipendPolicyText?: string | null;
+    openingsCount?: number | null;
+    applyDeadline?: Date | null;
+  } = {};
+  if (input.trackId !== undefined) data.trackId = input.trackId || null;
+  if (input.summary !== undefined) data.summary = blankToNull(input.summary);
+  if (input.skills !== undefined) data.skills = normalizeSkills(input.skills);
+  if (input.eligibility !== undefined) data.eligibility = blankToNull(input.eligibility);
+  if (input.durationText !== undefined) data.durationText = blankToNull(input.durationText);
+  if (input.stipendPolicyText !== undefined) data.stipendPolicyText = blankToNull(input.stipendPolicyText);
+  if (input.openingsCount !== undefined) data.openingsCount = input.openingsCount ?? null;
+  if (input.applyDeadline !== undefined) {
+    data.applyDeadline = input.applyDeadline ? deadlineFromDateKey(input.applyDeadline) : null;
+  }
+  return data;
+}
+
+const CORE_OPENING_FIELDS = [
+  "title",
+  "slug",
+  "department",
+  "type",
+  "location",
+  "workplaceType",
+  "description",
+  "requirements",
+  "responsibilities",
+] as const;
+
+/** The core opening fields present in the input (listing fields are mapped separately). */
+function coreFieldsData(input: UpdateOpeningInput): Pick<UpdateOpeningInput, (typeof CORE_OPENING_FIELDS)[number]> {
+  const data: Record<string, unknown> = {};
+  for (const key of CORE_OPENING_FIELDS) {
+    if (input[key] !== undefined) data[key] = input[key];
+  }
+  return data as Pick<UpdateOpeningInput, (typeof CORE_OPENING_FIELDS)[number]>;
+}
+
+/** A chosen track must exist and be active (a hidden track cannot get new openings). */
+async function assertAssignableTrack(
+  tx: Prisma.TransactionClient,
+  trackId: string | null | undefined,
+  currentTrackId?: string | null
+): Promise<void> {
+  if (!trackId || trackId === currentTrackId) return;
+  const track = await tx.track.findUnique({ where: { id: trackId }, select: { isActive: true } });
+  if (!track || !track.isActive) {
+    throw new ValidationError("Choose an active track.", [{ path: ["trackId"], message: "Choose an active track." }]);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -94,6 +163,14 @@ const publicOpeningSelect = {
   description: true,
   requirements: true,
   responsibilities: true,
+  summary: true,
+  skills: true,
+  eligibility: true,
+  durationText: true,
+  stipendPolicyText: true,
+  openingsCount: true,
+  applyDeadline: true,
+  track: { select: { slug: true, name: true } },
   status: true,
   activeFormVersionId: true,
   createdAt: true,
@@ -109,6 +186,8 @@ export async function getPublicOpenings(filters?: {
   type?: OpeningType;
   workplaceType?: WorkplaceType;
   search?: string;
+  /** Only openings of this track (by track slug). */
+  trackSlug?: string;
 }) {
   "use cache";
   cacheTag(PUBLIC_OPENINGS_TAG);
@@ -126,6 +205,9 @@ export async function getPublicOpenings(filters?: {
   }
   if (filters?.workplaceType) {
     where.workplaceType = filters.workplaceType;
+  }
+  if (filters?.trackSlug) {
+    where.track = { slug: filters.trackSlug, isActive: true };
   }
   if (filters?.search) {
     where.OR = [
@@ -146,6 +228,11 @@ export async function getPublicOpenings(filters?: {
       location: true,
       workplaceType: true,
       description: true,
+      summary: true,
+      durationText: true,
+      stipendPolicyText: true,
+      applyDeadline: true,
+      track: { select: { slug: true, name: true } },
       status: true,
       createdAt: true,
       updatedAt: true,
@@ -153,6 +240,7 @@ export async function getPublicOpenings(filters?: {
     orderBy: { createdAt: "desc" },
   });
 
+  // The deadline is compared at request time by the pages (a cached list cannot know "now").
   return openings;
 }
 
@@ -167,7 +255,7 @@ export async function listPublishedOpeningSlugs(limit: number) {
 
   return prisma.opening.findMany({
     where: { status: OpeningStatus.PUBLISHED },
-    select: { slug: true, updatedAt: true },
+    select: { slug: true, updatedAt: true, applyDeadline: true },
     orderBy: { updatedAt: "desc" },
     take: limit,
   });
@@ -313,6 +401,7 @@ export async function createOpening(rawInput: CreateOpeningInput, user: Authenti
 
   // Execute in transaction
   const opening = await prisma.$transaction(async (tx) => {
+    await assertAssignableTrack(tx, input.trackId);
     const created = await tx.opening.create({
       data: {
         title: input.title,
@@ -324,6 +413,7 @@ export async function createOpening(rawInput: CreateOpeningInput, user: Authenti
         description: input.description,
         requirements: input.requirements,
         responsibilities: input.responsibilities,
+        ...listingFieldsData(input),
         status: OpeningStatus.DRAFT,
         createdById: user.id,
       },
@@ -390,10 +480,12 @@ export async function updateOpening(id: string, rawInput: UpdateOpeningInput, us
       }
     }
 
+    await assertAssignableTrack(tx, input.trackId, existing.trackId);
+
     // Guard against a concurrent edit that changed the record after it was read.
     const result = await tx.opening.updateMany({
       where: { id, updatedAt: existing.updatedAt },
-      data: { ...input, updatedAt: new Date() },
+      data: { ...coreFieldsData(input), ...listingFieldsData(input), updatedAt: new Date() },
     });
     if (result.count !== 1) {
       throw new ConflictError("This opening was modified by someone else. Refresh and try again.");

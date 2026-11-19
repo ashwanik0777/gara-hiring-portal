@@ -2,6 +2,7 @@ import * as React from "react";
 import { StatCardSkeleton } from "@/components/ui/stat-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { PAGE_GUTTER } from "@/components/layout/page-gutter";
 
 /*
  * Loading skeletons that mirror the real page layouts, so content does not jump when
@@ -404,7 +405,7 @@ export function PublicDetailSkeleton({
   withNavbar?: boolean;
 }) {
   const body = (
-    <div className="mx-auto w-full max-w-4xl space-y-6 px-4 py-10 sm:px-8">
+    <div className={`${PAGE_GUTTER} space-y-6 py-10`}>
       <Skeleton className="h-4 w-28" />
       <div className="space-y-3">
         <Skeleton className="h-8 w-3/4" />

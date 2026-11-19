@@ -13,6 +13,7 @@ import { Pool } from "pg";
 import { getDefaultApplicationFormSchema } from "../../../src/features/application-forms/default-form";
 import {
   E2E_HR_PERMISSIONS,
+  E2E_EXPIRED_OPENING,
   E2E_OPENINGS,
   E2E_STAFF_PASSWORD,
   E2E_USERS,
@@ -112,8 +113,19 @@ export async function seedE2EFixtures(databaseUrl: string): Promise<void> {
       update: { ...E2E_HR_PERMISSIONS },
     });
 
-    for (const opening of Object.values(E2E_OPENINGS)) {
+    const trackIds = new Map(
+      (await prisma.track.findMany({ select: { id: true, slug: true } })).map((track) => [track.slug, track.id])
+    );
+
+    for (const opening of [...Object.values(E2E_OPENINGS), E2E_EXPIRED_OPENING]) {
       const type = OpeningType[opening.type];
+      const listing = {
+        trackId: opening.trackSlug ? (trackIds.get(opening.trackSlug) ?? null) : null,
+        applyDeadline:
+          opening.deadlineDaysFromNow === null ? null : new Date(Date.now() + opening.deadlineDaysFromNow * 86_400_000),
+        durationText: opening.durationText,
+        skills: [...opening.skills],
+      };
       const schemaDefinition = getDefaultApplicationFormSchema(
         opening.type
       ) as unknown as Prisma.InputJsonValue;
@@ -132,8 +144,9 @@ export async function seedE2EFixtures(databaseUrl: string): Promise<void> {
           requirements: "End-to-end test fixture requirements.",
           status: OpeningStatus.PUBLISHED,
           createdById: userIds.admin,
+          ...listing,
         },
-        update: { title: opening.title, type, status: OpeningStatus.PUBLISHED },
+        update: { title: opening.title, type, status: OpeningStatus.PUBLISHED, ...listing },
         select: { id: true },
       });
 

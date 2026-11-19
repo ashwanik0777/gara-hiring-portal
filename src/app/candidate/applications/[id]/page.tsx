@@ -77,7 +77,7 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
   const offer = await offerService.getOfferByApplicationId(user, application.id);
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto">
+    <div className="space-y-8 w-full">
       {/* Navigation and Top Bar */}
       <div>
         <Link

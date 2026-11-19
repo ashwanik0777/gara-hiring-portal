@@ -10,6 +10,7 @@ import {
 } from "./services/application-service";
 import { CandidateProfileSchema } from "./schemas";
 import { ATTRIBUTION_FORM_FIELDS, resolveApplicationSource } from "./source-tracking";
+import { applicantDetailIssues, applicantDetailsSchema, readApplicantDetails } from "./applicant-details";
 import { formResponsesPayloadSchema } from "@/features/application-forms/schemas";
 import { toActionError, ValidationError, ForbiddenError } from "@/lib/errors";
 import { defaultRateLimiter, RATE_LIMIT_POLICIES } from "@/lib/security/rate-limit";
@@ -74,7 +75,8 @@ export async function submitApplicationAction(
       throw new ForbiddenError(blockedReason);
     }
 
-    // Technical safeguard against submission floods (duplicate rules are pending OD-005).
+    // Technical safeguard against submission floods (one application per opening is enforced
+    // by the service and a unique index).
     await defaultRateLimiter.enforce(user.id, RATE_LIMIT_POLICIES.APPLICATION_SUBMIT);
 
     const rawResponses = getStringField(formData, "responses") ?? "{}";
@@ -123,6 +125,18 @@ export async function submitApplicationAction(
       resumeBuffer = Buffer.from(await resumeFile.arrayBuffer());
     }
 
+    // College, branch, years and consent (validated here; completeness per opening type and
+    // the college lookup happen in the service).
+    const applicant = applicantDetailsSchema.safeParse(readApplicantDetails(formData));
+    if (!applicant.success) {
+      const issues = applicantDetailIssues(applicant.error);
+      return {
+        success: false,
+        error: issues[0]?.message ?? "Please check your details and try again.",
+        fieldErrors: Object.fromEntries(issues.map((issue) => [issue.field, issue.message])),
+      };
+    }
+
     // Untrusted marketing attribution: normalized to an allow-listed code + plain-text detail.
     const attribution = resolveApplicationSource({
       heardFrom: getStringField(formData, ATTRIBUTION_FORM_FIELDS.heardFrom),
@@ -146,6 +160,7 @@ export async function submitApplicationAction(
             }
           : undefined,
       attribution,
+      applicant: applicant.data,
     });
 
     // The confirmation email was queued in the same transaction.

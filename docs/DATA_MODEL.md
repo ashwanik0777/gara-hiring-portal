@@ -105,9 +105,16 @@ Job or internship vacancies.
 - `requirements` (TEXT, NOT NULL)
 - `status` (ENUM: `'DRAFT'`, `'PUBLISHED'`, `'PAUSED'`, `'CLOSED'`)
 - `active_form_version_id` (UUID, NULLABLE)
+- Listing details (2026-11-19, all optional): `track_id` (FK -> `Track.id`, ON DELETE SET NULL), `summary`, `skills` (TEXT[], default empty), `eligibility`, `duration_text`, `stipend_policy_text`, `openings_count` (INTEGER, CHECK NULL or > 0), `apply_deadline` (TIMESTAMP: the end of the chosen last day in the business time zone; after it the opening is hidden from listings and refuses applications)
 - `created_by` (UUID, FK -> `User.id`)
 - `created_at` (TIMESTAMP, DEFAULT NOW())
 - `updated_at` (TIMESTAMP, DEFAULT NOW())
+- Indexes: `(status)`, `(track_id)`, `(status, apply_deadline)`; the slug `tracks` is reserved (route `/careers/tracks/{slug}`)
+
+#### `Track` (2026-11-19)
+Staff-managed career tracks that group openings; each has a page at `/careers/tracks/{slug}`.
+- `id` (UUID, PK), `slug` (UNIQUE), `name`, `description` (NULLABLE), `sort_order` (INTEGER, default 0), `is_active` (BOOLEAN, default true; hidden tracks keep their openings but leave the filters, pages and sitemap)
+- Seeded by the migration with the five tracks of the product owner's plan: `software`, `full-stack`, `ui-ux`, `ai-ml`, `cloud-backend`
 
 #### `OpeningFormVersion`
 Immutable, versioned application form definitions. Ensures modifying a form never reinterprets past applications.
@@ -135,8 +142,15 @@ Personal information owned by the candidate.
 - `linkedin_url` (VARCHAR(255), NULLABLE)
 - `github_url` (VARCHAR(255), NULLABLE)
 - `portfolio_url` (VARCHAR(255), NULLABLE)
+- Education (2026-11-19, from the apply form): `college_id` (FK -> `College.id`, ON DELETE SET NULL), `branch`, `year_of_study` (INTEGER, CHECK 1–6), `graduation_year` (INTEGER, CHECK 1950–2100)
 - `created_at` (TIMESTAMP, DEFAULT NOW())
 - `updated_at` (TIMESTAMP, DEFAULT NOW())
+
+#### `College` (2026-11-19)
+College master list for the apply form.
+- `id` (UUID, PK), `name`, `normalized_name` (UNIQUE: lower case, letters/digits/& only, so one row per college name), `city`, `state` (NULLABLE)
+- `status` (ENUM `CollegeStatus`: `'APPROVED'`, `'PENDING'`) — a college typed by a student is PENDING and is suggested only to that student until staff approve it (`/admin/colleges`)
+- `created_by` (FK -> `User.id`, ON DELETE SET NULL)
 
 #### `Application`
 Application submitted for a specific opening.
@@ -151,6 +165,8 @@ Application submitted for a specific opening.
 - `resume_url` (TEXT, NULLABLE) — https share link when `DOCUMENT_STORAGE_MODE=link` (2026-10-25)
 - `source` (TEXT, NULLABLE, indexed) — Normalised application source code (e.g. `LINKEDIN`, `CAREERS_PAGE`, `OTHER`); 2026-10-25
 - `source_detail` (TEXT, NULLABLE) — Plain-text campaign detail (utm values, referrer host), max 200 characters
+- `consent_at`, `consent_version` (NULLABLE; 2026-11-19) — when the candidate accepted the Privacy Policy and Terms on the apply form, and which policy version (`LEGAL.version` in `src/config/site.ts`)
+- Unique constraint: `(opening_id, candidate_id)` — one application per candidate per opening, ever (product owner, 2026-11-19)
 - `is_archived` (BOOLEAN, DEFAULT false)
 - `archived_at` (TIMESTAMP, NULLABLE)
 - `created_at` (TIMESTAMP, DEFAULT NOW())

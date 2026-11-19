@@ -6,6 +6,7 @@ import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth/auth-client";
 import {
+  GraduationCap,
   LayoutDashboard,
   Users,
   Briefcase,
@@ -86,6 +87,7 @@ export interface DashboardShellProps {
 }
 
 const ICON_MAP: Record<string, LucideIcon> = {
+  GraduationCap,
   LayoutDashboard,
   History,
   House,
@@ -133,6 +135,7 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
   },
   "/admin/applications": { label: "Applications", iconName: "FileText" },
   "/admin/registrations": { label: "Registrations", iconName: "UserPlus" },
+  "/admin/colleges": { label: "Colleges", iconName: "GraduationCap" },
   "/admin/openings": {
     label: "Job Openings",
     iconName: "Briefcase",

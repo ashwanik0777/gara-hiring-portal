@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/auth/guards";
 import { OpeningStatus } from "@prisma/client";
 import {
   createOpening,
+  updateOpening,
   updateOpeningStatus,
   saveOpeningFormVersion,
   PUBLIC_OPENINGS_TAG,
@@ -14,10 +15,16 @@ import {
 } from "./services/opening-service";
 import {
   CreateOpeningInput,
+  UpdateOpeningInput,
   createOpeningSchema,
+  updateOpeningSchema,
   openingIdSchema,
   openingStatusSchema,
+  trackIdSchema,
+  trackSchema,
+  type TrackInput,
 } from "./schemas";
+import { PUBLIC_TRACKS_TAG, createTrack, updateTrack } from "./services/track-service";
 import {
   FormSchemaDefinitionInput,
   formSchemaDefinitionSchema,
@@ -70,6 +77,57 @@ export async function createOpeningAction(
     return { success: true, data: { id: opening.id, slug: opening.slug } };
   } catch (error) {
     return { success: false, error: toActionError(error, "The opening could not be created.") };
+  }
+}
+
+export async function updateOpeningAction(
+  id: string,
+  data: UpdateOpeningInput
+): Promise<OpeningActionResult<{ id: string; slug: string }>> {
+  try {
+    const user = await requirePermission("canOpenings");
+    const openingId = parseArgument(openingIdSchema, id, "Invalid opening identifier");
+    const input = parseArgument(updateOpeningSchema, data, "Invalid opening details");
+    const opening = await updateOpening(openingId, input, user);
+    revalidateOpeningCaches({ id: opening.id, slug: opening.slug });
+    return { success: true, data: { id: opening.id, slug: opening.slug } };
+  } catch (error) {
+    return { success: false, error: toActionError(error, "The opening could not be saved.") };
+  }
+}
+
+/** Track changes show on every listing (track names) and on the track pages. */
+function revalidateTrackCaches(slugs: string[]) {
+  updateTag(PUBLIC_TRACKS_TAG);
+  updateTag(PUBLIC_OPENINGS_TAG);
+  revalidatePath("/careers");
+  for (const slug of slugs) revalidatePath(`/careers/tracks/${slug}`);
+  revalidatePath("/admin/openings");
+  revalidatePath("/subadmin/openings");
+}
+
+export async function createTrackAction(data: TrackInput): Promise<OpeningActionResult<{ id: string }>> {
+  try {
+    const user = await requirePermission("canOpenings");
+    const input = parseArgument(trackSchema, data, "Invalid track details");
+    const track = await createTrack(input, user);
+    revalidateTrackCaches([track.slug]);
+    return { success: true, data: { id: track.id } };
+  } catch (error) {
+    return { success: false, error: toActionError(error, "The track could not be created.") };
+  }
+}
+
+export async function updateTrackAction(id: string, data: TrackInput): Promise<OpeningActionResult<{ id: string }>> {
+  try {
+    const user = await requirePermission("canOpenings");
+    const trackId = parseArgument(trackIdSchema, id, "Invalid track identifier");
+    const input = parseArgument(trackSchema, data, "Invalid track details");
+    const track = await updateTrack(trackId, input, user);
+    revalidateTrackCaches([track.slug, track.previousSlug]);
+    return { success: true, data: { id: track.id } };
+  } catch (error) {
+    return { success: false, error: toActionError(error, "The track could not be saved.") };
   }
 }
 

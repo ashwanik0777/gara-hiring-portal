@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
-import { render, screen, cleanup, within } from "@testing-library/react";
+import { render, screen, cleanup } from "@testing-library/react";
 import Home from "@/app/page";
 import { Footer } from "@/components/navigation/footer";
-import { FraudAlert } from "@/components/marketing/fraud-alert";
-import { ANNOUNCEMENT, COMPANY, PORTAL_DOMAIN, fraudAlertText } from "@/config/site";
+import { ANNOUNCEMENT, COMPANY } from "@/config/site";
 import nextConfig from "../../next.config";
 
 vi.mock("next/navigation", () => ({
@@ -45,30 +44,17 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("Fraud alert", () => {
-  it("says internships are free, names the portal domain and the contact address", () => {
-    const text = fraudAlertText();
-    expect(text).toContain("never charges any fee for internships");
-    expect(text).toContain(PORTAL_DOMAIN);
-    expect(text).toContain(COMPANY.contactEmail);
-  });
-
-  it("renders as a note with a working contact link", () => {
-    render(<FraudAlert />);
-    const note = screen.getByRole("note", { name: "Fraud alert" });
-    expect(within(note).getByRole("link", { name: COMPANY.contactEmail }).getAttribute("href")).toBe(`mailto:${COMPANY.contactEmail}`);
-  });
-});
-
 describe("Public footer", () => {
-  it("shows the attribution and fraud alert, and no visitor count", () => {
+  it("shows the attribution and no visitor count or fraud banner", () => {
     render(<Footer />);
 
     expect(screen.queryByText(/Recorded visitors/)).toBeNull();
-    expect(screen.queryByText(/Architected/)).toBeNull();
-    expect(screen.getByText(/Built by/)).toBeTruthy();
+    // The attribution reads as a sentence, also for screen readers and text-only views.
+    expect(screen.getByText("Architected & Engineered with")).toBeTruthy();
+    const attribution = screen.getByText("Architected & Engineered with").parentElement;
+    expect(attribution?.textContent?.replace(/\s+/g, " ")).toBe(`Architected & Engineered with love by ${COMPANY.brandName}`);
     expect(screen.getByRole("link", { name: COMPANY.brandName }).getAttribute("href")).toBe(COMPANY.websiteUrl);
-    expect(screen.getByText(/never charges any fee for internships/)).toBeTruthy();
+    expect(screen.queryByText(/Fraud alert/)).toBeNull();
     expect(screen.getByRole("link", { name: "Sitemap" }).getAttribute("href")).toBe("/sitemap.xml");
   });
 
@@ -117,7 +103,7 @@ describe("Home page", () => {
     if (ANNOUNCEMENT) {
       expect(screen.getByText(ANNOUNCEMENT.text)).toBeTruthy();
     }
-    expect(screen.getByRole("note", { name: "Fraud alert" })).toBeTruthy();
+    expect(screen.queryByText(/Fraud alert/)).toBeNull();
   });
 });
 

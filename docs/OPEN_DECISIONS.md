@@ -470,6 +470,8 @@ The full plan, with what is built, changed or skipped, lives in `docs/CAREERS_PO
 - **Resume on the apply form (OD-013):** stays a candidate-provided link (`DOCUMENT_STORAGE_MODE=link`) until a storage provider is chosen.
 - **Phase order:** 0, 1, 2, 5, 3, 4, 6; printed certificate orders are built last in Industrial Training.
 - **Campus Ambassador payouts:** automatic through RazorpayX; the company opens the account.
+- **Fraud alert banner and "No fee" tag:** neither is shown (removed after Phase 0 on the product owner's request). The Terms and the Refund Policy say internships are free; the source plan's "Every internship card shows a No fee tag" no longer applies.
+- **Layout:** all pages full width (no centred max-width container) with side padding that grows with the screen and clears the floating social dock; footer policy links in a "Policies" column, with only Privacy Policy and Terms of Service in the bottom bar and the original "Architected & Engineered with ♥ by GARA INNOVATION" attribution in the centre (replacing the plan's "Built by").
 - **Business rules from the plan:** internships are always free; Industrial Training is paid with the digital certificate included and printing as an add-on; documents are titled "Payment Receipt" with no GST line; refunds in full before the batch start or within 24 hours after the first live class, then one free transfer; pass criteria 60% marks, 75% attendance, final project and live demo passed (configurable), one free re-attempt; ambassador commission default ₹100 per paid enrollment and student discount default 10% (configurable); amounts stored in paise.
 
 ### Open (2026-11-19): needed before the related phase goes live
@@ -479,3 +481,10 @@ The full plan, with what is built, changed or skipped, lives in `docs/CAREERS_PO
 30. **TDS on ambassador commissions:** whether and how tax is deducted at source on commission payouts. The ledger will carry a TDS field; the rule comes from the company's accountant.
 31. **Certificate signatories:** names, designations and signature images (or typed names only) for the Director and the Training Head or Mentor.
 32. **Printed certificates:** exact prices for college bulk delivery and home courier, and the courier partner.
+33. **Minimum age:** whether people under 18 may use the portal or enrol. Under the DPDP Act, 2023 children's data needs verifiable parental consent; the drafts say nothing until this is decided.
+34. **Batch cancelled or rescheduled by GARA:** whether students get a full refund, a transfer or the choice. Not stated in the refund policy yet.
+35. **Failed or duplicate payments:** what the student gets when money is debited but no enrolment is confirmed, or a payment is made twice (Phase 3A will also reconcile such payments automatically).
+37. **Required apply-form details (implemented, needs confirmation):** for internships the college and graduation year are required; branch and year of study are optional; for full-time roles all education details are optional. Consent to the Privacy Policy and Terms is required for every application.
+38. **Last date to apply (implemented, needs confirmation):** applications stay open for the whole chosen day in India time (until 23:59:59 IST).
+39. **Not-found status in production:** an unknown opening or track page answers HTTP 200 with a `noindex` robots tag and the "Page Not Found" content (Next.js streams the page shell before the lookup finishes); the development server answers 404. Search engines do not index these pages. A true 404 status would need the lookup before streaming (for example in `proxy.ts`).
+36. **Printed certificate refunds and jurisdiction:** refund terms for the printed add-on, and the city whose courts have jurisdiction (the Terms currently say only "the laws of India").

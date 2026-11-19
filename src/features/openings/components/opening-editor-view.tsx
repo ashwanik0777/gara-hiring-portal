@@ -1,22 +1,50 @@
 import Link from "next/link";
 import type { AdminOpeningDetail } from "../services/opening-service";
 import { OpeningStatusActions } from "./opening-status-actions";
+import { OpeningForm, type OpeningFormTrackOption } from "./opening-form";
+import { dateKeyFromDeadline } from "../listing";
 import { FormBuilder } from "@/features/application-forms/components/form-builder";
 import { FormSchemaDefinition } from "@/features/application-forms/types";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ArrowLeft, Eye, Settings, FileSpreadsheet } from "lucide-react";
+import type { CreateOpeningInput } from "../schemas";
 
 interface OpeningEditorViewProps {
   opening: AdminOpeningDetail;
   /** Openings workspace the links stay in, e.g. "/admin/openings" or "/subadmin/openings". */
-  basePath: string;
+  basePath: "/admin/openings" | "/subadmin/openings";
+  /** Tracks the details form can assign (see getTrackOptions). */
+  tracks: OpeningFormTrackOption[];
+}
+
+/** The opening's saved values in the shape of the details form. */
+function toFormValues(opening: AdminOpeningDetail): CreateOpeningInput {
+  return {
+    title: opening.title,
+    slug: opening.slug,
+    department: opening.department,
+    type: opening.type,
+    location: opening.location,
+    workplaceType: opening.workplaceType,
+    description: opening.description,
+    requirements: opening.requirements,
+    responsibilities: opening.responsibilities ?? "",
+    trackId: opening.trackId ?? "",
+    summary: opening.summary ?? "",
+    skills: opening.skills,
+    eligibility: opening.eligibility ?? "",
+    durationText: opening.durationText ?? "",
+    stipendPolicyText: opening.stipendPolicyText ?? "",
+    openingsCount: opening.openingsCount,
+    applyDeadline: opening.applyDeadline ? dateKeyFromDeadline(opening.applyDeadline) : "",
+  };
 }
 
 /**
  * Opening lifecycle controls and form builder. Callers must authorize the viewer
  * (`canOpenings`) before rendering; the Server Actions re-check on every write.
  */
-export function OpeningEditorView({ opening, basePath }: OpeningEditorViewProps) {
+export function OpeningEditorView({ opening, basePath, tracks }: OpeningEditorViewProps) {
   const latestFormVersion = opening.formVersions[0];
   const initialSchema = (latestFormVersion?.schemaDefinition as unknown as FormSchemaDefinition) ?? {
     sections: [],
@@ -64,7 +92,10 @@ export function OpeningEditorView({ opening, basePath }: OpeningEditorViewProps)
         </CardContent>
       </Card>
 
-      {/* Section 2: Dynamic Form Builder */}
+      {/* Section 2: Opening details (title, listing details, description) */}
+      <OpeningForm basePath={basePath} tracks={tracks} opening={{ id: opening.id, values: toFormValues(opening) }} />
+
+      {/* Section 3: Dynamic Form Builder */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">

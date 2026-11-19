@@ -40,9 +40,23 @@ test.describe("Internship journey (requires E2E_DATABASE_URL)", () => {
       await expectCandidateStage(candidatePage, applicationId, "Submitted");
     });
 
-    await test.step("HR moves the application to Interviewed", async () => {
+    await test.step("the same opening does not accept a second application", async () => {
+      await candidatePage.goto(`/careers/${opening.slug}/apply`);
+      await expect(candidatePage.getByRole("heading", { name: "You Have Already Applied" })).toBeVisible();
+      await expect(candidatePage.getByRole("button", { name: "Submit Application" })).toHaveCount(0);
+      await candidatePage.getByRole("button", { name: "View my application" }).click();
+      await candidatePage.waitForURL(new RegExp(`/candidate/applications/${applicationId}$`));
+    });
+
+    await test.step("HR sees the education details and the consent on the application", async () => {
       await signInAsStaff(hrPage, E2E_USERS.hr.email);
       await expect(hrPage).toHaveURL(/\/subadmin/);
+      await openStaffApplication(hrPage, applicationId);
+      await expect(hrPage.getByText(/E2E Institute of Technology \(pending approval\)/)).toBeVisible();
+      await expect(hrPage.getByText(/Accepted Privacy Policy & Terms on/)).toBeVisible();
+    });
+
+    await test.step("HR moves the application to Interviewed", async () => {
       await openStaffApplication(hrPage, applicationId);
       await advanceToInterviewed(hrPage);
       await expectCandidateStage(candidatePage, applicationId, "Interview Completed");

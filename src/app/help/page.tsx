@@ -6,6 +6,7 @@ import { chatbotService } from "@/features/chatbot/services/chatbot-service";
 import { PortalChatbotWidget } from "@/features/chatbot/components/portal-chatbot-widget";
 import { ChatPanelSkeleton } from "@/components/feedback/page-skeletons";
 import { Badge } from "@/components/ui/badge";
+import { PAGE_GUTTER } from "@/components/layout/page-gutter";
 import {
   Card,
   CardContent,
@@ -54,7 +55,7 @@ export default function HelpCenterPage() {
       </Suspense>
 
       <main className="flex-1 py-10">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+        <div className={`${PAGE_GUTTER} space-y-10`}>
           {/* Header */}
           <div className="space-y-3 border-b border-border/70 pb-6">
             <h1 className="text-3xl font-extrabold tracking-tight">
@@ -80,7 +81,7 @@ export default function HelpCenterPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {faqCatalog.entries.map((entry) => (
                 <Card key={entry.id} className="flex flex-col justify-between">
                   <CardHeader className="pb-2">

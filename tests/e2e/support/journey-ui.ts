@@ -60,6 +60,13 @@ export async function applyToOpening(
     .fill(answers.resumeLink ?? "https://drive.google.com/file/d/e2e-fixture-resume/view");
   await page.getByLabel(/^Earliest Available Start Date/).fill(dateInputValue(14));
 
+  // Applicant details on every apply form (Phase 2): a typed college is added for approval;
+  // college and graduation year are required for internships, consent always.
+  await page.getByLabel(/^College \/ University/).fill("E2E Institute of Technology");
+  await page.getByLabel(/^Branch \/ Course/).fill("Computer Science");
+  await page.getByLabel(/^Graduation year/).selectOption(String(new Date().getFullYear() + 1));
+  await page.getByRole("checkbox", { name: /I have read and agree/ }).check();
+
   await page.getByRole("button", { name: "Submit Application" }).click();
   await expect(
     page.getByRole("heading", { name: "Application Submitted Successfully" })

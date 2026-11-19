@@ -11,6 +11,8 @@ import {
 } from "../schemas";
 import { submitApplicationAction } from "@/features/applications/actions";
 import { APPLICATION_ATTRIBUTION_FIELDS } from "@/features/applications/source-tracking";
+import { APPLICANT_DETAIL_FIELD_NAMES } from "@/features/applications/applicant-details";
+import { ApplyFieldErrorsContext } from "../apply-field-errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -58,7 +60,21 @@ interface DynamicFormRendererProps {
    * APPLICATION_ATTRIBUTION_FIELDS are sent; the server normalizes them.
    */
   attributionFields?: React.ReactNode;
+  /**
+   * Applicant details rendered inside the form (college, branch, years, consent). Only fields
+   * named in APPLICANT_DETAIL_FIELD_NAMES are sent; the server validates them.
+   */
+  applicantFields?: React.ReactNode;
+  /**
+   * The candidate's earlier application to this opening (one per opening). Shown instead of the
+   * form, except right after a submission here: the success card stays, although the page is
+   * refreshed with this value set.
+   */
+  previousApplication?: { id: string; referenceCode: string } | null;
 }
+
+/** Native form fields forwarded with the submission besides the form-builder answers. */
+const FORWARDED_FIELDS: readonly string[] = [...APPLICATION_ATTRIBUTION_FIELDS, ...APPLICANT_DETAIL_FIELD_NAMES];
 
 const INPUT_TYPES: Partial<Record<FormFieldDefinition["type"], string>> = {
   number: "number",
@@ -75,6 +91,8 @@ export function DynamicFormRenderer({
   candidateName = "",
   candidateEmail = "",
   attributionFields,
+  applicantFields,
+  previousApplication = null,
 }: DynamicFormRendererProps) {
   const collectsLink = documentMode === "link";
   const router = useRouter();
@@ -135,12 +153,13 @@ export function DynamicFormRenderer({
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    // Read the uncontrolled attribution fields before any await (currentTarget is reset after dispatch).
+    // Read the uncontrolled attribution and applicant fields before any await (currentTarget is
+    // reset after dispatch).
     const nativeFields = new FormData(e.currentTarget);
-    const attribution: Array<[string, string]> = [];
-    for (const name of APPLICATION_ATTRIBUTION_FIELDS) {
+    const forwarded: Array<[string, string]> = [];
+    for (const name of FORWARDED_FIELDS) {
       const value = nativeFields.get(name);
-      if (typeof value === "string" && value !== "") attribution.push([name, value]);
+      if (typeof value === "string" && value !== "") forwarded.push([name, value]);
     }
     setServerError(null);
     setFieldErrors({});
@@ -169,7 +188,7 @@ export function DynamicFormRenderer({
       if (primaryFileField && resumeFile && !collectsLink) {
         payload.append("resume", resumeFile);
       }
-      for (const [name, value] of attribution) {
+      for (const [name, value] of forwarded) {
         payload.append(name, value);
       }
 
@@ -238,8 +257,35 @@ export function DynamicFormRenderer({
     );
   }
 
+  if (previousApplication) {
+    return (
+      <Card className="max-w-2xl mx-auto border-border">
+        <CardContent className="pt-8 text-center space-y-4">
+          <div className="mx-auto w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+            <CheckCircle2 className="h-8 w-8" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-foreground">You Have Already Applied</h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              Your application to <span className="font-semibold text-foreground">{openingTitle}</span> is in
+              (reference {previousApplication.referenceCode}). Each opening accepts one application per person.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
+            <Button onClick={() => router.push(`/candidate/applications/${previousApplication.id}`)}>
+              View my application
+            </Button>
+            <Button variant="outline" onClick={() => router.push("/careers")}>
+              See other openings
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-8 max-w-3xl mx-auto">
+    <form onSubmit={handleSubmit} className="space-y-8 w-full">
       {serverError && (
         <div
           role="alert"
@@ -506,6 +552,8 @@ export function DynamicFormRenderer({
           </CardContent>
         </Card>
       ))}
+
+      <ApplyFieldErrorsContext.Provider value={fieldErrors}>{applicantFields}</ApplyFieldErrorsContext.Provider>
 
       {attributionFields}
 

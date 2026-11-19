@@ -226,6 +226,17 @@ export interface RecruiterApplicationDetail extends RecruiterApplicationItem {
   submittedResponses: Record<string, unknown>;
   resumeStorageKey: string;
   resumeDownloadUrl: string;
+  /** Education details from the candidate profile and the consent given on the apply form. */
+  applicantDetails: {
+    collegeName: string | null;
+    /** The college was added by a student and is not approved yet. */
+    collegePending: boolean;
+    branch: string | null;
+    yearOfStudy: number | null;
+    graduationYear: number | null;
+    consentAt: Date | null;
+    consentVersion: string | null;
+  };
   statusHistory: RecruiterStatusHistoryItem[];
   interviewSchedules: InterviewScheduleItem[];
   /** Internship evaluation enrollment; null when none exists or for interviewer-scoped views. */

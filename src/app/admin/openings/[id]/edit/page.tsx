@@ -8,6 +8,7 @@ import {
 } from "@/features/openings/services/opening-service";
 import { openingIdSchema } from "@/features/openings/schemas";
 import { OpeningEditorView } from "@/features/openings/components/opening-editor-view";
+import { getTrackOptions } from "@/features/openings/services/track-service";
 import { Navbar } from "@/components/navigation/navbar";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 
@@ -65,8 +66,12 @@ export default async function EditOpeningPage({ params }: EditOpeningPageProps) 
       <Navbar />
 
       <main className="flex-1 py-10">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-          <OpeningEditorView opening={opening} basePath="/admin/openings" />
+        <div className="w-full">
+          <OpeningEditorView
+            opening={opening}
+            basePath="/admin/openings"
+            tracks={await getTrackOptions(user, opening.trackId)}
+          />
         </div>
       </main>
     </div>

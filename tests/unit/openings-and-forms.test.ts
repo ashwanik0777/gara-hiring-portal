@@ -21,6 +21,7 @@ const { mockPrisma, mockSession } = vi.hoisted(() => {
       updateMany: vi.fn(),
     },
     auditLog: { create: vi.fn() },
+    track: { findUnique: vi.fn() },
     $transaction: vi.fn(),
   };
   return {
@@ -346,7 +347,7 @@ describe("public opening reads are cached and tagged", () => {
     expect(slugs).toHaveLength(1);
     expect(mockPrisma.opening.findMany).toHaveBeenCalledWith({
       where: { status: OpeningStatus.PUBLISHED },
-      select: { slug: true, updatedAt: true },
+      select: { slug: true, updatedAt: true, applyDeadline: true },
       orderBy: { updatedAt: "desc" },
       take: 5000,
     });
@@ -559,6 +560,61 @@ describe("updateOpening", () => {
     await expect(updateOpening(OPENING_ID, { slug: "taken-slug" }, admin)).rejects.toBeInstanceOf(
       ConflictError
     );
+    expect(mockPrisma.opening.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("stores listing details: the deadline as the end of that day, cleaned skills, blanks cleared", async () => {
+    mockPrisma.opening.findUnique.mockResolvedValueOnce(draftOpening({ trackId: null }));
+    mockPrisma.track.findUnique.mockResolvedValueOnce({ isActive: true });
+    mockPrisma.opening.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.opening.findUniqueOrThrow.mockResolvedValue(draftOpening());
+
+    await updateOpening(
+      OPENING_ID,
+      {
+        trackId: "44444444-4444-4444-8444-444444444444",
+        applyDeadline: "2026-11-30",
+        skills: ["React", " react ", "SQL"],
+        summary: "   ",
+        durationText: " 3 months ",
+        openingsCount: 4,
+      },
+      admin
+    );
+
+    const { data } = mockPrisma.opening.updateMany.mock.calls[0][0];
+    // 30 Nov 2026 23:59:59.999 in Asia/Kolkata (UTC+05:30).
+    expect(data.applyDeadline).toEqual(new Date("2026-11-30T18:29:59.999Z"));
+    expect(data.skills).toEqual(["React", "SQL"]);
+    expect(data.summary).toBeNull();
+    expect(data.durationText).toBe("3 months");
+    expect(data.openingsCount).toBe(4);
+    expect(data.trackId).toBe("44444444-4444-4444-8444-444444444444");
+    // Fields that were not sent are left untouched.
+    expect("title" in data).toBe(false);
+    expect("eligibility" in data).toBe(false);
+  });
+
+  it("clears the deadline and the track when they are emptied", async () => {
+    mockPrisma.opening.findUnique.mockResolvedValueOnce(draftOpening({ trackId: "t-1" }));
+    mockPrisma.opening.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.opening.findUniqueOrThrow.mockResolvedValue(draftOpening());
+
+    await updateOpening(OPENING_ID, { applyDeadline: "", trackId: "" }, admin);
+
+    const { data } = mockPrisma.opening.updateMany.mock.calls[0][0];
+    expect(data.applyDeadline).toBeNull();
+    expect(data.trackId).toBeNull();
+    expect(mockPrisma.track.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("refuses to move an opening into a hidden track", async () => {
+    mockPrisma.opening.findUnique.mockResolvedValueOnce(draftOpening({ trackId: null }));
+    mockPrisma.track.findUnique.mockResolvedValueOnce({ isActive: false });
+
+    await expect(
+      updateOpening(OPENING_ID, { trackId: "44444444-4444-4444-8444-444444444444" }, admin)
+    ).rejects.toBeInstanceOf(ValidationError);
     expect(mockPrisma.opening.updateMany).not.toHaveBeenCalled();
   });
 });

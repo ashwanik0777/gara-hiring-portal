@@ -31,6 +31,15 @@ import { OpeningStatus, Prisma } from "@prisma/client";
 import { env } from "@/lib/env";
 import { describeDocumentLink, type DocumentLinkView } from "../document-links";
 import { normalizeStoredAttribution, type ResolvedAttribution } from "../source-tracking";
+import { formatDeadline, isApplicationWindowClosed } from "@/features/openings/listing";
+import {
+  APPLICANT_DETAIL_FIELDS,
+  CONSENT_REQUIRED_MESSAGE,
+  missingApplicantDetails,
+  type ApplicantDetails,
+} from "@/features/applications/applicant-details";
+import { resolveCollegeChoice } from "@/features/colleges/services/college-service";
+import { LEGAL } from "@/config/site";
 
 /** Bounded number of attempts to find an unused reference code. */
 export const MAX_REFERENCE_ATTEMPTS = 5;
@@ -65,6 +74,11 @@ export function generateApplicationReference(now: Date = new Date()): string {
   const year = now.getUTCFullYear();
   const randomSuffix = crypto.randomBytes(3).toString("hex").toUpperCase();
   return `GARA-${year}-APP-${randomSuffix}`;
+}
+
+/** Shown when a candidate applies to the same opening again (one application per opening). */
+export function alreadyAppliedMessage(referenceCode: string): string {
+  return `You have already applied to this opening (reference ${referenceCode}). You can follow it in your dashboard.`;
 }
 
 /** Detects a Prisma unique-constraint violation structurally (works across client versions). */
@@ -183,8 +197,10 @@ export class ApplicationService {
     };
     /** Normalized candidate source (see source-tracking.ts); a direct apply when omitted. */
     attribution?: ResolvedAttribution;
+    /** College, branch, years and consent from the apply form (applicant-details.ts). */
+    applicant: ApplicantDetails;
   }): Promise<{ applicationId: string; referenceCode: string }> {
-    const { userId, openingSlug, responses, resumeFile } = params;
+    const { userId, openingSlug, responses, resumeFile, applicant } = params;
     // Re-checked here so only allow-listed codes and bounded plain text are ever stored.
     const attribution = normalizeStoredAttribution(params.attribution);
 
@@ -227,15 +243,40 @@ export class ApplicationService {
       throw new ValidationError("This opening is no longer accepting applications.");
     }
 
+    if (isApplicationWindowClosed(opening.applyDeadline, new Date())) {
+      throw new ValidationError(
+        `Applications for this opening closed on ${formatDeadline(opening.applyDeadline as Date)}.`
+      );
+    }
+
+    // Consent to the Privacy Policy and Terms is mandatory; internships also need the
+    // student's college and graduation year (the form marks them required as well).
+    if (applicant.consent !== true) {
+      throw new ValidationError(CONSENT_REQUIRED_MESSAGE, [
+        { field: APPLICANT_DETAIL_FIELDS.consent, message: CONSENT_REQUIRED_MESSAGE },
+      ]);
+    }
+    const missingDetails = missingApplicantDetails(applicant, opening.type);
+    if (missingDetails.length > 0) {
+      throw new ValidationError(missingDetails[0].message, missingDetails);
+    }
+
+    // One application per candidate per opening, ever (product owner, 2026-11-19). Checked
+    // here for a clear message and again inside the transaction (unique index on both columns).
+    const previous = await prisma.application.findUnique({
+      where: { openingId_candidateId: { openingId: opening.id, candidateId: profileId } },
+      select: { referenceCode: true },
+    });
+    if (previous) {
+      throw new ConflictError(alreadyAppliedMessage(previous.referenceCode));
+    }
+
     const activeFormVersion = opening.formVersions[0];
     if (!activeFormVersion) {
       throw new ValidationError(
         "This opening isn't accepting applications right now. Please try again later."
       );
     }
-
-    // Duplicate-application handling is undecided (OD-005): repeat submissions are not
-    // blocked here; the submission rate limit in the Server Action is the technical safeguard.
 
     const formSchema = activeFormVersion.schemaDefinition as unknown as FormSchemaDefinition;
 
@@ -306,6 +347,27 @@ export class ApplicationService {
     try {
       const result = await this.createApplicationWithUniqueReference((referenceCode) =>
         prisma.$transaction(async (tx) => {
+          // A parallel submission may have won the race since the check above.
+          const duplicate = await tx.application.findUnique({
+            where: { openingId_candidateId: { openingId: opening.id, candidateId: profileId } },
+            select: { referenceCode: true },
+          });
+          if (duplicate) {
+            throw new ConflictError(alreadyAppliedMessage(duplicate.referenceCode));
+          }
+
+          // The profile keeps the latest education details (the form is prefilled from it).
+          const collegeId = await resolveCollegeChoice(tx, applicant, userId);
+          await tx.candidateProfile.update({
+            where: { id: profileId },
+            data: {
+              collegeId,
+              branch: applicant.branch,
+              yearOfStudy: applicant.yearOfStudy,
+              graduationYear: applicant.graduationYear,
+            },
+          });
+
           const application = await tx.application.create({
             data: {
               referenceCode,
@@ -318,6 +380,8 @@ export class ApplicationService {
               resumeUrl,
               source: attribution.source,
               sourceDetail: attribution.sourceDetail,
+              consentAt: new Date(),
+              consentVersion: LEGAL.version,
             },
           });
 
@@ -393,7 +457,8 @@ export class ApplicationService {
       try {
         return await create(generateApplicationReference());
       } catch (error) {
-        // The only unique constraint written by the submission transaction is referenceCode.
+        // A unique violation here is a reference-code collision, or a parallel duplicate
+        // application; the retry's duplicate check turns the latter into a ConflictError.
         if (!isUniqueConstraintViolation(error)) {
           throw error;
         }

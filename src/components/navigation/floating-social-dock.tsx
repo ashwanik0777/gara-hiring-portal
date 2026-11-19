@@ -94,7 +94,7 @@ export function SocialSidebar() {
           : "opacity-0 -translate-x-full pointer-events-none"
       )}
     >
-      <div className="flex flex-col rounded-r-2xl overflow-hidden shadow-[3px_0_20px_rgba(0,0,0,0.08)] dark:shadow-[3px_0_20px_rgba(0,0,0,0.3)] border border-l-0 border-border/80 bg-card/95 backdrop-blur-md">
+      <div className="flex flex-col rounded-r-xl overflow-hidden shadow-[3px_0_20px_rgba(0,0,0,0.08)] dark:shadow-[3px_0_20px_rgba(0,0,0,0.3)] border border-l-0 border-border/80 bg-card/95 backdrop-blur-md">
         {socialItems.map((item) => {
           const Icon = item.icon;
           const IconComp = item.iconComponent;
@@ -105,11 +105,11 @@ export function SocialSidebar() {
               target="_blank"
               rel="noopener noreferrer"
               aria-label={item.name}
-              className="group relative flex items-center justify-center w-11 h-11 m-0.5 transition-all duration-300 overflow-hidden rounded-2xl cursor-pointer"
+              className="group relative flex items-center justify-center w-9 h-9 m-0.5 transition-all duration-300 overflow-hidden rounded-xl cursor-pointer"
             >
               {/* Hover background fill */}
               <div
-                className="absolute inset-0 rounded-2xl transition-all duration-300 scale-0 group-hover:scale-100 origin-center"
+                className="absolute inset-0 rounded-xl transition-all duration-300 scale-0 group-hover:scale-100 origin-center"
                 style={{ backgroundColor: item.hoverBg }}
               />
 
@@ -122,9 +122,9 @@ export function SocialSidebar() {
                 style={item.color ? { color: item.color } : undefined}
               >
                 {IconComp ? (
-                  <IconComp className="w-4 h-4 transition-colors duration-300 group-hover:!text-white" />
+                  <IconComp className="w-[18px] h-[18px] transition-colors duration-300 group-hover:!text-white" />
                 ) : Icon ? (
-                  <Icon className="w-4 h-4 transition-colors duration-300 group-hover:text-white" strokeWidth={2} />
+                  <Icon className="w-[18px] h-[18px] transition-colors duration-300 group-hover:text-white" strokeWidth={2} />
                 ) : null}
               </div>
 

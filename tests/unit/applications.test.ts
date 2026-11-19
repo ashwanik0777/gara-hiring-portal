@@ -8,6 +8,7 @@ const { mockPrisma, mockStorage, mockSession, mockRateLimiter, mockOutbox } = vi
   const prisma = {
     user: { findUnique: vi.fn() },
     candidateProfile: { upsert: vi.fn(), update: vi.fn() },
+    college: { findUnique: vi.fn(), upsert: vi.fn() },
     opening: { findUnique: vi.fn() },
     application: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn() },
     applicationStatusHistory: { create: vi.fn() },
@@ -73,9 +74,11 @@ import {
   ResumeIsLinkError,
 } from "@/features/applications/services/application-service";
 import { submitApplicationAction } from "@/features/applications/actions";
+import { LEGAL } from "@/config/site";
 import { describeDocumentLink } from "@/features/applications/document-links";
 import { ATTRIBUTION_FORM_FIELDS } from "@/features/applications/source-tracking";
 import { ApplicationSourceFields } from "@/features/applications/components/application-source-fields";
+import { ApplicantDetailsFields } from "@/features/applications/components/applicant-details-fields";
 import { StaffResumeActions } from "@/features/applications/components/resume-links";
 import { DynamicFormRenderer } from "@/features/application-forms/components/dynamic-form-renderer";
 import { GET as getResumeRoute } from "@/app/api/candidate/applications/[id]/resume/route";
@@ -453,15 +456,31 @@ const FORM_WITHOUT_DOCUMENT: FormSchemaDefinition = {
   ],
 };
 
-function mockPublishedOpening(schemaDefinition: FormSchemaDefinition, status = "PUBLISHED") {
+function mockPublishedOpening(
+  schemaDefinition: FormSchemaDefinition,
+  status = "PUBLISHED",
+  applyDeadline: Date | null = null
+) {
   mockPrisma.opening.findUnique.mockResolvedValue({
     id: "opening-1",
     slug: "frontend-intern",
     title: "Frontend Intern",
+    type: "INTERNSHIP",
     status,
+    applyDeadline,
     formVersions: [{ id: "form-v1", versionNumber: 1, schemaDefinition }],
   });
 }
+
+/** Applicant details as the apply form sends them (consent given, internship details present). */
+const VALID_APPLICANT = {
+  collegeId: null,
+  collegeName: "Example Institute of Technology",
+  branch: "Computer Science",
+  yearOfStudy: 3,
+  graduationYear: 2027,
+  consent: true as const,
+};
 
 function pdfUpload(buffer: Buffer = PDF_BUFFER) {
   return { name: "cv.pdf", size: buffer.byteLength, type: "application/pdf", buffer };
@@ -481,6 +500,8 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
     mockPrisma.$transaction.mockImplementation(async (cb: (tx: typeof mockPrisma) => unknown) =>
       cb(mockPrisma)
     );
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.college.upsert.mockResolvedValue({ id: "college-1" });
     mockPrisma.application.create.mockImplementation(
       async ({ data }: { data: { referenceCode: string } }) => ({
         id: "app-1",
@@ -497,25 +518,96 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
     mockStorage.delete.mockResolvedValue(undefined);
   });
 
-  it("does not block repeat applications to the same opening (OD-005 pending)", async () => {
+  it("allows only one application per opening, ever (product owner, 2026-11-19)", async () => {
     mockPublishedOpening(formWithDocument(true));
+    mockPrisma.application.findUnique.mockResolvedValueOnce({ referenceCode: "GARA-2026-APP-ABC123" });
 
-    const first = await applicationService.submitApplication({
+    await expect(
+      applicationService.submitApplication({
+        userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
+        openingSlug: "frontend-intern",
+        responses: { fullName: "Asha" },
+        resumeFile: pdfUpload(),
+      })
+    ).rejects.toThrow(/already applied to this opening \(reference GARA-2026-APP-ABC123\)/);
+    expect(mockPrisma.application.create).not.toHaveBeenCalled();
+    expect(mockStorage.upload).not.toHaveBeenCalled();
+  });
+
+  it("turns a parallel duplicate (caught inside the transaction) into the same message", async () => {
+    mockPublishedOpening(formWithDocument(false));
+    mockPrisma.application.findUnique
+      .mockResolvedValueOnce(null) // before the transaction
+      .mockResolvedValueOnce({ referenceCode: "GARA-2026-APP-RACE01" }); // inside it
+
+    await expect(
+      applicationService.submitApplication({
+        userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
+        openingSlug: "frontend-intern",
+        responses: { fullName: "Asha" },
+      })
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(mockPrisma.application.create).not.toHaveBeenCalled();
+  });
+
+  it("requires consent and, for internships, the college and graduation year", async () => {
+    mockPublishedOpening(FORM_WITHOUT_DOCUMENT);
+    const submit = (applicant: typeof VALID_APPLICANT | Record<string, unknown>) =>
+      applicationService.submitApplication({
+        userId: CANDIDATE_ID,
+        applicant: applicant as typeof VALID_APPLICANT,
+        openingSlug: "frontend-intern",
+        responses: { fullName: "Asha" },
+      });
+
+    await expect(submit({ ...VALID_APPLICANT, consent: false })).rejects.toThrow(/Privacy Policy and Terms/);
+    await expect(submit({ ...VALID_APPLICANT, collegeName: null })).rejects.toThrow(/college is required/);
+    await expect(submit({ ...VALID_APPLICANT, graduationYear: null })).rejects.toThrow(/graduation year is required/);
+    expect(mockPrisma.application.create).not.toHaveBeenCalled();
+  });
+
+  it("stores the education details on the profile and the consent on the application", async () => {
+    mockPublishedOpening(FORM_WITHOUT_DOCUMENT);
+    mockPrisma.college.upsert.mockResolvedValueOnce({ id: "college-1" });
+
+    await applicationService.submitApplication({
       userId: CANDIDATE_ID,
+      applicant: VALID_APPLICANT,
       openingSlug: "frontend-intern",
       responses: { fullName: "Asha" },
-      resumeFile: pdfUpload(),
-    });
-    const second = await applicationService.submitApplication({
-      userId: CANDIDATE_ID,
-      openingSlug: "frontend-intern",
-      responses: { fullName: "Asha" },
-      resumeFile: pdfUpload(),
     });
 
-    expect(first.applicationId).toBe("app-1");
-    expect(second.applicationId).toBe("app-1");
-    expect(mockPrisma.application.create).toHaveBeenCalledTimes(2);
+    // A typed college name becomes (or reuses) a row keyed by its normalized name, pending approval.
+    expect(mockPrisma.college.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { normalizedName: "example institute of technology" },
+        create: expect.objectContaining({ status: "PENDING", createdById: CANDIDATE_ID }),
+      })
+    );
+    expect(mockPrisma.candidateProfile.update).toHaveBeenCalledWith({
+      where: { id: expect.any(String) },
+      data: { collegeId: "college-1", branch: "Computer Science", yearOfStudy: 3, graduationYear: 2027 },
+    });
+    expect(mockPrisma.application.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ consentAt: expect.any(Date), consentVersion: LEGAL.version }),
+    });
+  });
+
+  it("refuses a picked college that is neither approved nor the candidate's own", async () => {
+    mockPublishedOpening(FORM_WITHOUT_DOCUMENT);
+    mockPrisma.college.findUnique.mockResolvedValueOnce({ id: "c-9", status: "PENDING", createdById: "someone-else" });
+
+    await expect(
+      applicationService.submitApplication({
+        userId: CANDIDATE_ID,
+        applicant: { ...VALID_APPLICANT, collegeId: "99999999-9999-4999-8999-999999999999" },
+        openingSlug: "frontend-intern",
+        responses: { fullName: "Asha" },
+      })
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mockPrisma.application.create).not.toHaveBeenCalled();
   });
 
   it("accepts a submission without a document when the form marks it optional", async () => {
@@ -523,6 +615,7 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
 
     const result = await applicationService.submitApplication({
       userId: CANDIDATE_ID,
+      applicant: VALID_APPLICANT,
       openingSlug: "frontend-intern",
       responses: { fullName: "Asha" },
     });
@@ -541,6 +634,7 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
 
     await applicationService.submitApplication({
       userId: CANDIDATE_ID,
+      applicant: VALID_APPLICANT,
       openingSlug: "frontend-intern",
       // A link in the responses is ignored in local mode (file fields accept uploads only).
       responses: { fullName: "Asha", resume: "https://drive.google.com/file/d/abc/view" },
@@ -564,6 +658,7 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
     await expect(
       applicationService.submitApplication({
         userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
         openingSlug: "frontend-intern",
         responses: { fullName: "Asha" },
       })
@@ -580,6 +675,7 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
     await expect(
       applicationService.submitApplication({
         userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
         openingSlug: "frontend-intern",
         responses: { fullName: "Asha" },
         resumeFile: pdfUpload(),
@@ -594,6 +690,7 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
     await expect(
       applicationService.submitApplication({
         userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
         openingSlug: "frontend-intern",
         responses: { fullName: "Asha" },
         resumeFile: pdfUpload(Buffer.from("MZ-not-a-pdf")),
@@ -608,10 +705,37 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
     await expect(
       applicationService.submitApplication({
         userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
         openingSlug: "frontend-intern",
         responses: { fullName: "Asha" },
       })
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("rejects submissions after the opening's last date to apply", async () => {
+    mockPublishedOpening(formWithDocument(false), "PUBLISHED", new Date(Date.now() - 60_000));
+
+    await expect(
+      applicationService.submitApplication({
+        userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
+        openingSlug: "frontend-intern",
+        responses: { fullName: "Asha" },
+      })
+    ).rejects.toThrow(/Applications for this opening closed on/);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("accepts submissions before the last date to apply", async () => {
+    mockPublishedOpening(FORM_WITHOUT_DOCUMENT, "PUBLISHED", new Date(Date.now() + 86_400_000));
+
+    const result = await applicationService.submitApplication({
+      userId: CANDIDATE_ID,
+      applicant: VALID_APPLICANT,
+      openingSlug: "frontend-intern",
+      responses: { fullName: "Asha" },
+    });
+    expect(result.applicationId).toBe("app-1");
   });
 
   it("deletes the uploaded document when the database transaction fails (BUG-17)", async () => {
@@ -621,6 +745,7 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
     await expect(
       applicationService.submitApplication({
         userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
         openingSlug: "frontend-intern",
         responses: { fullName: "Asha" },
         resumeFile: pdfUpload(),
@@ -637,6 +762,7 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
 
     const result = await applicationService.submitApplication({
       userId: CANDIDATE_ID,
+      applicant: VALID_APPLICANT,
       openingSlug: "frontend-intern",
       responses: { fullName: "Asha" },
       resumeFile: pdfUpload(),
@@ -656,6 +782,7 @@ describe("ApplicationService.submitApplication (local upload mode)", () => {
     await expect(
       applicationService.submitApplication({
         userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
         openingSlug: "frontend-intern",
         responses: { fullName: "Asha" },
         resumeFile: pdfUpload(),
@@ -905,6 +1032,10 @@ function submissionForm(responses: unknown = { fullName: "Asha" }) {
   const formData = new FormData();
   formData.append("openingSlug", "frontend-intern");
   formData.append("responses", JSON.stringify(responses));
+  // Applicant details every apply form sends (consent given; internship details present).
+  formData.append("std_college_name", "Example Institute of Technology");
+  formData.append("std_graduation_year", "2027");
+  formData.append("std_consent", "on");
   return formData;
 }
 
@@ -918,6 +1049,8 @@ describe("submitApplicationAction", () => {
     mockPrisma.$transaction.mockImplementation(async (cb: (tx: typeof mockPrisma) => unknown) =>
       cb(mockPrisma)
     );
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.college.upsert.mockResolvedValue({ id: "college-1" });
     mockPrisma.application.create.mockImplementation(
       async ({ data }: { data: { referenceCode: string } }) => ({
         id: "app-1",
@@ -1105,12 +1238,22 @@ describe("submitApplicationAction", () => {
         attributionFields: React.createElement(ApplicationSourceFields, {
           attribution: { utm_source: "newsletter", utm_campaign: "oct" },
         }),
+        applicantFields: React.createElement(ApplicantDetailsFields, {
+          isInternship: true,
+          currentYear: 2026,
+          defaults: { college: null, branch: null, yearOfStudy: null, graduationYear: null },
+        }),
       })
     );
     fireEvent.change(screen.getByLabelText("Full Name *"), { target: { value: "Asha" } });
     fireEvent.change(screen.getByLabelText(/How did you hear about us/), {
       target: { value: "COLLEGE" },
     });
+    fireEvent.change(screen.getByLabelText("College / University *"), {
+      target: { value: "Example Institute of Technology" },
+    });
+    fireEvent.change(screen.getByLabelText("Graduation year *"), { target: { value: "2027" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /I have read and agree/ }));
     fireEvent.submit(container.querySelector("form") as HTMLFormElement);
 
     await vi.waitFor(() => expect(mockPrisma.application.create).toHaveBeenCalledTimes(1));
@@ -1119,8 +1262,13 @@ describe("submitApplicationAction", () => {
         data: expect.objectContaining({
           source: "COLLEGE",
           sourceDetail: "utm_source=newsletter; utm_campaign=oct",
+          consentVersion: LEGAL.version,
         }),
       })
+    );
+    // The education details travel with the form and reach the profile.
+    expect(mockPrisma.candidateProfile.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ graduationYear: 2027, collegeId: "college-1" }) })
     );
     cleanup();
   });
@@ -1327,6 +1475,8 @@ describe("ApplicationService.submitApplication (link mode)", () => {
     mockPrisma.$transaction.mockImplementation(async (cb: (tx: typeof mockPrisma) => unknown) =>
       cb(mockPrisma)
     );
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.college.upsert.mockResolvedValue({ id: "college-1" });
     mockPrisma.application.create.mockImplementation(
       async ({ data }: { data: { referenceCode: string } }) => ({
         id: "app-1",
@@ -1341,6 +1491,7 @@ describe("ApplicationService.submitApplication (link mode)", () => {
 
     const result = await applicationService.submitApplication({
       userId: CANDIDATE_ID,
+      applicant: VALID_APPLICANT,
       openingSlug: "frontend-intern",
       responses: { fullName: "Asha", resume: "https://1drv.ms/b/s!abc" },
     });
@@ -1364,6 +1515,7 @@ describe("ApplicationService.submitApplication (link mode)", () => {
     await expect(
       applicationService.submitApplication({
         userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
         openingSlug: "frontend-intern",
         responses: { fullName: "Asha", resume: "https://drive.google.com/file/d/abc" },
         resumeFile: pdfUpload(),
@@ -1383,6 +1535,7 @@ describe("ApplicationService.submitApplication (link mode)", () => {
     await expect(
       applicationService.submitApplication({
         userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
         openingSlug: "frontend-intern",
         responses: { fullName: "Asha" },
       })
@@ -1391,6 +1544,7 @@ describe("ApplicationService.submitApplication (link mode)", () => {
     await expect(
       applicationService.submitApplication({
         userId: CANDIDATE_ID,
+        applicant: VALID_APPLICANT,
         openingSlug: "frontend-intern",
         responses: { fullName: "Asha", resume: "javascript:alert(1)" },
       })
@@ -1403,6 +1557,7 @@ describe("ApplicationService.submitApplication (link mode)", () => {
 
     await applicationService.submitApplication({
       userId: CANDIDATE_ID,
+      applicant: VALID_APPLICANT,
       openingSlug: "frontend-intern",
       responses: { fullName: "Asha" },
     });

@@ -13,24 +13,14 @@ test.describe("Public pages", () => {
     await expect(page.getByRole("link", { name: /Explore Opportunities/ }).first()).toBeVisible();
   });
 
-  test("home page is student-facing: fraud alert, no internal HRMS marketing or visitor count", async ({
-    page,
-  }) => {
+  test("home page is student-facing: no internal HRMS marketing or visitor count", async ({ page }) => {
     await page.goto("/");
 
-    await expect(page.getByRole("note", { name: "Fraud alert" })).toContainText(
-      "never charges any fee for internships"
-    );
-    await expect(page.getByText("Built by", { exact: false }).first()).toBeVisible();
+    await expect(page.getByText("Architected & Engineered with").first()).toBeVisible();
     const body = page.locator("body");
-    for (const internal of ["RBAC", "HRMS", "Platform Architecture", "Recorded visitors", "Architected"]) {
+    for (const internal of ["RBAC", "HRMS", "Platform Architecture", "Recorded visitors", "Fraud alert"]) {
       await expect(body).not.toContainText(internal);
     }
-  });
-
-  test("careers page warns about internship fee fraud in the server HTML", async ({ request }) => {
-    const html = await (await request.get("/careers")).text();
-    expect(html).toContain("never charges any fee for internships");
   });
 
   test("careers page serves its heading in the server HTML", async ({ request }) => {
@@ -158,5 +148,45 @@ test.describe("Registration form (client-side validation, nothing is submitted)"
     for (const option of ["Full-time job", "Internship", "Both"] as const) {
       await expect(group.getByRole("radio", { name: new RegExp(`^${option}\\b`) })).toBeAttached();
     }
+  });
+});
+
+// Razorpay activation and the DPDP Act need these pages reachable without signing in, as plain
+// server HTML (crawlers and link previews do not run JavaScript).
+const POLICY_PAGES = [
+  { path: "/privacy", heading: "Privacy Policy" },
+  { path: "/terms", heading: "Terms of Service" },
+  { path: "/refund-policy", heading: "Refund & Cancellation Policy" },
+  { path: "/shipping-policy", heading: "Shipping & Delivery Policy" },
+  { path: "/cookie-policy", heading: "Cookie Policy" },
+  { path: "/contact", heading: "Contact Us" },
+];
+
+test.describe("Policy and contact pages", () => {
+  for (const policy of POLICY_PAGES) {
+    test(`${policy.path} is public server HTML with a canonical URL`, async ({ request }) => {
+      const response = await request.get(policy.path);
+      expect(response.status()).toBe(200);
+      const html = await response.text();
+      expect(html).toContain(`<h1`);
+      expect(html).toContain(policy.heading.replace("&", "&amp;"));
+      expect(html).toMatch(new RegExp(`<link rel="canonical" href="https?://[^"]+${policy.path}"`));
+      expect(html).toContain('"@type":"BreadcrumbList"');
+    });
+  }
+
+  test("the footer links lead to the policy pages", async ({ page }) => {
+    await page.goto("/");
+    const policies = page.getByRole("navigation", { name: "Policies" });
+    await policies.getByRole("link", { name: "Refund & Cancellation Policy" }).click();
+    await expect(page).toHaveURL(/\/refund-policy$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Refund & Cancellation Policy" })).toBeVisible();
+    await expect(page.getByText(/within 24 hours after the first live class/)).toBeVisible();
+  });
+
+  test("the home page carries Organization structured data", async ({ request }) => {
+    const html = await (await request.get("/")).text();
+    expect(html).toContain('"@type":"Organization"');
+    expect(html).toContain('"@type":"WebSite"');
   });
 });

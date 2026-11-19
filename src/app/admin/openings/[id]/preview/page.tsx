@@ -76,7 +76,7 @@ export default async function PreviewOpeningPage({ params }: PreviewOpeningPageP
       </div>
 
       <main className="flex-1 py-10">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="w-full">
           <OpeningPreviewView opening={opening} basePath="/admin/openings" documentMode={env.DOCUMENT_STORAGE_MODE} />
         </div>
       </main>

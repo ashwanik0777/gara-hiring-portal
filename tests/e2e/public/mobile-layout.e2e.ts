@@ -20,6 +20,12 @@ const PAGES: MobilePage[] = [
   { path: "/help", ready: /Help Center/ },
   { path: "/verify", ready: "Verify Certificate" },
   { path: "/careers", ready: "Current Openings & Internship Cohorts" },
+  { path: "/privacy", ready: "Privacy Policy" },
+  { path: "/terms", ready: "Terms of Service" },
+  { path: "/refund-policy", ready: "Refund & Cancellation Policy" },
+  { path: "/shipping-policy", ready: "Shipping & Delivery Policy" },
+  { path: "/cookie-policy", ready: "Cookie Policy" },
+  { path: "/contact", ready: "Contact Us" },
   {
     path: `/careers/${E2E_OPENINGS.internship.slug}`,
     ready: E2E_OPENINGS.internship.title,

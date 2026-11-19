@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth/guards";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { Role } from "@prisma/client";
 import { OpeningForm } from "@/features/openings/components/opening-form";
+import { getTrackOptions } from "@/features/openings/services/track-service";
 import { Navbar } from "@/components/navigation/navbar";
 import { ArrowLeft } from "lucide-react";
 
@@ -39,7 +40,7 @@ export default async function NewOpeningPage() {
       <Navbar />
 
       <main className="flex-1 py-10">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+        <div className="w-full space-y-6">
           <Link
             href="/admin/openings"
             className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
@@ -52,7 +53,7 @@ export default async function NewOpeningPage() {
             <h1 className="text-2xl font-bold tracking-tight">Create New Program Vacancy</h1>
           </div>
 
-          <OpeningForm basePath="/admin/openings" />
+          <OpeningForm basePath="/admin/openings" tracks={await getTrackOptions(user)} />
         </div>
       </main>
     </div>

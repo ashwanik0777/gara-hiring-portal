@@ -16,7 +16,8 @@ export const RATE_LIMIT_POLICIES: Record<
   | "FILE_UPLOAD"
   | "CHATBOT"
   | "APPLICATION_SUBMIT"
-  | "VISITOR_TRACK",
+  | "VISITOR_TRACK"
+  | "COLLEGE_SEARCH",
   RateLimitPolicy
 > = {
   LOGIN: { scope: "auth:login", maxRequests: 5, windowSeconds: 15 * 60 },
@@ -50,6 +51,12 @@ export const RATE_LIMIT_POLICIES: Record<
     scope: "public:visitor_track",
     maxRequests: 10,
     windowSeconds: 60 * 60,
+  },
+  // College suggestions while typing on the apply form (debounced; per signed-in user).
+  COLLEGE_SEARCH: {
+    scope: "portal:college_search",
+    maxRequests: 60,
+    windowSeconds: 60,
   },
 };
 

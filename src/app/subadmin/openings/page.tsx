@@ -3,6 +3,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { getAdminOpenings } from "@/features/openings/services/opening-service";
+import { listTracksForStaff } from "@/features/openings/services/track-service";
+import { TrackManager, type TrackManagerRow } from "@/features/openings/components/track-manager";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { ForbiddenError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
@@ -36,8 +38,9 @@ export default async function SubAdminOpeningsPage() {
   }
 
   let openings: Awaited<ReturnType<typeof getAdminOpenings>>;
+  let tracks: TrackManagerRow[];
   try {
-    openings = await getAdminOpenings(user);
+    [openings, tracks] = await Promise.all([getAdminOpenings(user), listTracksForStaff(user).then(toTrackRows)]);
   } catch (error) {
     if (error instanceof ForbiddenError) {
       return <UnauthorizedState message="You do not have permission to manage job openings." />;
@@ -159,6 +162,22 @@ export default async function SubAdminOpeningsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <TrackManager tracks={tracks} />
     </div>
   );
 }
+
+/** Staff track rows as plain data for the client-side track manager. */
+function toTrackRows(tracks: Awaited<ReturnType<typeof listTracksForStaff>>): TrackManagerRow[] {
+  return tracks.map((track) => ({
+    id: track.id,
+    slug: track.slug,
+    name: track.name,
+    description: track.description,
+    sortOrder: track.sortOrder,
+    isActive: track.isActive,
+    openingsCount: track._count.openings,
+  }));
+}
+

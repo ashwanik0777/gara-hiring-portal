@@ -93,7 +93,7 @@ export function EvaluationCockpit({
   const isPassed = enrollment.status === EvaluationStatus.PASSED;
 
   return (
-    <div className="space-y-8 max-w-5xl mx-auto">
+    <div className="space-y-8 w-full">
       <div>
         <Link
           href={listHref}

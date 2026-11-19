@@ -20,6 +20,7 @@ import {
   FileCheck,
   CheckCircle2,
 } from "lucide-react";
+import { PAGE_GUTTER } from "@/components/layout/page-gutter";
 
 interface VerificationResult {
   valid: boolean;
@@ -132,7 +133,7 @@ export function VerificationPortal() {
   }
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className={PAGE_GUTTER}>
       {/* ─── Page Title Header (Clean, No Subtitle, Standard Website Style) ─── */}
       <div className="text-center mb-10">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-semibold mb-3">
@@ -144,9 +145,9 @@ export function VerificationPortal() {
         </h1>
       </div>
 
-      {/* ─── Search Console Card (Width 7xl Friendly, Clean Solid Styling) ─── */}
-      <div className="max-w-3xl mx-auto mb-12">
-        <div className="rounded-2xl bg-card border border-border/80 shadow-sm p-6 sm:p-8">
+      {/* ─── Search Console Card with the how-it-works steps beside it on large screens ─── */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-12">
+        <div className="lg:col-span-8 rounded-2xl bg-card border border-border/80 shadow-sm p-6 sm:p-8">
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -211,11 +212,23 @@ export function VerificationPortal() {
 
           </form>
         </div>
+
+        <aside className="lg:col-span-4 rounded-2xl bg-card border border-border/80 shadow-sm p-6 sm:p-8">
+          <h2 className="text-sm font-bold text-foreground">How verification works</h2>
+          <ol className="mt-4 list-decimal space-y-3 pl-5 text-sm leading-relaxed text-muted-foreground">
+            <li>Scan the QR code on the certificate, or type the certificate ID printed on it.</li>
+            <li>We look the ID up in GARA&apos;s certificate registry.</li>
+            <li>
+              The result shows whether the certificate is valid or revoked, with the holder&apos;s name, programme and
+              dates. Email addresses and phone numbers are never shown.
+            </li>
+          </ol>
+        </aside>
       </div>
 
       {/* ─── Verification Results (When active) ─── */}
       {result && (
-        <div className="max-w-4xl mx-auto mb-16 animate-in fade-in-50 duration-200">
+        <div className="w-full mb-16 animate-in fade-in-50 duration-200">
           {result.valid ? (
             /* Verified Credential Document Presentation */
             <div className="rounded-2xl bg-card border-2 border-emerald-500/40 shadow-md overflow-hidden">
@@ -287,7 +300,7 @@ export function VerificationPortal() {
                   </div>
 
                   {/* Metadata Grid */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                     <div className="p-4 rounded-xl border border-border bg-background">
                       <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1">
                         <Award className="h-4 w-4 text-primary" />

@@ -8,6 +8,7 @@ import { recruitmentService } from "@/features/recruitment/services/recruitment-
 import { applicationService } from "@/features/applications/services/application-service";
 import { StaffResumeActions } from "@/features/applications/components/resume-links";
 import { ApplicationSourceSummary } from "@/features/applications/components/application-source-summary";
+import { ApplicantDetailsSummary } from "@/features/applications/components/applicant-details-summary";
 import type { DocumentLinkView } from "@/features/applications/document-links";
 import { offerService } from "@/features/employees/services/offer-service";
 import { JobOfferCard } from "@/features/employees/components/job-offer-card";
@@ -158,7 +159,7 @@ export default async function RecruiterApplicationDetailPage({
       application.status === ApplicationStatus.EVALUATION_SELECTED);
 
   return (
-    <div className="space-y-8 max-w-5xl mx-auto">
+    <div className="space-y-8 w-full">
       {/* Back and Navigation */}
       <div>
         <Link
@@ -196,6 +197,7 @@ export default async function RecruiterApplicationDetailPage({
                 source={application.source}
                 sourceDetail={application.sourceDetail}
               />
+              <ApplicantDetailsSummary details={application.applicantDetails} />
             </div>
           </div>
 

@@ -22,6 +22,11 @@ export const ADMIN_NAV_ITEMS: DashboardNavItem[] = [
     iconName: "UserPlus",
   },
   {
+    label: "Colleges",
+    href: "/admin/colleges",
+    iconName: "GraduationCap",
+  },
+  {
     label: "Job Openings",
     href: "/admin/openings",
     iconName: "Briefcase",

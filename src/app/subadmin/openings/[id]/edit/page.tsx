@@ -7,6 +7,7 @@ import {
 } from "@/features/openings/services/opening-service";
 import { openingIdSchema } from "@/features/openings/schemas";
 import { OpeningEditorView } from "@/features/openings/components/opening-editor-view";
+import { getTrackOptions } from "@/features/openings/services/track-service";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 
 interface SubAdminEditOpeningPageProps {
@@ -50,8 +51,12 @@ export default async function SubAdminEditOpeningPage({ params }: SubAdminEditOp
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
-      <OpeningEditorView opening={opening} basePath="/subadmin/openings" />
+    <div className="w-full">
+      <OpeningEditorView
+        opening={opening}
+        basePath="/subadmin/openings"
+        tracks={await getTrackOptions(user, opening.trackId)}
+      />
     </div>
   );
 }

@@ -2,9 +2,11 @@ import Link from "next/link";
 import Image from "next/image";
 import { Navbar } from "@/components/navigation/navbar";
 import { Footer } from "@/components/navigation/footer";
-import { FraudAlert } from "@/components/marketing/fraud-alert";
 import { Button } from "@/components/ui/button";
+import { JsonLd } from "@/components/seo/json-ld";
 import { ANNOUNCEMENT } from "@/config/site";
+import { PAGE_GUTTER } from "@/components/layout/page-gutter";
+import { buildOrganizationJsonLd } from "@/lib/seo/json-ld";
 import {
   Briefcase,
   Users,
@@ -57,10 +59,12 @@ export default function Home() {
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <Navbar />
+      {/* Organization and WebSite structured data (company name, logo and profiles in search). */}
+      <JsonLd data={buildOrganizationJsonLd()} />
 
       <main className="flex-1 flex flex-col">
         {/* ──────────────── HERO SECTION ──────────────── */}
-        <section className="relative overflow-hidden pt-16 pb-12 lg:pt-24 lg:pb-16">
+        <section className="relative overflow-hidden pt-16 pb-24 lg:pt-24 lg:pb-32">
           {/* Ambient background decorations */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
             {/* Large gradient orb - top right */}
@@ -77,7 +81,7 @@ export default function Home() {
             />
           </div>
 
-          <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className={`relative ${PAGE_GUTTER}`}>
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 items-center">
               {/* Left: Content */}
               <div className="lg:col-span-7 space-y-8 text-left">
@@ -135,7 +139,7 @@ export default function Home() {
 
               {/* Right: Brand visual */}
               <div className="lg:col-span-5 flex justify-center animate-slide-in-right [animation-delay:300ms]">
-                <div className="relative w-full max-w-md">
+                <div className="relative w-full max-w-md xl:max-w-lg">
                   {/* Floating glow behind card */}
                   <div className="absolute inset-4 rounded-3xl bg-gradient-to-br from-primary/20 via-blue-400/10 to-violet-500/20 blur-2xl animate-pulse-slow" aria-hidden="true" />
                   
@@ -201,16 +205,9 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ──────────────── FRAUD ALERT ──────────────── */}
-        <section aria-label="Fraud alert" className="pb-10">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <FraudAlert />
-          </div>
-        </section>
-
         {/* ──────────────── HIGHLIGHTS BAR ──────────────── */}
         <section className="relative border-y border-border/60 bg-muted/30 dark:bg-muted/10">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+          <div className={`${PAGE_GUTTER} py-10`}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
               {[
                 { icon: Briefcase, value: "Internships & Jobs", label: "Apply online", color: "text-primary" },
@@ -238,9 +235,9 @@ export default function Home() {
 
         {/* ──────────────── WHAT YOU GET ──────────────── */}
         <section className="py-20 lg:py-28">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className={PAGE_GUTTER}>
             {/* Section header */}
-            <div className="text-center max-w-2xl mx-auto mb-16 animate-fade-in-up">
+            <div className="text-center mb-16 animate-fade-in-up">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3.5 py-1 text-xs font-semibold text-foreground mb-4">
                 <Zap className="h-3.5 w-3.5 text-primary" />
                 Why GARA
@@ -338,8 +335,8 @@ export default function Home() {
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[350px] bg-primary/[0.04] dark:bg-primary/[0.07] blur-[120px] rounded-full" />
           </div>
 
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="text-center max-w-4xl mx-auto mb-16 sm:mb-20">
+          <div className={PAGE_GUTTER}>
+            <div className="text-center mb-16 sm:mb-20">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3.5 py-1 text-xs font-semibold text-foreground mb-4">
                 <TrendingUp className="h-3.5 w-3.5 text-primary" />
                 Internship Lifecycle

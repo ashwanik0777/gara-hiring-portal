@@ -18,6 +18,7 @@ import {
   Lock,
   CheckCircle2,
 } from "lucide-react";
+import { PAGE_GUTTER } from "@/components/layout/page-gutter";
 
 // Next.js 16 Cache Components: Allow streaming/blocking data access
 export const instant = false;
@@ -28,8 +29,8 @@ interface VerifyPageProps {
 
 function RateLimitedState() {
   return (
-    <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div role="status" className="rounded-2xl bg-card border-2 border-warning/30 shadow-sm p-6 sm:p-8 text-center space-y-3">
+    <div className={PAGE_GUTTER}>
+      <div role="status" className="mx-auto max-w-2xl rounded-2xl bg-card border-2 border-warning/30 shadow-sm p-6 sm:p-8 text-center space-y-3">
         <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-warning/10 text-warning border border-warning/20">
           <AlertTriangle className="h-7 w-7" />
         </div>
@@ -72,7 +73,7 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
       : await certificateService.verifyCertificatePublic(code, ipHash, userAgent);
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className={PAGE_GUTTER}>
       {/* Page Header */}
       <div className="text-center mb-8">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-semibold mb-3">
@@ -111,7 +112,7 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 <div className="p-4 rounded-xl border border-border bg-background">
                   <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1">
                     <Award className="h-4 w-4 text-primary" />
