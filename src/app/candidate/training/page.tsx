@@ -40,7 +40,12 @@ function RefundNote({ enrollment }: { enrollment: MyTrainingEnrollment }) {
   if (!refund) return null;
   switch (refund.status) {
     case "REQUESTED":
-      return <p className="text-sm text-muted-foreground">Your refund request of {formatInr(refund.amountPaise)} is with an administrator.</p>;
+      return (
+        <p className="text-sm text-muted-foreground">
+          Your refund request is with an administrator: about {formatInr(refund.amountPaise)} (the amount paid minus Razorpay&apos;s
+          fee and GST; the exact amount is settled when it is approved).
+        </p>
+      );
     case "APPROVED":
       return (
         <p className="text-sm text-muted-foreground">
@@ -180,9 +185,9 @@ export default async function MyTrainingPage({ searchParams }: { searchParams: P
       <header className="space-y-2">
         <h2 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">My Training</h2>
         <p className="text-sm text-muted-foreground">
-          Your Industrial Training enrollments, payment receipts, refunds and transfers. Full refund before the batch starts or
-          within {TRAINING_POLICY.refundHoursAfterFirstClass} hours after the first live class; after that, one free transfer to
-          a later batch.
+          Your Industrial Training enrollments, payment receipts, refunds and transfers. Refund before the batch starts or
+          within {TRAINING_POLICY.refundHoursAfterFirstClass} hours after the first live class, minus the payment gateway
+          charges (Razorpay&apos;s fee and GST); after that, one free transfer to a later batch.
         </p>
       </header>
 

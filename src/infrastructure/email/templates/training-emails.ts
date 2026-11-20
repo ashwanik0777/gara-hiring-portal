@@ -61,7 +61,7 @@ export interface TrainingPaymentReceivedPayload {
   receiptNo: string;
   /** ISO instant of the payment. */
   paidAt: string;
-  /** ISO instant until which a full refund can be requested. */
+  /** ISO instant until which a refund can be requested. */
   refundWindowClosesAt: string;
 }
 
@@ -116,7 +116,7 @@ export function buildTrainingPaymentReceivedEmail(params: TrainingPaymentReceive
   const subject = `[GARA Innovation] Payment received: ${params.programTitle}`;
   const text = `Hello ${params.recipientName},\n\nWe received your payment and your seat in ${params.programTitle} (${params.batchName}) is confirmed.\n\n${rowsText(
     rows
-  )}\n\nDownload your payment receipt from your training page: ${portalUrl}\n\nYou can ask for a full refund until ${refundUntil} from the same page.\n\n— GARA Innovation`;
+  )}\n\nDownload your payment receipt from your training page: ${portalUrl}\n\nYou can ask for a refund (the amount paid minus Razorpay's fee and GST) until ${refundUntil} from the same page.\n\n— GARA Innovation`;
 
   const html = renderEmailShell({
     categoryBadge: { text: "Payment Received", bgColor: "#ecfdf5", textColor: "#047857", borderColor: "#a7f3d0" },
@@ -129,7 +129,7 @@ export function buildTrainingPaymentReceivedEmail(params: TrainingPaymentReceive
     ctaButton: { text: "Download payment receipt", url: portalUrl },
     secondaryNote: {
       title: "Changed your mind?",
-      text: `You can ask for a full refund until ${refundUntil} from your training page.`,
+      text: `You can ask for a refund (the amount paid minus Razorpay's fee and GST) until ${refundUntil} from your training page.`,
       bgColor: "#f8fafc",
       borderColor: "#cbd5e1",
       textColor: "#334155",

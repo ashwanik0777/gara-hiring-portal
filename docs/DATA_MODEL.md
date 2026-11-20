@@ -398,6 +398,7 @@ Amounts are integer paise (INR). Migration `20261121000000_industrial_training`.
 
 #### `TrainingPayment` (`training_payments`)
 - `id`, `enrollment_id` (FK), `razorpay_order_id` (UNIQUE), `razorpay_payment_id` (UNIQUE, NULLABLE), `amount_paise` (CHECK > 0), `status` (ENUM `TrainingPaymentStatus`: `'CREATED'`, `'CAPTURED'`, `'FAILED'`), `captured_at`, timestamps. One row per Razorpay order; an enrollment can have several (retries).
+- Order pricing (migration `20261125000000_training_payment_pricing`): `list_price_paise`, `discount_paise`, `referral_code` (NULLABLE; CHECK amount = list − discount, discount < list). The order that is paid sets the enrollment's price, discount and referral, so paying an older order after starting checkout again cannot misstate the receipt or the commission.
 
 #### `TrainingRefund` (`training_refunds`)
 - `id`, `enrollment_id` (FK), `payment_id` (FK -> `TrainingPayment.id`), `reason`, `amount_paise` (CHECK ≥ 0), `status` (ENUM `TrainingRefundStatus`: `'REQUESTED'`, `'APPROVED'`, `'PROCESSED'`, `'REJECTED'`, `'FAILED'`), `razorpay_refund_id` (UNIQUE, NULLABLE), `decided_by` (FK -> `User.id`, NULLABLE), `decision_note`, `requested_at`, `decided_at`, `processed_at`, timestamps.

@@ -1625,6 +1625,11 @@ model TrainingPayment {
   razorpayOrderId   String                @unique
   razorpayPaymentId String?               @unique
   amountPaise       Int
+  // Pricing of this order (a student can start checkout again with or without a referral code;
+  // the order that is actually paid decides the enrollment's discount and referral)
+  listPricePaise    Int?
+  discountPaise     Int?
+  referralCode      String?
   status            TrainingPaymentStatus @default(CREATED)
   capturedAt        DateTime?
   createdAt         DateTime              @default(now())

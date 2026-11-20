@@ -2,7 +2,9 @@ import { Role, TrainingEnrollmentStatus, TrainingPaymentStatus, TrainingRefundSt
 import { prisma } from "@/lib/db";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
-import { createRefund, PaymentsUnavailableError } from "@/infrastructure/payments/razorpay";
+import { createRefund, fetchPayment, PaymentsUnavailableError } from "@/infrastructure/payments/razorpay";
+import { logger } from "@/lib/logging/logger";
+import { TRAINING_POLICY } from "@/config/site";
 import { formatInr } from "../money";
 import { canTransfer, isRefundWindowOpen, refundAmountPaise, SEAT_TAKING_STATUSES } from "../policy";
 import { isBatchOpenForEnrollment } from "./program-service";
@@ -23,6 +25,16 @@ export async function requestRefund(user: AuthenticatedUser, input: { enrollment
     throw new ValidationError("Please tell us briefly why you want a refund (5 to 1,000 characters).");
   }
   const now = new Date();
+  // Razorpay's charges for the payment (fee incl. GST) are deducted from the refund. The fee is
+  // read before the transaction; if Razorpay cannot be reached the request is still recorded
+  // (the time of the request decides) and the amount is settled when an administrator approves.
+  const paid = await prisma.trainingEnrollment.findUnique({
+    where: { id: input.enrollmentId },
+    select: { userId: true, payments: { where: { status: TrainingPaymentStatus.CAPTURED }, orderBy: { capturedAt: "asc" }, take: 1, select: { razorpayPaymentId: true } } },
+  });
+  const paymentId = paid?.userId === user.id ? paid.payments[0]?.razorpayPaymentId : null;
+  const gatewayFeePaise = paymentId ? await gatewayFee(paymentId) : null;
+
   return prisma.$transaction(async (tx) => {
     const enrollment = await tx.trainingEnrollment.findUnique({
       where: { id: input.enrollmentId },
@@ -49,7 +61,7 @@ export async function requestRefund(user: AuthenticatedUser, input: { enrollment
         enrollmentId: enrollment.id,
         paymentId: payment.id,
         reason,
-        amountPaise: refundAmountPaise(enrollment.amountPaidPaise),
+        amountPaise: refundAmountPaise(enrollment.amountPaidPaise, gatewayFeePaise ?? 0),
         status: TrainingRefundStatus.REQUESTED,
         requestedAt: now,
       },
@@ -70,6 +82,17 @@ export async function requestRefund(user: AuthenticatedUser, input: { enrollment
   });
 }
 
+/** Razorpay's fee for a payment including GST (paise), or null when it cannot be read. */
+async function gatewayFee(razorpayPaymentId: string): Promise<number | null> {
+  try {
+    const payment = await fetchPayment(razorpayPaymentId);
+    return typeof payment.fee === "number" && payment.fee >= 0 ? payment.fee : null;
+  } catch (error) {
+    logger.warn("Razorpay fee could not be read for a refund", { reason: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
 /**
  * Admin: approve (the refund is sent through Razorpay) or reject (with a note; the enrollment
  * becomes active again). An approval whose Razorpay call fails stays requested.
@@ -83,7 +106,7 @@ export async function decideRefund(user: AuthenticatedUser, input: { refundId: s
 
   const refund = await prisma.trainingRefund.findUnique({
     where: { id: input.refundId },
-    include: { payment: { select: { razorpayPaymentId: true } } },
+    include: { payment: { select: { razorpayPaymentId: true } }, enrollment: { select: { amountPaidPaise: true } } },
   });
   if (!refund) throw new NotFoundError("Refund request not found");
   if (refund.status !== TrainingRefundStatus.REQUESTED) {
@@ -114,6 +137,17 @@ export async function decideRefund(user: AuthenticatedUser, input: { refundId: s
   }
 
   if (!refund.payment.razorpayPaymentId) throw new ConflictError("The payment reference is missing; this refund cannot be sent.");
+  // The amount is settled now from Razorpay's own record of its charges (fee incl. GST).
+  let amountPaise = refund.amountPaise;
+  if (TRAINING_POLICY.deductGatewayChargesFromRefunds) {
+    const fee = await gatewayFee(refund.payment.razorpayPaymentId);
+    if (fee === null) throw new PaymentsUnavailableError("Razorpay's charges for this payment could not be read. Please try again in a moment.");
+    amountPaise = refundAmountPaise(refund.enrollment.amountPaidPaise, fee);
+    if (amountPaise <= 0) throw new ConflictError("After Razorpay's charges there is nothing to refund.");
+    if (amountPaise !== refund.amountPaise) {
+      await prisma.trainingRefund.update({ where: { id: refund.id }, data: { amountPaise } });
+    }
+  }
   // Claim the request first so a double click cannot send two refunds.
   const claimed = await prisma.trainingRefund.updateMany({
     where: { id: refund.id, status: TrainingRefundStatus.REQUESTED },
@@ -123,7 +157,7 @@ export async function decideRefund(user: AuthenticatedUser, input: { refundId: s
 
   let razorpayRefund: Awaited<ReturnType<typeof createRefund>>;
   try {
-    razorpayRefund = await createRefund(refund.payment.razorpayPaymentId, refund.amountPaise, { refundId: refund.id });
+    razorpayRefund = await createRefund(refund.payment.razorpayPaymentId, amountPaise, { refundId: refund.id });
   } catch (error) {
     await prisma.trainingRefund.update({
       where: { id: refund.id },
@@ -133,7 +167,7 @@ export async function decideRefund(user: AuthenticatedUser, input: { refundId: s
       // Razorpay pays refunds from the account balance; its message for a balance lower than the
       // refund is a generic "invalid request sent".
       throw new ConflictError(
-        `Razorpay did not accept the refund ("${error.providerDescription}"). Refunds are paid from your Razorpay balance: if it is lower than ${formatInr(refund.amountPaise)}, add funds or wait for more payments, then approve again. The request is still waiting.`
+        `Razorpay did not accept the refund ("${error.providerDescription}"). Refunds are paid from your Razorpay balance: if it is lower than ${formatInr(amountPaise)}, add funds or wait for more payments, then approve again. The request is still waiting.`
       );
     }
     throw error;
@@ -160,7 +194,7 @@ export async function decideRefund(user: AuthenticatedUser, input: { refundId: s
         action: "TRAINING_REFUND_APPROVED",
         resourceType: "TrainingRefund",
         resourceId: refund.id,
-        diffPayload: { razorpayRefundId: razorpayRefund.id, amountPaise: refund.amountPaise, razorpayStatus: razorpayRefund.status },
+        diffPayload: { razorpayRefundId: razorpayRefund.id, amountPaise, amountPaidPaise: refund.enrollment.amountPaidPaise, razorpayStatus: razorpayRefund.status },
       },
     });
   });

@@ -1,6 +1,6 @@
 import { FaqKnowledgeEntry } from "./ai-provider.interface";
 
-export const FAQ_KNOWLEDGE_VERSION = "v1.1.0";
+export const FAQ_KNOWLEDGE_VERSION = "v1.1.1";
 
 export const APPROVED_FAQ_KNOWLEDGE_BASE: FaqKnowledgeEntry[] = [
   {
@@ -180,7 +180,7 @@ export const APPROVED_FAQ_KNOWLEDGE_BASE: FaqKnowledgeEntry[] = [
     category: "INDUSTRIAL_TRAINING",
     question: "Can I get a refund or move to another Industrial Training batch?",
     answer:
-      "You get a full refund if you ask before the batch starts or within 24 hours after the first live class, using the Request refund button on your My Training page. After that there is no refund, but you can transfer to a later batch of the same programme free of charge, once. Approved refunds go back to your original payment method; banks usually take 5–7 working days. See the Refund & Cancellation Policy (/refund-policy).",
+      "If you ask before the batch starts or within 24 hours after the first live class, using the Request refund button on your My Training page, you get back the fee you paid minus the payment gateway charges (Razorpay's fee and the GST on it). After that there is no refund, but you can transfer to a later batch of the same programme free of charge, once. Approved refunds go back to your original payment method; banks usually take 5–7 working days. See the Refund & Cancellation Policy (/refund-policy).",
     keywords: ["refund", "cancel", "cancellation", "transfer", "money back", "batch change", "24 hours"],
     relatedPath: "/refund-policy",
   },

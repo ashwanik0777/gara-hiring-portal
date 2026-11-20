@@ -94,7 +94,7 @@ describe("Policy and contact pages", () => {
     expect(text).toContain("move to the next batch free of charge, once");
     expect(text).toContain(
       TRAINING_POLICY.deductGatewayChargesFromRefunds
-        ? "Payment gateway charges are deducted"
+        ? "Razorpay's fee for your payment and the GST on that fee"
         : "no gateway or processing charges are deducted"
     );
   });

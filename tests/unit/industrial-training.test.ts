@@ -155,8 +155,9 @@ describe("training refund and transfer policy", () => {
     expect(canTransfer({ transferCount: 1 }, { startDate: start, firstClassAt: null }, afterWindow)).toBe(false);
   });
 
-  it("refunds the full amount (gateway charges are not deducted)", () => {
-    expect(refundAmountPaise(499_900, 11_800)).toBe(499_900);
+  it("refunds the amount paid minus Razorpay's fee including GST (product owner, 2026-11-20)", () => {
+    expect(refundAmountPaise(499_900, 11_798)).toBe(488_102);
+    expect(refundAmountPaise(100, 500)).toBe(0);
   });
 });
 
@@ -259,7 +260,14 @@ describe("startCheckout", () => {
     expect(holdMinutes).toBeLessThan(15.1);
     expect(rp.createOrder).toHaveBeenCalledWith(expect.objectContaining({ amountPaise: 499_900, receipt: ENROLLMENT_ID }));
     expect(db.trainingPayment.create).toHaveBeenCalledWith({
-      data: { enrollmentId: ENROLLMENT_ID, razorpayOrderId: "order_ABC", amountPaise: 499_900 },
+      data: {
+        enrollmentId: ENROLLMENT_ID,
+        razorpayOrderId: "order_ABC",
+        amountPaise: 499_900,
+        listPricePaise: 499_900,
+        discountPaise: 0,
+        referralCode: null,
+      },
     });
   });
 
@@ -412,7 +420,23 @@ describe("requestRefund", () => {
     };
   }
 
-  it("records a full refund request while the window is open", async () => {
+  it("records a refund request of the amount paid minus Razorpay's fee", async () => {
+    db.trainingEnrollment.findUnique.mockResolvedValue({ ...activeEnrollment(), payments: [{ id: "payment-1", razorpayPaymentId: "pay_XYZ" }] });
+    rp.fetchPayment.mockResolvedValue({ id: "pay_XYZ", order_id: "order_ABC", amount: 499_900, currency: "INR", status: "captured", fee: 11_798 });
+    db.trainingRefund.create.mockResolvedValue({ id: REFUND_ID, amountPaise: 488_102 });
+    await requestRefund(STUDENT, { enrollmentId: ENROLLMENT_ID, reason: "Exam clash in January" });
+    expect(db.trainingRefund.create.mock.calls[0][0].data).toMatchObject({ amountPaise: 488_102, status: "REQUESTED" });
+  });
+
+  it("records the request even when Razorpay cannot be reached (the amount is settled at approval)", async () => {
+    db.trainingEnrollment.findUnique.mockResolvedValue({ ...activeEnrollment(), payments: [{ id: "payment-1", razorpayPaymentId: "pay_XYZ" }] });
+    rp.fetchPayment.mockRejectedValue(new PaymentsUnavailableError("down"));
+    db.trainingRefund.create.mockResolvedValue({ id: REFUND_ID, amountPaise: 499_900 });
+    await requestRefund(STUDENT, { enrollmentId: ENROLLMENT_ID, reason: "Exam clash in January" });
+    expect(db.trainingRefund.create).toHaveBeenCalled();
+  });
+
+  it("records a refund request while the window is open", async () => {
     db.trainingEnrollment.findUnique.mockResolvedValue(activeEnrollment());
     db.trainingRefund.create.mockResolvedValue({ id: REFUND_ID, amountPaise: 499_900 });
     await requestRefund(STUDENT, { enrollmentId: ENROLLMENT_ID, reason: "Exam clash in January" });
@@ -441,9 +465,12 @@ describe("decideRefund", () => {
     status: "REQUESTED",
     amountPaise: 499_900,
     payment: { razorpayPaymentId: "pay_XYZ" },
+    enrollment: { amountPaidPaise: 499_900 },
   };
 
   beforeEach(() => {
+    // Razorpay's fee for the payment, including GST.
+    rp.fetchPayment.mockResolvedValue({ id: "pay_XYZ", order_id: "order_ABC", amount: 499_900, currency: "INR", status: "captured", fee: 11_798, tax: 1_800 });
     db.trainingRefund.findUnique.mockImplementation((args: { select?: unknown }) =>
       Promise.resolve(
         args.select
@@ -477,7 +504,9 @@ describe("decideRefund", () => {
   it("approves through Razorpay and marks the enrollment refunded when processed", async () => {
     rp.createRefund.mockResolvedValue({ id: "rfnd_1", status: "processed" });
     const result = await decideRefund(ADMIN, { refundId: REFUND_ID, approve: true });
-    expect(rp.createRefund).toHaveBeenCalledWith("pay_XYZ", 499_900, { refundId: REFUND_ID });
+    // The amount paid minus Razorpay's fee (incl. GST), read from Razorpay at approval.
+    expect(rp.createRefund).toHaveBeenCalledWith("pay_XYZ", 488_102, { refundId: REFUND_ID });
+    expect(db.trainingRefund.update.mock.calls[0][0]).toEqual({ where: { id: REFUND_ID }, data: { amountPaise: 488_102 } });
     expect(result.status).toBe("PROCESSED");
     expect(db.trainingEnrollment.update.mock.calls[0][0].data).toEqual({ status: "REFUNDED" });
   });
@@ -485,13 +514,20 @@ describe("decideRefund", () => {
   it("returns the request to the queue when Razorpay refuses the refund", async () => {
     rp.createRefund.mockRejectedValue(new PaymentsUnavailableError("refused"));
     await expect(decideRefund(ADMIN, { refundId: REFUND_ID, approve: true })).rejects.toBeInstanceOf(PaymentsUnavailableError);
-    expect(db.trainingRefund.update.mock.calls[0][0].data).toMatchObject({ status: "REQUESTED", decidedById: null });
+    expect(db.trainingRefund.update.mock.calls.at(-1)?.[0].data).toMatchObject({ status: "REQUESTED", decidedById: null });
   });
 
   it("explains a refund Razorpay refuses (for example a low balance) and keeps it waiting", async () => {
     rp.createRefund.mockRejectedValue(new PaymentsUnavailableError("refused", "invalid request sent"));
     await expect(decideRefund(ADMIN, { refundId: REFUND_ID, approve: true })).rejects.toThrow(/invalid request sent.*Razorpay balance/);
-    expect(db.trainingRefund.update.mock.calls[0][0].data).toMatchObject({ status: "REQUESTED" });
+    expect(db.trainingRefund.update.mock.calls.at(-1)?.[0].data).toMatchObject({ status: "REQUESTED" });
+  });
+
+  it("does not approve while Razorpay's charges cannot be read", async () => {
+    rp.fetchPayment.mockRejectedValue(new PaymentsUnavailableError("down"));
+    await expect(decideRefund(ADMIN, { refundId: REFUND_ID, approve: true })).rejects.toThrow("charges for this payment could not be read");
+    expect(rp.createRefund).not.toHaveBeenCalled();
+    expect(db.trainingRefund.updateMany).not.toHaveBeenCalled();
   });
 
   it("cannot decide the same request twice", async () => {

@@ -67,8 +67,8 @@ export function confirmedCompanyFacts(): Array<{ label: string; value: string }>
  * everywhere except production deployments.
  */
 export const LEGAL = {
-  version: "2026-11-19",
-  lastUpdated: "19 November 2026",
+  version: "2026-11-20",
+  lastUpdated: "20 November 2026",
   reviewed: false,
 } as const;
 
@@ -87,14 +87,17 @@ export const CERTIFICATE_SIGNATORIES: {
 
 /** Industrial Training rules from the product owner (2026-11-19), used by pages and server. */
 export const TRAINING_POLICY = {
-  /** Full refund until this many hours after the batch's first live class. */
+  /** Refund window: until this many hours after the batch's first live class. */
   refundHoursAfterFirstClass: 24,
   /** Free transfers to a later batch once the refund window has closed. */
   freeTransfers: 1,
   /** Free re-attempts in a later batch after failing the pass criteria. */
   freeReattempts: 1,
-  /** Deduct payment gateway charges from refunds (product owner default: off). */
-  deductGatewayChargesFromRefunds: false,
+  /**
+   * Deduct the payment gateway charges (Razorpay's fee including the GST on it) from refunds.
+   * Product-owner decision 2026-11-20: refunds are the amount paid minus these charges.
+   */
+  deductGatewayChargesFromRefunds: true,
 } as const;
 
 /** Pass criteria of Industrial Training (product owner plan, 2026-11-19; configurable). */

@@ -105,7 +105,10 @@ export interface RazorpayPayment {
   amount: number;
   currency: string;
   status: "created" | "authorized" | "captured" | "refunded" | "failed";
+  /** Razorpay's charge for the payment, including the GST on it (paise); set once captured. */
   fee?: number | null;
+  /** The GST part of `fee` (paise). */
+  tax?: number | null;
 }
 
 export function fetchPayment(paymentId: string): Promise<RazorpayPayment> {

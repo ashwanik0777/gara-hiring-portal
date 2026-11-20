@@ -10,7 +10,7 @@ import { COMPANY, TRAINING_POLICY } from "@/config/site";
 
 export const metadata = buildLegalMetadata(
   "Refund & Cancellation Policy",
-  `Internships at GARA Innovation are free. Industrial Training fees are refunded in full before the batch starts or within ${TRAINING_POLICY.refundHoursAfterFirstClass} hours after the first live class; after that a free batch transfer is available.`,
+  `Internships at GARA Innovation are free. Industrial Training fees are refunded, minus the payment gateway charges, before the batch starts or within ${TRAINING_POLICY.refundHoursAfterFirstClass} hours after the first live class; after that a free batch transfer is available.`,
   "/refund-policy"
 );
 
@@ -32,8 +32,8 @@ export default function RefundPolicyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection id="training-refunds" title="2. Industrial Training: full refund window">
-        <p>You get a full refund of the fee you paid if you ask for it:</p>
+      <LegalSection id="training-refunds" title="2. Industrial Training: refund window">
+        <p>You get a refund of the fee you paid, minus the payment gateway charges, if you ask for it:</p>
         <LegalList>
           <li>
             <strong className="text-foreground">before your batch&apos;s start date</strong>, or
@@ -45,7 +45,7 @@ export default function RefundPolicyPage() {
         <p>
           The time of your request decides whether it is inside the window, even if we process it later.
           {TRAINING_POLICY.deductGatewayChargesFromRefunds
-            ? " Payment gateway charges are deducted from the refund."
+            ? " The payment gateway charges, which are Razorpay's fee for your payment and the GST on that fee, are not returned to us by Razorpay and are deducted from the refund. The exact amount is shown when your refund is approved."
             : " Refunds are for the full amount you paid; no gateway or processing charges are deducted."}
         </p>
       </LegalSection>

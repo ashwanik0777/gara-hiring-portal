@@ -188,8 +188,9 @@ export default async function TrainingProgramPage({ params }: { params: Params }
 
               <Section title="Refunds" icon={<ShieldCheck className="h-5 w-5 text-primary" />}>
                 <p className="text-sm text-muted-foreground">
-                  Full refund if you ask before the batch starts or within {TRAINING_POLICY.refundHoursAfterFirstClass} hours after
-                  the first live class. After that there is no refund, but you can move to the next batch free of charge, once.{" "}
+                  If you ask before the batch starts or within {TRAINING_POLICY.refundHoursAfterFirstClass} hours after the first
+                  live class, you get back the fee you paid minus the payment gateway charges (Razorpay&apos;s fee and the GST
+                  on it). After that there is no refund, but you can move to the next batch free of charge, once.{" "}
                   <Link href="/refund-policy" className="font-medium text-primary hover:underline underline-offset-4">
                     Read the Refund &amp; Cancellation Policy
                   </Link>

@@ -1,9 +1,10 @@
 import { TRAINING_POLICY } from "@/config/site";
 
 /*
- * Industrial Training rules from the product owner (2026-11-19), shared by pages and server:
- * full refund before the batch starts or within 24 hours after the first live class; after
- * that no refund but one free transfer to a later batch.
+ * Industrial Training rules from the product owner, shared by pages and server: a refund before
+ * the batch starts or within 24 hours after the first live class (2026-11-19), of the amount
+ * paid minus the payment gateway charges, Razorpay's fee and the GST on it (2026-11-20); after
+ * the window no refund but one free transfer to a later batch.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -33,8 +34,8 @@ export function canTransfer(enrollment: { transferCount: number }, batch: Refund
 }
 
 /**
- * Refund amount for a payment. Gateway charges (the fee Razorpay reports for the payment) are
- * deducted only when the policy setting is on; the product owner's default is off.
+ * Refund amount for a payment: the amount paid minus the gateway charges (the fee Razorpay
+ * reports for the payment, which includes GST) while the policy setting is on.
  */
 export function refundAmountPaise(amountPaidPaise: number, gatewayFeePaise = 0): number {
   if (!TRAINING_POLICY.deductGatewayChargesFromRefunds) return amountPaidPaise;

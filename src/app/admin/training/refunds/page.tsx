@@ -74,8 +74,9 @@ export default async function AdminTrainingRefundsPage() {
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Training Refunds</h2>
         <p className="text-sm text-muted-foreground">
-          Students ask for a refund from their training page while the refund window is open. Approving sends the full amount
-          back through Razorpay; rejecting needs a note, which the student sees.
+          Students ask for a refund from their training page while the refund window is open. Approving sends the amount
+          paid minus Razorpay&apos;s charges (its fee including GST, read from Razorpay at approval) back through Razorpay;
+          rejecting needs a note, which the student sees.
         </p>
         <div className="mt-3">
           <ExportLinks items={[{ dataset: "training-refunds", label: "Refunds CSV" }]} />

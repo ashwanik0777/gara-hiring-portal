@@ -17,7 +17,7 @@ function ErrorText({ message }: { message: string | null }) {
   );
 }
 
-/** Student: ask for a full refund while the refund window is open. */
+/** Student: ask for a refund (amount paid minus Razorpay's fee and GST) while the window is open. */
 export function RefundRequestForm({ enrollmentId, closesAtLabel, amountLabel }: { enrollmentId: string; closesAtLabel: string; amountLabel: string }) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
@@ -32,7 +32,9 @@ export function RefundRequestForm({ enrollmentId, closesAtLabel, amountLabel }: 
         <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
           Request refund
         </Button>
-        <p className="text-xs text-muted-foreground">Full refund of {amountLabel} if you ask before {closesAtLabel}.</p>
+        <p className="text-xs text-muted-foreground">
+          You paid {amountLabel}; the refund is that amount minus Razorpay&apos;s charges (fee and GST). Ask before {closesAtLabel}.
+        </p>
       </div>
     );
   }

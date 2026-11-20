@@ -85,8 +85,9 @@ export default async function EnrolPage({ params, searchParams }: Props) {
                   </div>
                 </dl>
                 <p className="mt-6 text-xs text-muted-foreground">
-                  Full refund before the batch starts or within {TRAINING_POLICY.refundHoursAfterFirstClass} hours after the first
-                  live class; after that one free transfer to a later batch. Your Payment Receipt is available in your training
+                  Refund before the batch starts or within {TRAINING_POLICY.refundHoursAfterFirstClass} hours after the first
+                  live class, minus the payment gateway charges (Razorpay&apos;s fee and GST); after that one free transfer to a
+                  later batch. Your Payment Receipt is available in your training
                   dashboard right after payment.
                 </p>
               </CardContent>

@@ -139,7 +139,15 @@ export async function startCheckout(
     throw new PaymentsUnavailableError("The payment order did not match the fee. Please try again.");
   }
   await prisma.trainingPayment.create({
-    data: { enrollmentId: reserved.enrollmentId, razorpayOrderId: order.id, amountPaise: reserved.amountPaise },
+    data: {
+      enrollmentId: reserved.enrollmentId,
+      razorpayOrderId: order.id,
+      amountPaise: reserved.amountPaise,
+      // This order's own pricing: if the student pays it, these values are what they bought.
+      listPricePaise: reserved.listPricePaise,
+      discountPaise: reserved.discountPaise,
+      referralCode: reserved.referralCode,
+    },
   });
 
   // A referred student is also counted as the ambassador's sign-up (if not attributed yet).
@@ -201,6 +209,11 @@ export async function recordCapturedPayment(input: { orderId: string; paymentId:
         data: {
           status: TrainingEnrollmentStatus.ACTIVE,
           amountPaidPaise: payment.amountPaise,
+          // The paid order decides the price, discount and referral (an older order can be paid
+          // after the student started checkout again).
+          ...(payment.listPricePaise !== null
+            ? { listPricePaise: payment.listPricePaise, discountPaise: payment.discountPaise ?? 0, referralCode: payment.referralCode }
+            : {}),
           paidAt: now,
           seatHoldExpiresAt: null,
           receiptNo: enrollment.receiptNo ?? (await nextReceiptNumber(tx, now)),
