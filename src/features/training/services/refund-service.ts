@@ -2,7 +2,8 @@ import { Role, TrainingEnrollmentStatus, TrainingPaymentStatus, TrainingRefundSt
 import { prisma } from "@/lib/db";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
-import { createRefund } from "@/infrastructure/payments/razorpay";
+import { createRefund, PaymentsUnavailableError } from "@/infrastructure/payments/razorpay";
+import { formatInr } from "../money";
 import { canTransfer, isRefundWindowOpen, refundAmountPaise, SEAT_TAKING_STATUSES } from "../policy";
 import { isBatchOpenForEnrollment } from "./program-service";
 import { queueRefundUpdateEmail } from "../emails";
@@ -128,6 +129,13 @@ export async function decideRefund(user: AuthenticatedUser, input: { refundId: s
       where: { id: refund.id },
       data: { status: TrainingRefundStatus.REQUESTED, decidedById: null, decidedAt: null },
     });
+    if (error instanceof PaymentsUnavailableError && error.providerDescription) {
+      // Razorpay pays refunds from the account balance; its message for a balance lower than the
+      // refund is a generic "invalid request sent".
+      throw new ConflictError(
+        `Razorpay did not accept the refund ("${error.providerDescription}"). Refunds are paid from your Razorpay balance: if it is lower than ${formatInr(refund.amountPaise)}, add funds or wait for more payments, then approve again. The request is still waiting.`
+      );
+    }
     throw error;
   }
 

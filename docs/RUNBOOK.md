@@ -235,11 +235,13 @@ Setup (test mode first, then live with new keys):
 1. Razorpay dashboard → Account & Settings → API Keys: generate a key pair; set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in Vercel.
 2. Razorpay dashboard → Webhooks → Add: URL `https://careers.gara-innovations.tech/api/webhooks/razorpay`, a strong secret (set the same value as `RAZORPAY_WEBHOOK_SECRET`), events `payment.authorized`, `payment.captured`, `payment.failed`, `refund.processed`, `refund.failed`. Test and live mode have separate webhooks.
 3. Payment capture: automatic capture is recommended; the portal also captures authorized payments itself (browser confirmation and the `payment.authorized` webhook).
-4. Redeploy, then in `/admin/training` create a programme (publish it) and a batch; `/training` lists it. Enrol with a test account and Razorpay's test card or UPI; check the receipt on "My Training" and the "Payment received" email.
+4. Webhook URL: `https://careers.gara-innovations.tech/api/webhooks/razorpay` (Razorpay does not accept `localhost`; the route exists only after this code is deployed).
+5. Redeploy, then in `/admin/training` create a programme (publish it) and a batch; `/training` lists it. Enrol with a test account and Razorpay's test card or UPI; check the receipt on "My Training" and the "Payment received" email.
 
 Daily operation:
 - Refund requests appear on `/admin/training/refunds`. Approving sends the full amount through the Razorpay refund API; rejecting needs a note the student sees. The student is emailed when the refund is processed, rejected or failed.
 - **Duplicate payment** (audit action `TRAINING_DUPLICATE_PAYMENT`, a second payment for an enrollment that was already paid): refund the second payment from the Razorpay dashboard.
+- **Refunds are paid from the Razorpay balance.** Razorpay keeps its fee (about 2.36% in test mode), so the balance from one payment is lower than its full refund; with no other balance Razorpay refuses the refund with a generic "invalid request sent". The admin page then explains this and the request stays waiting: add funds (or wait for more payments) and approve again. Verified in test mode on 2026-11-20.
 - **Refund failed at the bank** (status "failed at the bank"): complete it from the Razorpay dashboard or contact the student; the enrollment stays "refund requested".
 - **Money debited, no enrollment shown:** look up the payment in Razorpay. If it is authorized or captured for an order of this portal, the webhook completes it; check the webhook delivery log in the Razorpay dashboard and resend the event if it failed.
 - Receipt numbers come from the database sequence `training_receipt_seq` (`GARA-RCPT-{year}-{6}`); numbers are never reused, and a failed transaction can leave a gap.

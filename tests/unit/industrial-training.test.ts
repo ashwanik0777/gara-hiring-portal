@@ -488,6 +488,12 @@ describe("decideRefund", () => {
     expect(db.trainingRefund.update.mock.calls[0][0].data).toMatchObject({ status: "REQUESTED", decidedById: null });
   });
 
+  it("explains a refund Razorpay refuses (for example a low balance) and keeps it waiting", async () => {
+    rp.createRefund.mockRejectedValue(new PaymentsUnavailableError("refused", "invalid request sent"));
+    await expect(decideRefund(ADMIN, { refundId: REFUND_ID, approve: true })).rejects.toThrow(/invalid request sent.*Razorpay balance/);
+    expect(db.trainingRefund.update.mock.calls[0][0].data).toMatchObject({ status: "REQUESTED" });
+  });
+
   it("cannot decide the same request twice", async () => {
     db.trainingRefund.updateMany.mockResolvedValue({ count: 0 });
     await expect(decideRefund(ADMIN, { refundId: REFUND_ID, approve: true })).rejects.toBeInstanceOf(ConflictError);

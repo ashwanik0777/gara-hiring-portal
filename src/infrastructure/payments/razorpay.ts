@@ -26,9 +26,21 @@ export function getRazorpayConfig(): RazorpayConfig | null {
 }
 
 export class PaymentsUnavailableError extends AppError {
-  constructor(message = "Online payments are not available right now. Please try again later.") {
+  /** Razorpay's own short error description (printable text only), for staff-facing messages. */
+  public readonly providerDescription: string | null;
+
+  constructor(message = "Online payments are not available right now. Please try again later.", providerDescription: string | null = null) {
     super(message, "PAYMENTS_UNAVAILABLE", 503);
+    this.providerDescription = providerDescription;
   }
+}
+
+/** Razorpay's error description, reduced to short printable text (never request data). */
+function providerDescription(body: unknown): string | null {
+  const description = (body as { error?: { description?: unknown } } | null)?.error?.description;
+  if (typeof description !== "string") return null;
+  const clean = description.replace(/[^\x20-\x7E]/g, "").trim().slice(0, 160);
+  return clean || null;
 }
 
 function requireConfig(): RazorpayConfig {
@@ -62,8 +74,10 @@ export async function razorpayRequest<T>(
     throw new PaymentsUnavailableError("The payment service could not be reached. Please try again.");
   }
   if (!response.ok) {
-    // Razorpay error bodies can echo request data; log only the status upstream.
-    throw new PaymentsUnavailableError(`The payment service refused the request (HTTP ${response.status}).`);
+    // Razorpay error bodies can echo request data: only its short description is kept, for
+    // staff messages; nothing from the body is logged.
+    const description = providerDescription(await response.json().catch(() => null));
+    throw new PaymentsUnavailableError(`The payment service refused the request (HTTP ${response.status}).`, description);
   }
   return (await response.json()) as T;
 }
