@@ -6,6 +6,7 @@ import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth/auth-client";
 import {
+  BookOpen,
   GraduationCap,
   LayoutDashboard,
   Users,
@@ -87,6 +88,7 @@ export interface DashboardShellProps {
 }
 
 const ICON_MAP: Record<string, LucideIcon> = {
+  BookOpen,
   GraduationCap,
   LayoutDashboard,
   History,
@@ -136,6 +138,45 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
   "/admin/applications": { label: "Applications", iconName: "FileText" },
   "/admin/registrations": { label: "Registrations", iconName: "UserPlus" },
   "/admin/colleges": { label: "Colleges", iconName: "GraduationCap" },
+  "/admin/training/batches": {
+    label: "Training Batch",
+    iconName: "BookOpen",
+    action: {
+      label: "Back to Training",
+      href: "/admin/training",
+      iconName: "ArrowLeft",
+    },
+  },
+  "/subadmin/training": { label: "Training Batches", iconName: "BookOpen" },
+  "/admin/print-orders": { label: "Print Orders", iconName: "Package" },
+  "/admin/campus-ambassadors/payouts": {
+    label: "Ambassador Payouts",
+    iconName: "CreditCard",
+    action: { label: "Back to Ambassadors", href: "/admin/campus-ambassadors", iconName: "ArrowLeft" },
+  },
+  "/admin/campus-ambassadors": {
+    label: "Campus Ambassadors",
+    iconName: "Users",
+    action: { label: "Payouts", href: "/admin/campus-ambassadors/payouts", iconName: "CreditCard" },
+  },
+  "/admin/training/refunds": {
+    label: "Training Refunds",
+    iconName: "BookOpen",
+    action: {
+      label: "Back to Training",
+      href: "/admin/training",
+      iconName: "ArrowLeft",
+    },
+  },
+  "/admin/training": {
+    label: "Industrial Training",
+    iconName: "BookOpen",
+    action: {
+      label: "Refund Requests",
+      href: "/admin/training/refunds",
+      iconName: "CreditCard",
+    },
+  },
   "/admin/openings": {
     label: "Job Openings",
     iconName: "Briefcase",

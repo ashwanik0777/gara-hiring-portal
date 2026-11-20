@@ -8,6 +8,8 @@ export const JOB_TYPES = {
   CONVERSION_REVIEW_REMINDERS_DAILY: "CONVERSION_REVIEW_REMINDERS_DAILY",
   /** Daily: one digest per staff member of the actions waiting for them. */
   STAFF_DAILY_DIGEST: "STAFF_DAILY_DIGEST",
+  /** Industrial Training: emails the batch's students 24 hours before the first live class. */
+  TRAINING_FIRST_CLASS_REMINDER: "TRAINING_FIRST_CLASS_REMINDER",
   /** Applies an accepted intern-to-full-time conversion on its effective date. */
   CONVERSION_EFFECTIVE: "CONVERSION_EFFECTIVE",
 } as const;

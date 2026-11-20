@@ -55,6 +55,10 @@ npm run dev
 | `PAYOUT_ENCRYPTION_KEY` | Production (to save bank details) | 32 random bytes, base64 (`openssl rand -base64 32`) or hex. Encrypts payout account numbers and PANs (AES-256-GCM). Keep it stable and backed up: a changed or lost key makes stored numbers unreadable. Without it, production refuses to save account numbers/PANs and `checkProductionReadiness` reports a blocker |
 | `APP_URL` / `WORKER_INTERVAL_SECONDS` | Worker only | Base URL the worker calls and its polling interval (default 60 s) |
 | `DATABASE_SSL_REJECT_UNAUTHORIZED` | No | Defaults to verifying the database TLS certificate. Set to `false` only as a documented, temporary exception |
+| `RAZORPAY_KEY_ID` | For Industrial Training payments | `rzp_test_…` (testing) or `rzp_live_…` (production). The only Razorpay value sent to the browser |
+| `RAZORPAY_KEY_SECRET` | For Industrial Training payments | Key secret of the same key pair (server only) |
+| `RAZORPAY_WEBHOOK_SECRET` | For Industrial Training payments | Secret entered when creating the webhook in the Razorpay dashboard. Checkout stays switched off ("Online payment opens soon") until all three Razorpay variables are set |
+| `RAZORPAYX_ACCOUNT_NUMBER` | For ambassador payouts | RazorpayX current account number (digits). Payouts through RazorpayX stay off until it is set and `CAMPUS_AMBASSADOR_POLICY.tdsPercent` is decided |
 | `NEXT_PUBLIC_WHATSAPP_URL` | No | Public `https://wa.me/<number>` contact link; hidden when unset |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | No | Present in `.env` but unused until a storage provider is approved (OD-013) |
 
@@ -225,6 +229,31 @@ Automated emails are idempotent: each outbox row carries a unique `dedupeKey` (o
 - Reports → **Funnel** (`?tab=funnel`) shows stage conversion, drop-off, time in stage, time to hire and sources, filterable by date range, opening type and opening, with a CSV export (audited as `EXPORT_REPORT`).
 - Bulk actions on the application lists move or reject up to 100 selected applications (ADMIN/HR with `canApplications`); every item goes through the single stage-transition checks and the result lists moved and skipped applications with reasons.
 - `/sitemap.xml` lists published openings and `/robots.txt` blocks portals, auth screens, APIs and apply forms. Opening pages embed `JobPosting` structured data for Google Jobs. Both use `BETTER_AUTH_URL` as the public origin, so set it to the production domain. After launch, submit the sitemap in Google Search Console and check an opening with the Rich Results Test.
+
+### 5.10 Industrial Training Payments (Razorpay)
+Setup (test mode first, then live with new keys):
+1. Razorpay dashboard → Account & Settings → API Keys: generate a key pair; set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in Vercel.
+2. Razorpay dashboard → Webhooks → Add: URL `https://careers.gara-innovations.tech/api/webhooks/razorpay`, a strong secret (set the same value as `RAZORPAY_WEBHOOK_SECRET`), events `payment.authorized`, `payment.captured`, `payment.failed`, `refund.processed`, `refund.failed`. Test and live mode have separate webhooks.
+3. Payment capture: automatic capture is recommended; the portal also captures authorized payments itself (browser confirmation and the `payment.authorized` webhook).
+4. Redeploy, then in `/admin/training` create a programme (publish it) and a batch; `/training` lists it. Enrol with a test account and Razorpay's test card or UPI; check the receipt on "My Training" and the "Payment received" email.
+
+Daily operation:
+- Refund requests appear on `/admin/training/refunds`. Approving sends the full amount through the Razorpay refund API; rejecting needs a note the student sees. The student is emailed when the refund is processed, rejected or failed.
+- **Duplicate payment** (audit action `TRAINING_DUPLICATE_PAYMENT`, a second payment for an enrollment that was already paid): refund the second payment from the Razorpay dashboard.
+- **Refund failed at the bank** (status "failed at the bank"): complete it from the Razorpay dashboard or contact the student; the enrollment stays "refund requested".
+- **Money debited, no enrollment shown:** look up the payment in Razorpay. If it is authorized or captured for an order of this portal, the webhook completes it; check the webhook delivery log in the Razorpay dashboard and resend the event if it failed.
+- Receipt numbers come from the database sequence `training_receipt_seq` (`GARA-RCPT-{year}-{6}`); numbers are never reused, and a failed transaction can leave a gap.
+
+### 5.12 Training reminders, exports and colleges (Phase 6)
+- First-class reminders are jobs of type `TRAINING_FIRST_CLASS_REMINDER`, run by the job runner (`/api/jobs/run`); saving a batch with a first live class schedules it. They need the external scheduler of §5.5 to run at least every few minutes.
+- CSV exports: `/api/admin/exports/{training-enrollments|training-payments|training-refunds|certificates|ambassadors|ambassador-payouts|print-orders}` (administrators; each download is in the audit log).
+- Duplicate colleges: open the duplicate on `/admin/colleges` and merge it into the one to keep.
+
+### 5.11 Campus Ambassadors and Payouts (RazorpayX)
+- Applications arrive on `/admin/campus-ambassadors`; approve as Lead (one per college) or Associate. Approval creates the referral code and emails the ambassador.
+- Commission values, discount and windows are in `CAMPUS_AMBASSADOR_POLICY` (`src/config/site.ts`); the marketing kit in `CAMPUS_AMBASSADOR_KIT` (posters go under `public/ambassador/`).
+- RazorpayX setup: open RazorpayX, note the account number (`RAZORPAYX_ACCOUNT_NUMBER`), add webhook events `payout.processed`, `payout.failed`, `payout.reversed`, `payout.rejected` to the same URL `/api/webhooks/razorpay` with the same secret as `RAZORPAY_WEBHOOK_SECRET`, and fund the account. Set `tdsPercent` once the accountant decides.
+- Paying: `/admin/campus-ambassadors/payouts` lists payable amounts. "Pay via RazorpayX" sends the net amount to the ambassador's UPI ID; "Record payout" records a bank transfer made outside with its UTR. A payout flagged `AMBASSADOR_PAYOUT_NEEDS_RECONCILIATION` in the audit log was reported paid after it had failed: check RazorpayX before paying those commissions again.
 
 ### 5.9 Own Storage Server: Private Uploads with Virus Scanning
 Until the organisation runs its own server, keep `DOCUMENT_STORAGE_MODE=link`. To switch to uploads on a long-running server:

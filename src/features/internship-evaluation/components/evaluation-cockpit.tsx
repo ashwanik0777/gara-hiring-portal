@@ -12,6 +12,7 @@ import { ChangeSupervisorDialog } from "./change-supervisor-dialog";
 import { getInternJourneyState } from "../joining-state";
 import type { ReportingManagerOption } from "@/features/employees/types";
 import { CompletionAndCertificatePanel } from "@/features/certificates/components/completion-and-certificate-panel";
+import { InternshipOfferPanel } from "@/features/internship-offers/components/internship-offer-panel";
 import { CreateTaskDialog } from "@/features/intern-tasks/components/create-task-dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -242,6 +243,34 @@ export function EvaluationCockpit({
         </div>
         {tasksSection}
       </section>
+
+      {enrollment.openingType === "INTERNSHIP" && (
+        <InternshipOfferPanel
+          applicationId={enrollment.applicationId}
+          canIssue={canDecide}
+          isOpen={isPassed && enrollment.applicationStatus === "EVALUATION_SELECTED"}
+          defaults={{
+            designation: enrollment.openingTitle,
+            department: enrollment.openingDepartment,
+            tenureText: enrollment.openingDurationText ?? "",
+            stipendText: enrollment.openingStipendText ?? "",
+          }}
+          offer={
+            enrollment.internshipOffer
+              ? {
+                  designation: enrollment.internshipOffer.designation,
+                  department: enrollment.internshipOffer.department,
+                  startDate: enrollment.internshipOffer.startDate.toISOString().slice(0, 10),
+                  tenureText: enrollment.internshipOffer.tenureText,
+                  stipendText: enrollment.internshipOffer.stipendText,
+                  signatoryName: enrollment.internshipOffer.signatoryName,
+                  signatoryTitle: enrollment.internshipOffer.signatoryTitle,
+                  version: enrollment.internshipOffer.version,
+                }
+              : null
+          }
+        />
+      )}
 
       <CompletionAndCertificatePanel
         enrollmentId={enrollment.id}

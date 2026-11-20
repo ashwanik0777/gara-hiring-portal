@@ -36,7 +36,7 @@ export default async function AdminCollegesPage() {
   return (
     <div className="w-full space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Colleges</h1>
+        <h2 className="text-2xl font-bold tracking-tight">Colleges</h2>
         <p className="text-sm text-muted-foreground">
           The college list students pick from on the apply form. Approve the colleges students add so others can find them.
         </p>

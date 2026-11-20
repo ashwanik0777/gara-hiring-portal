@@ -153,7 +153,7 @@ describe("Navbar links and the navigation progress bar", () => {
 
     const nav = screen.getByRole("navigation");
     const hrefs = Array.from(nav.querySelectorAll("a")).map((a) => a.getAttribute("href"));
-    expect(hrefs).toEqual(["/careers", "/verify", "/help"]);
+    expect(hrefs).toEqual(["/careers", "/training", "/campus-ambassador", "/verify", "/help"]);
     expect(screen.queryByRole("progressbar")).toBeNull();
   });
 

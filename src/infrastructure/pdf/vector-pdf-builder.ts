@@ -99,99 +99,93 @@ export class VectorPdfBuilder {
     streamOps.push(`220 ${pageHeight - 110} m 622 ${pageHeight - 110} l s`);
 
     // --- TEXT BLOCKS ---
-    // Brand Header: "GARA INNOVATION"
-    streamOps.push("BT");
-    streamOps.push("/F2 16 Tf");
-    streamOps.push("0.059 0.090 0.165 rg");
-    streamOps.push(`340 ${pageHeight - 95} Td`);
-    streamOps.push(`(${escapePdfString("GARA INNOVATION")}) Tj`);
-    streamOps.push("ET");
+    // Centred lines use an average glyph width (standard Type1 fonts, no metrics table).
+    const glyphWidth = { F1: 0.5, F2: 0.56, F3: 0.5 } as const;
+    const centeredText = (text: string, font: keyof typeof glyphWidth, size: number, fromTop: number, color: string) => {
+      const width = text.length * size * glyphWidth[font];
+      const x = Math.max(60, Math.floor((pageWidth - width) / 2));
+      streamOps.push("BT");
+      streamOps.push(`/${font} ${size} Tf`);
+      streamOps.push(`${color} rg`);
+      streamOps.push(`${x} ${pageHeight - fromTop} Td`);
+      streamOps.push(`(${escapePdfString(text)}) Tj`);
+      streamOps.push("ET");
+    };
+    const ink = "0.059 0.090 0.165";
+    const muted = "0.40 0.45 0.52";
+    const body = "0.25 0.30 0.38";
+    const gold = "0.851 0.467 0.024";
 
-    // Title: "CERTIFICATE OF COMPLETION"
-    streamOps.push("BT");
-    streamOps.push("/F2 26 Tf");
-    streamOps.push("0.059 0.090 0.165 rg");
-    streamOps.push(`220 ${pageHeight - 150} Td`);
-    streamOps.push(`(${escapePdfString("CERTIFICATE OF COMPLETION")}) Tj`);
-    streamOps.push("ET");
-
-    // Subtitle: "THIS RECOGNITION IS PROUDLY PRESENTED TO"
-    streamOps.push("BT");
-    streamOps.push("/F1 10 Tf");
-    streamOps.push("0.40 0.45 0.52 rg");
-    streamOps.push(`275 ${pageHeight - 180} Td`);
-    streamOps.push(`(${escapePdfString("THIS RECOGNITION IS PROUDLY PRESENTED TO")}) Tj`);
-    streamOps.push("ET");
-
-    // Recipient Name
-    streamOps.push("BT");
-    streamOps.push("/F3 28 Tf");
-    streamOps.push("0.059 0.090 0.165 rg");
-    // Approximate centering by estimating char width ~15pt
-    const nameLen = payload.recipientName.length;
-    const nameStartX = Math.max(100, Math.floor(421 - (nameLen * 8)));
-    streamOps.push(`${nameStartX} ${pageHeight - 225} Td`);
-    streamOps.push(`(${escapePdfString(payload.recipientName)}) Tj`);
-    streamOps.push("ET");
+    centeredText(payload.companyName ?? "GARA INNOVATION", "F2", 16, 95, ink);
+    centeredText(payload.title ?? "CERTIFICATE OF COMPLETION", "F2", 26, 150, ink);
+    centeredText("THIS RECOGNITION IS PROUDLY PRESENTED TO", "F1", 10, 180, muted);
+    centeredText(payload.recipientName, "F3", 28, 225, ink);
 
     // Recipient underline in gold
-    streamOps.push("0.851 0.467 0.024 RG");
+    streamOps.push(`${gold} RG`);
     streamOps.push("1.5 w");
     streamOps.push(`180 ${pageHeight - 235} m 662 ${pageHeight - 235} l s`);
 
-    // Completion statement
-    streamOps.push("BT");
-    streamOps.push("/F1 12 Tf");
-    streamOps.push("0.25 0.30 0.38 rg");
-    streamOps.push(`140 ${pageHeight - 270} Td`);
-    streamOps.push(`(${escapePdfString("for successfully completing the internship programme and fulfilling all required milestones in")}) Tj`);
-    streamOps.push("ET");
+    if (payload.collegeName) {
+      centeredText(`of ${payload.collegeName}`, "F1", 11, 252, body);
+    }
+    centeredText(
+      payload.statement ??
+        "for successfully completing the internship programme and fulfilling all required milestones in",
+      "F1",
+      12,
+      275,
+      body
+    );
+    centeredText(payload.programmeTitle, "F2", 15, 298, ink);
 
-    // Programme Title
-    streamOps.push("BT");
-    streamOps.push("/F2 15 Tf");
-    streamOps.push("0.059 0.090 0.165 rg");
-    const progLen = payload.programmeTitle.length;
-    const progStartX = Math.max(100, Math.floor(421 - (progLen * 5)));
-    streamOps.push(`${progStartX} ${pageHeight - 295} Td`);
-    streamOps.push(`(${escapePdfString(payload.programmeTitle)}) Tj`);
-    streamOps.push("ET");
+    const period = payload.periodStart
+      ? `${payload.periodStart} to ${payload.completionDate}`
+      : `Completion Date: ${payload.completionDate}`;
+    centeredText([payload.domain, period].filter(Boolean).join("    |    "), "F1", 10, 322, muted);
 
-    // Dates
-    streamOps.push("BT");
-    streamOps.push("/F1 10 Tf");
-    streamOps.push("0.40 0.45 0.52 rg");
-    const dateText = `Completion Date: ${payload.completionDate}    |    Issued on: ${payload.issueDate}`;
-    streamOps.push(`260 ${pageHeight - 330} Td`);
-    streamOps.push(`(${escapePdfString(dateText)}) Tj`);
-    streamOps.push("ET");
+    const work = [
+      payload.projectTitle ? `Project: ${payload.projectTitle}` : null,
+      payload.grade ? `Grade: ${payload.grade}` : null,
+    ].filter(Boolean);
+    if (work.length > 0) {
+      centeredText(work.join("    |    "), "F1", 10, 340, muted);
+    }
+    centeredText(`Issued on: ${payload.issueDate}`, "F1", 9, work.length > 0 ? 358 : 340, muted);
 
     // --- FOOTER SECTION ---
-    // Left: Authorized Signatory Block
-    streamOps.push("0.30 0.35 0.42 RG");
-    streamOps.push("1.0 w");
-    streamOps.push(`80 ${pageHeight - 480} m 280 ${pageHeight - 480} l s`);
+    // Signature blocks: left, and centre when a second signatory is set.
+    const signatureBlock = (x: number, name: string, title: string) => {
+      streamOps.push("0.30 0.35 0.42 RG");
+      streamOps.push("1.0 w");
+      streamOps.push(`${x} ${pageHeight - 480} m ${x + 200} ${pageHeight - 480} l s`);
+      streamOps.push("BT");
+      streamOps.push("/F2 12 Tf");
+      streamOps.push(`${ink} rg`);
+      streamOps.push(`${x} ${pageHeight - 498} Td`);
+      streamOps.push(`(${escapePdfString(name)}) Tj`);
+      streamOps.push("ET");
+      streamOps.push("BT");
+      streamOps.push("/F1 10 Tf");
+      streamOps.push(`${muted} rg`);
+      streamOps.push(`${x} ${pageHeight - 513} Td`);
+      streamOps.push(`(${escapePdfString(title)}) Tj`);
+      streamOps.push("ET");
+      streamOps.push("BT");
+      streamOps.push("/F2 9 Tf");
+      streamOps.push(`${gold} rg`);
+      streamOps.push(`${x} ${pageHeight - 526} Td`);
+      streamOps.push(`(${escapePdfString("GARA Innovation Authority")}) Tj`);
+      streamOps.push("ET");
+    };
+    signatureBlock(80, payload.signatoryName, payload.signatoryTitle);
+    if (payload.secondSignatoryName && payload.secondSignatoryTitle) {
+      signatureBlock(340, payload.secondSignatoryName, payload.secondSignatoryTitle);
+    }
 
-    streamOps.push("BT");
-    streamOps.push("/F2 12 Tf");
-    streamOps.push("0.059 0.090 0.165 rg");
-    streamOps.push(`80 ${pageHeight - 498} Td`);
-    streamOps.push(`(${escapePdfString(payload.signatoryName)}) Tj`);
-    streamOps.push("ET");
-
-    streamOps.push("BT");
-    streamOps.push("/F1 10 Tf");
-    streamOps.push("0.40 0.45 0.52 rg");
-    streamOps.push(`80 ${pageHeight - 513} Td`);
-    streamOps.push(`(${escapePdfString(payload.signatoryTitle)}) Tj`);
-    streamOps.push("ET");
-
-    streamOps.push("BT");
-    streamOps.push("/F2 9 Tf");
-    streamOps.push("0.851 0.467 0.024 rg");
-    streamOps.push(`80 ${pageHeight - 526} Td`);
-    streamOps.push(`(${escapePdfString("GARA Innovation Authority")}) Tj`);
-    streamOps.push("ET");
+    if (payload.companyFacts) {
+      centeredText(payload.companyFacts, "F1", 7.5, 552, muted);
+    }
 
     // Center-Right: QR Code & Verification Block
     const qrTargetDim = 72;

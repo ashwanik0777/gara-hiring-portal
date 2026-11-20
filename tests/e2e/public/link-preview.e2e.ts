@@ -13,7 +13,7 @@ const PREVIEW_BOTS = {
   linkedin: "LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)",
 };
 
-const SHAREABLE_PAGES = ["/", "/careers", "/login", "/register", "/help", "/verify", "/privacy", "/refund-policy", "/contact"];
+const SHAREABLE_PAGES = ["/", "/careers", "/training", "/campus-ambassador", "/login", "/register", "/help", "/verify", "/privacy", "/refund-policy", "/contact"];
 
 function metaContent(html: string, key: string): string | null {
   const head = html.slice(0, html.indexOf("</head>"));

@@ -6,7 +6,6 @@ import type { AuthenticatedUser } from "@/lib/auth/guards";
 import {
   Role,
   CertificateStatus,
-  CheckpointStatus,
   CompletionStatus,
   EvaluationStatus,
   Prisma,
@@ -16,10 +15,14 @@ import {
   PublicCertificateVerificationResult,
   IssueCertificateInput,
   ReissueCertificateInput,
+  RevokeCertificateInput,
   CompletionChecklistInput,
 } from "../types";
 import { COMPLETION_CHECKLIST_TEMPLATE, VERIFICATION_CODE_MAX_LENGTH } from "../constants";
 import { certificatePdfGenerator } from "@/infrastructure/pdf/certificate-pdf-generator";
+import type { CertificatePdfPayload } from "@/infrastructure/pdf/types";
+import { COMPANY, confirmedCompanyFacts } from "@/config/site";
+import { CERTIFICATE_TYPES, formatCertificateCode, type CertificateTypeKey } from "../certificate-types";
 import {
   assertEnrollmentInScope,
   assertEvaluationAccess,
@@ -30,6 +33,7 @@ import {
 import {
   AppError,
   ConflictError,
+  ForbiddenError,
   NotFoundError,
   ValidationError,
 } from "@/lib/errors";
@@ -124,7 +128,8 @@ async function lockEnrollmentRow(tx: Prisma.TransactionClient, enrollmentId: str
 function toCertificateDetail(certificate: {
   id: string;
   verificationCode: string;
-  enrollmentId: string;
+  enrollmentId: string | null;
+  trainingEnrollmentId?: string | null;
   recipientName: string;
   programmeTitle: string;
   issueDate: Date;
@@ -136,11 +141,21 @@ function toCertificateDetail(certificate: {
   versionNumber: number;
   pdfStorageKey: string | null;
   createdAt: Date;
+  type: CertificateTypeKey;
+  collegeName: string | null;
+  domain: string | null;
+  periodStart: Date | null;
+  projectTitle: string | null;
+  grade: string | null;
+  secondSignatoryName: string | null;
+  secondSignatoryTitle: string | null;
+  revokedAt?: Date | null;
 }): CertificateDetail {
   return {
     id: certificate.id,
     verificationCode: certificate.verificationCode,
     enrollmentId: certificate.enrollmentId,
+    trainingEnrollmentId: certificate.trainingEnrollmentId ?? null,
     recipientName: certificate.recipientName,
     programmeTitle: certificate.programmeTitle,
     issueDate: certificate.issueDate,
@@ -152,19 +167,118 @@ function toCertificateDetail(certificate: {
     versionNumber: certificate.versionNumber,
     pdfStorageKey: certificate.pdfStorageKey,
     createdAt: certificate.createdAt,
+    type: certificate.type,
+    collegeName: certificate.collegeName,
+    domain: certificate.domain,
+    periodStart: certificate.periodStart,
+    projectTitle: certificate.projectTitle,
+    grade: certificate.grade,
+    secondSignatoryName: certificate.secondSignatoryName,
+    secondSignatoryTitle: certificate.secondSignatoryTitle,
+    revokedAt: certificate.revokedAt ?? null,
   };
 }
 
-export class CertificateService {
-  /**
-   * Generates a unique, non-sequential verification code (64 bits from a CSPRNG).
-   * e.g. GARA-CERT-2026-F4B892A01C3D7E55
-   */
-  private generateVerificationCode(): string {
-    const year = new Date().getFullYear();
-    const randomHex = crypto.randomBytes(8).toString("hex").toUpperCase();
-    return `GARA-CERT-${year}-${randomHex}`;
+const isoDate = (date: Date) => date.toISOString().split("T")[0];
+
+/** Everything the PDF prints, from the certificate's stored snapshot (same at issue and download). */
+export function certificatePdfPayload(certificate: {
+  type: CertificateTypeKey;
+  recipientName: string;
+  programmeTitle: string;
+  issueDate: Date;
+  completionDate: Date;
+  verificationCode: string;
+  qrPayloadUrl: string;
+  signatoryName: string;
+  signatoryTitle: string;
+  collegeName: string | null;
+  domain: string | null;
+  periodStart: Date | null;
+  projectTitle: string | null;
+  grade: string | null;
+  secondSignatoryName: string | null;
+  secondSignatoryTitle: string | null;
+}): CertificatePdfPayload {
+  const details = CERTIFICATE_TYPES[certificate.type];
+  const facts = confirmedCompanyFacts()
+    .filter((fact) => fact.label === "CIN" || fact.label === "Udyam Registration No.")
+    .map((fact) => `${fact.label}: ${fact.value}`)
+    .join("    |    ");
+  return {
+    companyName: (COMPANY.registeredName ?? COMPANY.brandName).toUpperCase(),
+    companyFacts: facts || null,
+    title: details.title,
+    statement: details.statement,
+    recipientName: certificate.recipientName,
+    programmeTitle: certificate.programmeTitle,
+    issueDate: isoDate(certificate.issueDate),
+    completionDate: isoDate(certificate.completionDate),
+    verificationCode: certificate.verificationCode,
+    verificationUrl: certificate.qrPayloadUrl,
+    signatoryName: certificate.signatoryName,
+    signatoryTitle: certificate.signatoryTitle,
+    collegeName: certificate.collegeName,
+    domain: certificate.domain,
+    periodStart: certificate.periodStart ? isoDate(certificate.periodStart) : null,
+    projectTitle: certificate.projectTitle,
+    grade: certificate.grade,
+    secondSignatoryName: certificate.secondSignatoryName,
+    secondSignatoryTitle: certificate.secondSignatoryTitle,
+  };
+}
+
+/** The source record of a certificate, for access checks. */
+const CERTIFICATE_SOURCE_INCLUDE = {
+  enrollment: { select: { userId: true, supervisorId: true } },
+  trainingEnrollment: { select: { userId: true, batchId: true } },
+  ambassador: { select: { userId: true } },
+} as const;
+
+interface CertificateSources {
+  enrollment: { userId: string; supervisorId: string | null } | null;
+  trainingEnrollment: { userId: string; batchId: string } | null;
+  ambassador: { userId: string } | null;
+}
+
+/**
+ * Revoke and reissue: internship certificates follow the evaluation scope; training and
+ * Campus Ambassador certificates are for administrators only.
+ */
+function assertCertificateDecisionScope(
+  access: Awaited<ReturnType<typeof assertEvaluationDecisionAuthority>>,
+  user: AuthenticatedUser,
+  certificate: CertificateSources
+): void {
+  if (certificate.enrollment) {
+    assertEnrollmentInScope(access, user, certificate.enrollment);
+    return;
   }
+  if (!user.roles.includes(Role.ADMIN)) {
+    throw new ForbiddenError("Only administrators can change Industrial Training certificates.");
+  }
+}
+
+/** Training certificate downloads by staff: administrators and the batch's mentors. */
+async function canViewTrainingCertificate(
+  actor: { id: string; roles: Role[] },
+  trainingEnrollment: { batchId: string } | null
+): Promise<boolean> {
+  if (!trainingEnrollment) return false;
+  if (actor.roles.includes(Role.ADMIN)) return true;
+  const mentor = await prisma.trainingBatchMentor.findUnique({
+    where: { batchId_userId: { batchId: trainingEnrollment.batchId, userId: actor.id } },
+    select: { userId: true },
+  });
+  return mentor !== null;
+}
+
+/** A new certificate ID: GARA-{type prefix}-{year}-{6 characters}, from a CSPRNG. */
+export function generateCertificateCode(type: CertificateTypeKey, now = new Date()): string {
+  return formatCertificateCode(type, now.getFullYear(), (max) => crypto.randomInt(max));
+}
+
+export class CertificateService {
 
   /**
    * Record or update the internship completion checklist.
@@ -267,8 +381,13 @@ export class CertificateService {
     if (!signatoryName || !signatoryTitle) {
       throw new ValidationError("Signatory name and title are required to issue a certificate.");
     }
+    const secondSignatoryName = input.secondSignatoryName?.trim() || null;
+    const secondSignatoryTitle = input.secondSignatoryTitle?.trim() || null;
+    if (Boolean(secondSignatoryName) !== Boolean(secondSignatoryTitle)) {
+      throw new ValidationError("Enter both the name and the title of the second signatory, or neither.");
+    }
 
-    const verificationCode = this.generateVerificationCode();
+    const verificationCode = generateCertificateCode("INTERNSHIP_COMPLETION");
     const qrPayloadUrl = `${getPublicBaseUrl()}/verify/${verificationCode}`;
 
     try {
@@ -283,7 +402,8 @@ export class CertificateService {
             user: true,
             application: {
               include: {
-                opening: true,
+                opening: { include: { track: { select: { name: true } } } },
+                candidate: { select: { college: { select: { name: true } } } },
               },
             },
             completion: true,
@@ -327,34 +447,34 @@ export class CertificateService {
           throw new ValidationError("Certificate generation blocked: intern is not marked eligible for certificate");
         }
 
-        const recipientName = enrollment.user.name;
-        const programmeTitle = `${enrollment.application.opening.title} Internship`;
-        const issueDate = new Date();
-        const completionDate = enrollment.completion.approvedAt || issueDate;
-
-        // Render once so a generator failure blocks issuance instead of producing an unusable record.
-        await certificatePdfGenerator.generateCertificatePdf({
-          recipientName,
-          programmeTitle,
-          issueDate: issueDate.toISOString().split("T")[0],
-          completionDate: completionDate.toISOString().split("T")[0],
+        const { opening } = enrollment.application;
+        const snapshot = {
+          type: "INTERNSHIP_COMPLETION" as const,
+          recipientName: enrollment.user.name,
+          programmeTitle: `${opening.title} Internship`,
+          issueDate: new Date(),
+          completionDate: enrollment.completion.approvedAt || new Date(),
           verificationCode,
-          verificationUrl: qrPayloadUrl,
+          qrPayloadUrl,
           signatoryName,
           signatoryTitle,
-        });
+          secondSignatoryName,
+          secondSignatoryTitle,
+          // Printed details, captured now so later profile or opening edits never change them.
+          collegeName: enrollment.application.candidate.college?.name ?? null,
+          domain: opening.track?.name ?? opening.department,
+          periodStart: input.periodStart ? new Date(`${input.periodStart}T00:00:00Z`) : enrollment.startDate,
+          projectTitle: input.projectTitle?.trim() || null,
+          grade: input.grade?.trim() || null,
+        };
+
+        // Render once so a generator failure blocks issuance instead of producing an unusable record.
+        await certificatePdfGenerator.generateCertificatePdf(certificatePdfPayload(snapshot));
 
         const created = await tx.certificate.create({
           data: {
-            verificationCode,
+            ...snapshot,
             enrollmentId: input.enrollmentId,
-            recipientName,
-            programmeTitle,
-            issueDate,
-            completionDate,
-            signatoryTitle,
-            signatoryName,
-            qrPayloadUrl,
             status: CertificateStatus.ACTIVE,
             versionNumber: 1,
             issuedById: user.id,
@@ -420,21 +540,15 @@ export class CertificateService {
         where: { verificationCode: cleanCode },
         select: {
           id: true,
+          type: true,
           verificationCode: true,
           recipientName: true,
           programmeTitle: true,
+          periodStart: true,
           issueDate: true,
           completionDate: true,
-          signatoryTitle: true,
-          signatoryName: true,
           status: true,
-          enrollment: {
-            select: {
-              status: true,
-              checkpoints: { select: { status: true } },
-              completion: { select: { status: true } },
-            },
-          },
+          revokedAt: true,
         },
       });
 
@@ -458,39 +572,37 @@ export class CertificateService {
 
       await logLookup(certificate.id);
 
+      // Only the fields the careers plan allows: status, name, programme, dates, issue date.
+      const publicFields = {
+        status: certificate.status,
+        verificationCode: certificate.verificationCode,
+        typeLabel: CERTIFICATE_TYPES[certificate.type].label,
+        recipientName: certificate.recipientName,
+        programmeTitle: certificate.programmeTitle,
+        ...(certificate.periodStart ? { periodStart: isoDate(certificate.periodStart) } : {}),
+        issueDate: isoDate(certificate.issueDate),
+        completionDate: isoDate(certificate.completionDate),
+      };
+
+      if (certificate.status === CertificateStatus.REVOKED) {
+        // A revoked certificate still identifies whose it was; the reason is never shown.
+        return {
+          valid: false,
+          ...publicFields,
+          ...(certificate.revokedAt ? { revokedOn: isoDate(certificate.revokedAt) } : {}),
+          error: REVOKED_MESSAGE,
+        };
+      }
       if (certificate.status !== CertificateStatus.ACTIVE) {
         return {
           valid: false,
           status: certificate.status,
           verificationCode: certificate.verificationCode,
-          error:
-            certificate.status === CertificateStatus.REVOKED
-              ? REVOKED_MESSAGE
-              : certificate.status === CertificateStatus.SUPERSEDED
-                ? SUPERSEDED_MESSAGE
-                : INACTIVE_MESSAGE,
+          error: certificate.status === CertificateStatus.SUPERSEDED ? SUPERSEDED_MESSAGE : INACTIVE_MESSAGE,
         };
       }
 
-      const { enrollment } = certificate;
-      const evaluationRequirementsFulfilled =
-        enrollment.status === EvaluationStatus.PASSED &&
-        enrollment.checkpoints.length > 0 &&
-        enrollment.checkpoints.every((cp) => cp.status === CheckpointStatus.REVIEWED) &&
-        enrollment.completion?.status === CompletionStatus.APPROVED;
-
-      return {
-        valid: true,
-        status: certificate.status,
-        verificationCode: certificate.verificationCode,
-        recipientName: certificate.recipientName,
-        programmeTitle: certificate.programmeTitle,
-        issueDate: certificate.issueDate.toISOString().split("T")[0],
-        completionDate: certificate.completionDate.toISOString().split("T")[0],
-        signatoryTitle: certificate.signatoryTitle,
-        signatoryName: certificate.signatoryName,
-        evaluationRequirementsFulfilled,
-      };
+      return { valid: true, ...publicFields };
     } catch (error) {
       console.error("[CertificateService] Database lookup failed during verification:", error);
       return {
@@ -498,6 +610,54 @@ export class CertificateService {
         error: "Verification registry temporarily unreachable. Please verify your connection or try again shortly.",
       };
     }
+  }
+
+  /**
+   * Revoke an ACTIVE certificate (for example for plagiarism, misconduct, false information or an
+   * issuing error, as the Terms state). Same authority as issuing. The reason is recorded for
+   * staff and the audit log; public verification shows only that the certificate is revoked.
+   */
+  async revokeCertificate(user: AuthenticatedUser, input: RevokeCertificateInput): Promise<CertificateDetail> {
+    const access = await assertEvaluationDecisionAuthority(user);
+    const reason = input.reason.trim();
+    if (reason.length < 10) {
+      throw new ValidationError("Please give a revocation reason of at least 10 characters.");
+    }
+
+    const current = await prisma.certificate.findUnique({
+      where: { id: input.certificateId },
+      include: CERTIFICATE_SOURCE_INCLUDE,
+    });
+    if (!current) {
+      throw new NotFoundError("Certificate not found");
+    }
+    assertCertificateDecisionScope(access, user, current);
+    if (current.status !== CertificateStatus.ACTIVE) {
+      throw new ConflictError(`Only active certificates can be revoked (current status: ${current.status}).`);
+    }
+
+    const revoked = await prisma.$transaction(async (tx) => {
+      const updated = await tx.certificate.updateMany({
+        where: { id: current.id, status: CertificateStatus.ACTIVE },
+        data: { status: CertificateStatus.REVOKED, revokedAt: new Date(), revocationReason: reason },
+      });
+      if (updated.count !== 1) {
+        throw new ConflictError("The certificate changed while it was being revoked. Please reload.");
+      }
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: primaryActorRole(user),
+          action: "CERTIFICATE_REVOKED",
+          resourceType: "Certificate",
+          resourceId: current.id,
+          diffPayload: { verificationCode: current.verificationCode, reason },
+        },
+      });
+      return tx.certificate.findUniqueOrThrow({ where: { id: current.id } });
+    });
+
+    return toCertificateDetail(revoked);
   }
 
   /**
@@ -509,13 +669,13 @@ export class CertificateService {
 
     const currentCert = await prisma.certificate.findUnique({
       where: { id: input.certificateId },
-      include: { enrollment: { select: { userId: true, supervisorId: true } } },
+      include: CERTIFICATE_SOURCE_INCLUDE,
     });
 
     if (!currentCert) {
       throw new NotFoundError("Certificate not found");
     }
-    assertEnrollmentInScope(access, user, currentCert.enrollment);
+    assertCertificateDecisionScope(access, user, currentCert);
 
     if (currentCert.status !== CertificateStatus.ACTIVE) {
       throw new ConflictError(`Only active certificates can be reissued (current status: ${currentCert.status}).`);
@@ -526,7 +686,7 @@ export class CertificateService {
       throw new ValidationError("A reissue reason is required.");
     }
 
-    const newCode = this.generateVerificationCode();
+    const newCode = generateCertificateCode(currentCert.type);
     const qrPayloadUrl = `${getPublicBaseUrl()}/verify/${newCode}`;
     const signatoryName = input.signatoryName?.trim() || currentCert.signatoryName;
     const signatoryTitle = input.signatoryTitle?.trim() || currentCert.signatoryTitle;
@@ -598,33 +758,29 @@ export class CertificateService {
   ): Promise<Buffer> {
     const cert = await prisma.certificate.findUnique({
       where: { id: certificateId },
-      include: { enrollment: { select: { userId: true, supervisorId: true } } },
+      include: CERTIFICATE_SOURCE_INCLUDE,
     });
 
     if (!cert) {
       throw new NotFoundError("Certificate not found");
     }
 
-    if (cert.enrollment.userId !== actorUserId) {
+    const ownerId = cert.enrollment?.userId ?? cert.trainingEnrollment?.userId ?? cert.ambassador?.userId;
+    if (ownerId !== actorUserId) {
       const actor = { id: actorUserId, roles: actorRoles };
-      const access = await assertEvaluationAccess(actor);
-      assertEnrollmentInScope(access, actor, cert.enrollment);
+      if (cert.enrollment) {
+        const access = await assertEvaluationAccess(actor);
+        assertEnrollmentInScope(access, actor, cert.enrollment);
+      } else if (cert.ambassador ? !actor.roles.includes(Role.ADMIN) : !(await canViewTrainingCertificate(actor, cert.trainingEnrollment))) {
+        throw new NotFoundError("Certificate not found");
+      }
     }
 
     if (cert.status !== CertificateStatus.ACTIVE) {
       throw new ConflictError("This certificate is no longer active and cannot be downloaded.");
     }
 
-    return certificatePdfGenerator.generateCertificatePdf({
-      recipientName: cert.recipientName,
-      programmeTitle: cert.programmeTitle,
-      issueDate: cert.issueDate.toISOString().split("T")[0],
-      completionDate: cert.completionDate.toISOString().split("T")[0],
-      verificationCode: cert.verificationCode,
-      verificationUrl: cert.qrPayloadUrl,
-      signatoryName: cert.signatoryName,
-      signatoryTitle: cert.signatoryTitle,
-    });
+    return certificatePdfGenerator.generateCertificatePdf(certificatePdfPayload(cert));
   }
 }
 

@@ -27,6 +27,21 @@ export const ADMIN_NAV_ITEMS: DashboardNavItem[] = [
     iconName: "GraduationCap",
   },
   {
+    label: "Industrial Training",
+    href: "/admin/training",
+    iconName: "BookOpen",
+  },
+  {
+    label: "Campus Ambassadors",
+    href: "/admin/campus-ambassadors",
+    iconName: "Users",
+  },
+  {
+    label: "Print Orders",
+    href: "/admin/print-orders",
+    iconName: "Package",
+  },
+  {
     label: "Job Openings",
     href: "/admin/openings",
     iconName: "Briefcase",

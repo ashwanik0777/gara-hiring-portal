@@ -29,6 +29,8 @@ const {
     userRole: { findMany: vi.fn() },
     employmentPeriod: { findMany: vi.fn() },
     conversionReview: { findMany: vi.fn() },
+    // Internship offer letters (Phase 5); none in these scenarios.
+    internshipOffer: { findFirst: vi.fn(async () => null) },
   },
   mockGetCurrentUser: vi.fn(),
   mockRedirect: vi.fn((url: string) => {

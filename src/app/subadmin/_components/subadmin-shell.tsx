@@ -1,5 +1,6 @@
 import React from "react";
 import { redirect } from "next/navigation";
+import { Role } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { scheduleAutomationTick } from "@/features/automation/heartbeat";
 import { getUserPermissions, STAFF_ROLES } from "@/lib/auth/permissions";
@@ -53,6 +54,10 @@ export async function SubAdminShell({
       href: `/subadmin${module.path}`,
       iconName: module.iconName,
     })),
+    // Industrial Training batches (Phase 3B): mentors run the batches they are assigned to.
+    ...(user.roles.includes(Role.MENTOR)
+      ? [{ label: "Training Batches", href: "/subadmin/training", iconName: "BookOpen" }]
+      : []),
     {
       label: "Chatbot Support",
       href: "/subadmin/chatbot",

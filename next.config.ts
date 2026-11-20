@@ -2,15 +2,22 @@ import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV === "development";
 
+// Razorpay Checkout (Industrial Training payments): its script, the payment iframe and its API.
+// The checkout is opened after client-side navigation too, so the allowance is site-wide.
+const RAZORPAY_SCRIPT = "https://checkout.razorpay.com";
+const RAZORPAY_FRAMES = "https://api.razorpay.com https://checkout.razorpay.com";
+const RAZORPAY_CONNECT = "https://api.razorpay.com https://lumberjack.razorpay.com";
+
 // React needs 'unsafe-eval' only in development (error stack reconstruction).
 // 'unsafe-inline' stays until a nonce-based CSP is adopted (requires dynamic rendering).
 const contentSecurityPolicy = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} ${RAZORPAY_SCRIPT}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  "img-src 'self' data: blob: https://cdn.razorpay.com",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  `connect-src 'self' ${RAZORPAY_CONNECT}`,
+  `frame-src ${RAZORPAY_FRAMES}`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -33,12 +40,14 @@ const securityHeaders = [
   },
   {
     key: "Permissions-Policy",
-    value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+    // Payments only for this site and the Razorpay checkout frame.
+    value: `camera=(), microphone=(), geolocation=(), payment=(self "https://api.razorpay.com" "https://checkout.razorpay.com"), usb=(), browsing-topics=()`,
   },
   {
-    // Pages opened from other sites get no window handle back to this one (and vice versa).
+    // Pages opened from other sites get no window handle back to this one. Popups this site
+    // opens keep theirs: Razorpay's bank and 3-D Secure windows report back to the checkout.
     key: "Cross-Origin-Opener-Policy",
-    value: "same-origin",
+    value: "same-origin-allow-popups",
   },
   {
     // Other sites cannot embed this app's responses (images, PDFs, JSON) in their pages.

@@ -13,6 +13,8 @@ import {
   TaskStatus,
   SubmissionReviewStatus,
 } from "@prisma/client";
+import type { CertificateDetail } from "@/features/certificates/types";
+import type { InternshipOfferRecord } from "@/features/internship-offers/services/internship-offer-service";
 
 export {
   EvaluationStatus,
@@ -136,6 +138,11 @@ export interface EvaluationEnrollmentDetail {
   candidateEmail: string;
   openingTitle: string;
   openingDepartment: string;
+  /** Opening listing details, used as defaults of the internship offer letter. */
+  openingDurationText: string | null;
+  openingStipendText: string | null;
+  /** The internship offer letter of this application (Phase 5), if issued. */
+  internshipOffer: InternshipOfferRecord | null;
   supervisor?: {
     id: string;
     name: string;
@@ -167,20 +174,5 @@ export interface EvaluationEnrollmentDetail {
     isEligibleForCertificate: boolean;
     completionNotes?: string | null;
   } | null;
-  certificate?: {
-    id: string;
-    verificationCode: string;
-    enrollmentId: string;
-    recipientName: string;
-    programmeTitle: string;
-    issueDate: Date;
-    completionDate: Date;
-    signatoryTitle: string;
-    signatoryName: string;
-    status: CertificateStatus;
-    qrPayloadUrl: string;
-    versionNumber: number;
-    pdfStorageKey?: string | null;
-    createdAt: Date;
-  } | null;
+  certificate?: CertificateDetail | null;
 }

@@ -35,8 +35,11 @@ test.describe("Security headers", () => {
     expect(headers["x-frame-options"]).toBe("DENY");
     expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
     expect(headers["permissions-policy"]).toContain("camera=()");
+    // Payments only for this site and the Razorpay checkout frame (Industrial Training).
+    expect(headers["permissions-policy"]).toContain('payment=(self "https://api.razorpay.com" "https://checkout.razorpay.com")');
     expect(headers["strict-transport-security"]).toContain("max-age=");
-    expect(headers["cross-origin-opener-policy"]).toBe("same-origin");
+    // Razorpay's bank and 3-D Secure popups must be able to report back to the checkout.
+    expect(headers["cross-origin-opener-policy"]).toBe("same-origin-allow-popups");
     expect(headers["cross-origin-resource-policy"]).toBe("same-site");
     expect(headers["x-powered-by"]).toBeUndefined();
 
@@ -44,6 +47,10 @@ test.describe("Security headers", () => {
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("object-src 'none'");
+    // Only Razorpay Checkout is allowed as a third-party script, frame and API.
+    expect(csp).toMatch(/script-src [^;]*https:\/\/checkout\.razorpay\.com/);
+    expect(csp).toContain("frame-src https://api.razorpay.com https://checkout.razorpay.com");
+    expect(csp).toMatch(/connect-src 'self' https:\/\/api\.razorpay\.com/);
   });
 
   test("the production CSP does not allow unsafe-eval", async ({ request }) => {

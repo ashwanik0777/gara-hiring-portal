@@ -98,7 +98,7 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
                 <span>AUTHENTIC & VERIFIED</span>
               </div>
               <h2 className="text-xl font-bold text-foreground mt-1 tracking-tight">
-                Certificate of Completion
+                {result.typeLabel ?? "Certificate of Completion"}
               </h2>
             </div>
 
@@ -116,7 +116,7 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
                 <div className="p-4 rounded-xl border border-border bg-background">
                   <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1">
                     <Award className="h-4 w-4 text-primary" />
-                    <span>Internship Programme</span>
+                    <span>Programme</span>
                   </div>
                   <p className="text-sm font-bold text-foreground">
                     {result.programmeTitle}
@@ -126,13 +126,10 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
                 <div className="p-4 rounded-xl border border-border bg-background">
                   <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1">
                     <UserCheck className="h-4 w-4 text-primary" />
-                    <span>Authorized Signatory</span>
+                    <span>Period</span>
                   </div>
-                  <p className="text-sm font-bold text-foreground">
-                    {result.signatoryName}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {result.signatoryTitle}
+                  <p className="text-sm font-semibold text-foreground font-mono">
+                    {result.periodStart ? `${result.periodStart} to ${result.completionDate}` : "—"}
                   </p>
                 </div>
 
@@ -172,9 +169,7 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
                   <span className="font-bold text-foreground block">
                     GARA Innovation Certificate Registry
                   </span>
-                  {result.evaluationRequirementsFulfilled
-                    ? "This certificate matches an active record in GARA Innovation's certificate registry. The record shows a passed supervised evaluation with every checkpoint reviewed and an approved completion decision."
-                    : "This certificate matches an active record in GARA Innovation's certificate registry."}
+                  This certificate matches an active record in GARA Innovation&apos;s certificate registry.
                 </div>
               </div>
             </div>
@@ -205,6 +200,28 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
             <div className="text-center font-mono text-xs text-muted-foreground">
               Query Code: <span className="font-bold text-foreground">{code}</span>
             </div>
+            {result.status === "REVOKED" && result.recipientName && (
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-border bg-background p-4 text-sm">
+                <div>
+                  <dt className="text-xs text-muted-foreground">Issued to</dt>
+                  <dd className="font-semibold text-foreground">{result.recipientName}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">Programme</dt>
+                  <dd className="font-semibold text-foreground">{result.programmeTitle}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">Issued on</dt>
+                  <dd className="font-mono text-foreground">{result.issueDate}</dd>
+                </div>
+                {result.revokedOn && (
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Revoked on</dt>
+                    <dd className="font-mono text-foreground">{result.revokedOn}</dd>
+                  </div>
+                )}
+              </dl>
+            )}
             <p className="text-sm text-center text-muted-foreground leading-relaxed">
               {result.error ||
                 "The credential could not be verified in our records. It may have been revoked, superseded, or entered with an incorrect verification ID."}

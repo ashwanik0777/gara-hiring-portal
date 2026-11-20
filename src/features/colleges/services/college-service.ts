@@ -82,7 +82,7 @@ export async function resolveCollegeChoice(
 }
 
 // -----------------------------------------------------------------------------
-// Staff moderation (approve and rename; merging duplicates follows in Phase 6)
+// Staff moderation (approve, rename and merge duplicates)
 // -----------------------------------------------------------------------------
 
 export const STAFF_COLLEGE_LIMIT = 500;
@@ -149,8 +149,48 @@ export async function updateCollege(id: string, input: CollegeUpdateInput, user:
     });
   } catch (error) {
     if (typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2002") {
-      throw new ConflictError("Another college already has this name. Merging duplicates comes in a later update.");
+      throw new ConflictError("Another college already has this name. Merge the two colleges instead.");
     }
     throw error;
   }
+}
+
+/**
+ * Staff Mutation: merges a duplicate college into the one to keep. Students and ambassadors move
+ * to the kept college and the duplicate is removed. Certificates keep the college name printed
+ * on them. Refused when both colleges have an approved Campus Ambassador Lead.
+ */
+export async function mergeColleges(input: { sourceId: string; targetId: string }, user: AuthenticatedUser) {
+  await assertPermission(user, "canApplications");
+  if (input.sourceId === input.targetId) throw new ValidationError("Choose two different colleges.");
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "colleges" WHERE "id" IN (${input.sourceId}, ${input.targetId}) FOR UPDATE`;
+    const [source, target] = await Promise.all([
+      tx.college.findUnique({ where: { id: input.sourceId }, select: { id: true, name: true, status: true } }),
+      tx.college.findUnique({ where: { id: input.targetId }, select: { id: true, name: true, status: true } }),
+    ]);
+    if (!source || !target) throw new NotFoundError("College does not exist.");
+    const leads = await tx.campusAmbassador.count({
+      where: { collegeId: { in: [source.id, target.id] }, role: "LEAD", status: "APPROVED" },
+    });
+    if (leads > 1) throw new ConflictError("Both colleges have a Campus Ambassador Lead. Deactivate one Lead first.");
+
+    const students = await tx.candidateProfile.updateMany({ where: { collegeId: source.id }, data: { collegeId: target.id } });
+    const ambassadors = await tx.campusAmbassador.updateMany({ where: { collegeId: source.id }, data: { collegeId: target.id } });
+    await tx.college.delete({ where: { id: source.id } });
+    if (source.status === CollegeStatus.APPROVED && target.status !== CollegeStatus.APPROVED) {
+      await tx.college.update({ where: { id: target.id }, data: { status: CollegeStatus.APPROVED } });
+    }
+    await tx.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorRole: user.roles[0],
+        action: "COLLEGE_MERGED",
+        resourceType: "college",
+        resourceId: target.id,
+        diffPayload: { mergedId: source.id, mergedName: source.name, keptName: target.name, students: students.count, ambassadors: ambassadors.count },
+      },
+    });
+    return { students: students.count, ambassadors: ambassadors.count };
+  });
 }

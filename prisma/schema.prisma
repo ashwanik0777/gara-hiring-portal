@@ -59,6 +59,17 @@ model User {
   twoFactors                   TwoFactor[]
   updatedPayoutProfiles        EmployeePayoutProfile[]    @relation("PayoutProfileEditors")
   suggestedColleges            College[]                  @relation("SuggestedColleges")
+  issuedInternshipOffers       InternshipOffer[]          @relation("IssuedInternshipOffers")
+  trainingEnrollments          TrainingEnrollment[]       @relation("TrainingEnrollments")
+  decidedTrainingRefunds       TrainingRefund[]           @relation("TrainingRefundDeciders")
+  mentoredTrainingBatches      TrainingBatchMentor[]      @relation("TrainingBatchMentors")
+  // Campus Ambassador programme (Phase 4)
+  campusAmbassador             CampusAmbassador?          @relation("AmbassadorUser")
+  referredByAmbassadorId       String?
+  referredByAmbassador         CampusAmbassador?          @relation("AmbassadorReferrals", fields: [referredByAmbassadorId], references: [id], onDelete: SetNull)
+  referredAt                   DateTime?
+  trainingDemoSlots            TrainingDemoSlot[]         @relation("TrainingDemoMentor")
+  certificatePrintOrders       CertificatePrintOrder[]
 
   @@index([createdAt])
 
@@ -249,6 +260,7 @@ model College {
   updatedAt      DateTime           @updatedAt
 
   candidates     CandidateProfile[]
+  ambassadors    CampusAmbassador[]
 
   @@index([status, name])
   @@map("colleges")
@@ -468,6 +480,7 @@ model Track {
   updatedAt   DateTime  @updatedAt
 
   openings    Opening[]
+  programmes  TrainingProgram[]
 
   @@index([isActive, sortOrder])
   @@map("tracks")
@@ -538,6 +551,7 @@ model Application {
   interviewSchedules InterviewSchedule[]
   enrollment         InternshipEnrollment?
   jobOffer           JobOffer?                  @relation("ApplicationOffer")
+  internshipOffer    InternshipOffer?
   hiredEmployee      Employee?                  @relation("HiredApplication")
   employmentPeriods  EmploymentPeriod[]         @relation("PeriodApplication")
   interviewBookingRequests InterviewBookingRequest[]
@@ -869,6 +883,14 @@ enum CertificateStatus {
   SUPERSEDED
 }
 
+// What a certificate recognises (careers plan, 2026-11-19). Training and Campus Ambassador
+// certificates get their own source records with those modules (Phases 3 and 4).
+enum CertificateType {
+  INTERNSHIP_COMPLETION
+  TRAINING_COMPLETION
+  CAMPUS_AMBASSADOR
+}
+
 model InternCompletion {
   id                       String               @id @default(uuid())
   enrollmentId             String               @unique
@@ -889,8 +911,13 @@ model InternCompletion {
 model Certificate {
   id               String               @id @default(uuid())
   verificationCode String               @unique // Unique verification identifier
-  enrollmentId     String               @unique // Enforces idempotency: only 1 certificate per enrollment
-  enrollment       InternshipEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  // Exactly one source (CHECK constraint): an internship enrollment or a training enrollment.
+  enrollmentId     String?              @unique // Enforces idempotency: only 1 certificate per enrollment
+  enrollment       InternshipEnrollment? @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  trainingEnrollmentId String?            @unique
+  trainingEnrollment   TrainingEnrollment? @relation(fields: [trainingEnrollmentId], references: [id], onDelete: Restrict)
+  ambassadorId         String?            @unique
+  ambassador           CampusAmbassador?  @relation(fields: [ambassadorId], references: [id], onDelete: Restrict)
   recipientName    String
   programmeTitle   String
   issueDate        DateTime
@@ -907,9 +934,20 @@ model Certificate {
   issuedBy         User?                @relation("IssuedCertificates", fields: [issuedById], references: [id], onDelete: SetNull)
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
+  // Phase 5 (2026-11-19): type, and details printed on the certificate, captured at issue time
+  // so later profile or opening edits never change an issued certificate.
+  type                 CertificateType  @default(INTERNSHIP_COMPLETION)
+  collegeName          String?
+  domain               String?
+  periodStart          DateTime?
+  projectTitle         String?
+  grade                String?
+  secondSignatoryName  String?
+  secondSignatoryTitle String?
 
   reissueHistory   CertificateReissueHistory[]
   verificationLogs CertificateVerificationLog[]
+  printOrders      CertificatePrintOrder[]
 
   @@map("certificates")
 }
@@ -1414,4 +1452,561 @@ model InterviewSlotOption {
 
   @@index([requestId, status])
   @@map("interview_slot_options")
+}
+
+// Internship offer letter (Phase 5): issued by staff after the supervised evaluation passes,
+// before the intern joins. Its details prefill "Mark as joined". One letter per application;
+// editing it raises the version.
+model InternshipOffer {
+  id             String      @id @default(uuid())
+  applicationId  String      @unique
+  application    Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  designation    String
+  department     String
+  startDate      DateTime
+  // As agreed with the intern, e.g. "3 months, extendable"
+  tenureText     String
+  stipendText    String?
+  signatoryName  String
+  signatoryTitle String
+  version        Int         @default(1)
+  issuedById     String?
+  issuedBy       User?       @relation("IssuedInternshipOffers", fields: [issuedById], references: [id], onDelete: SetNull)
+  issuedAt       DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@map("internship_offers")
+}
+
+// -----------------------------------------------------------------------------
+// Industrial Training (Phase 3, product owner plan 2026-11-19). Paid programme; amounts
+// are integers in paise (INR). The digital certificate is included in the fee.
+// -----------------------------------------------------------------------------
+
+enum TrainingProgramStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum TrainingBatchStatus {
+  UPCOMING
+  RUNNING
+  COMPLETED
+  CANCELLED
+}
+
+enum TrainingEnrollmentStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  REFUND_REQUESTED
+  REFUNDED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum TrainingPaymentStatus {
+  CREATED
+  CAPTURED
+  FAILED
+}
+
+enum TrainingRefundStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PROCESSED
+  FAILED
+}
+
+model TrainingProgram {
+  id            String                @id @default(uuid())
+  // URL segment of /training/{slug}
+  slug          String                @unique
+  title         String
+  trackId       String?
+  track         Track?                @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  summary       String
+  description   String
+  // Ordered weekly modules: [{ "week": 1, "title": "...", "topics": ["..."] }]
+  syllabus      Json                  @default("[]")
+  durationWeeks Int
+  feePaise      Int
+  prerequisites String?
+  outcomes      String?
+  status        TrainingProgramStatus @default(DRAFT)
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  batches       TrainingBatch[]
+
+  @@index([status])
+  @@map("training_programs")
+}
+
+model TrainingBatch {
+  id                 String               @id @default(uuid())
+  programId          String
+  program            TrainingProgram      @relation(fields: [programId], references: [id], onDelete: Restrict)
+  name               String
+  startDate          DateTime
+  // First live class; the refund window ends 24 hours after it
+  firstClassAt       DateTime?
+  endDate            DateTime?
+  scheduleText       String?
+  seats              Int
+  enrollmentDeadline DateTime?
+  status             TrainingBatchStatus  @default(UPCOMING)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  enrollments        TrainingEnrollment[]
+  mentors            TrainingBatchMentor[]
+  sessions           TrainingSession[]
+  assignments        TrainingAssignment[]
+  demoSlots          TrainingDemoSlot[]
+
+  @@index([programId, status, startDate])
+  @@map("training_batches")
+}
+
+model TrainingEnrollment {
+  id                String                   @id @default(uuid())
+  userId            String
+  user              User                     @relation("TrainingEnrollments", fields: [userId], references: [id], onDelete: Restrict)
+  batchId           String
+  batch             TrainingBatch            @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  status            TrainingEnrollmentStatus @default(PENDING_PAYMENT)
+  listPricePaise    Int
+  discountPaise     Int                      @default(0)
+  amountPaidPaise   Int                      @default(0)
+  // Campus Ambassador code used at checkout (Phase 4)
+  referralCode      String?
+  // "Payment Receipt" number, sequential, set when the payment is captured
+  receiptNo         String?                  @unique
+  transferCount     Int                      @default(0)
+  // A pending enrollment holds its seat until this time
+  seatHoldExpiresAt DateTime?
+  paidAt            DateTime?
+  consentAt         DateTime?
+  consentVersion    String?
+  // Phase 3B: a free re-attempt after a fail points at the failed enrollment (one each)
+  reattemptOfId     String?                  @unique
+  reattemptOf       TrainingEnrollment?      @relation("TrainingReattempts", fields: [reattemptOfId], references: [id], onDelete: Restrict)
+  reattempt         TrainingEnrollment?      @relation("TrainingReattempts")
+  // Final result (COMPLETED or FAILED): who decided, when, and the criteria at that moment
+  resultAt          DateTime?
+  resultById        String?
+  resultNote        String?
+  resultSnapshot    Json?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  payments          TrainingPayment[]
+  refunds           TrainingRefund[]
+  attendance        TrainingAttendance[]
+  submissions       TrainingSubmission[]
+  finalProject      TrainingFinalProject?
+  demoBookings      TrainingDemoSlot[]
+  certificate       Certificate?
+  commission        AmbassadorCommission?
+
+  @@unique([userId, batchId])
+  @@index([batchId, status])
+  @@index([userId])
+  @@map("training_enrollments")
+}
+
+model TrainingPayment {
+  id                String                @id @default(uuid())
+  enrollmentId      String
+  enrollment        TrainingEnrollment    @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  razorpayOrderId   String                @unique
+  razorpayPaymentId String?               @unique
+  amountPaise       Int
+  status            TrainingPaymentStatus @default(CREATED)
+  capturedAt        DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  refunds           TrainingRefund[]
+
+  @@index([enrollmentId])
+  @@map("training_payments")
+}
+
+model TrainingRefund {
+  id               String               @id @default(uuid())
+  enrollmentId     String
+  enrollment       TrainingEnrollment   @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  paymentId        String
+  payment          TrainingPayment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  reason           String
+  amountPaise      Int
+  status           TrainingRefundStatus @default(REQUESTED)
+  razorpayRefundId String?              @unique
+  decidedById      String?
+  decidedBy        User?                @relation("TrainingRefundDeciders", fields: [decidedById], references: [id], onDelete: SetNull)
+  decisionNote     String?
+  requestedAt      DateTime             @default(now())
+  decidedAt        DateTime?
+  processedAt      DateTime?
+  updatedAt        DateTime             @updatedAt
+
+  @@index([status, requestedAt])
+  @@index([enrollmentId])
+  @@map("training_refunds")
+}
+
+// -----------------------------------------------------------------------------
+// Industrial Training learning area (Phase 3B). Actor columns (markedById, gradedById,
+// reviewedById, resultById) keep the user id without a foreign key: the audit log is the
+// record, and deleting a staff account must not be blocked by grades it gave.
+// -----------------------------------------------------------------------------
+
+enum TrainingSessionStatus {
+  SCHEDULED
+  CANCELLED
+}
+
+enum TrainingProjectStatus {
+  SUBMITTED
+  CHANGES_REQUESTED
+  PASSED
+  FAILED
+}
+
+enum TrainingDemoResult {
+  PASSED
+  FAILED
+}
+
+model TrainingBatchMentor {
+  batchId      String
+  batch        TrainingBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User          @relation("TrainingBatchMentors", fields: [userId], references: [id], onDelete: Cascade)
+  assignedById String?
+  createdAt    DateTime      @default(now())
+
+  @@id([batchId, userId])
+  @@index([userId])
+  @@map("training_batch_mentors")
+}
+
+model TrainingSession {
+  id                  String                @id @default(uuid())
+  batchId             String
+  batch               TrainingBatch         @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  title               String
+  startsAt            DateTime
+  durationMinutes     Int
+  // Visible to the batch's enrolled students and its mentors only
+  meetingUrl          String?
+  recordingUrl        String?
+  status              TrainingSessionStatus @default(SCHEDULED)
+  attendanceTakenAt   DateTime?
+  attendanceTakenById String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  attendance          TrainingAttendance[]
+
+  @@index([batchId, startsAt])
+  @@map("training_sessions")
+}
+
+model TrainingAttendance {
+  sessionId    String
+  session      TrainingSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  enrollmentId String
+  enrollment   TrainingEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  present      Boolean
+  markedById   String?
+  markedAt     DateTime           @default(now())
+
+  @@id([sessionId, enrollmentId])
+  @@index([enrollmentId])
+  @@map("training_attendance")
+}
+
+model TrainingAssignment {
+  id          String               @id @default(uuid())
+  batchId     String
+  batch       TrainingBatch        @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  title       String
+  description String
+  dueAt       DateTime
+  maxMarks    Int
+  createdById String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  submissions TrainingSubmission[]
+
+  @@index([batchId, dueAt])
+  @@map("training_assignments")
+}
+
+model TrainingSubmission {
+  id           String             @id @default(uuid())
+  assignmentId String
+  assignment   TrainingAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  enrollmentId String
+  enrollment   TrainingEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  repoUrl      String?
+  linkUrl      String?
+  notes        String?
+  submittedAt  DateTime
+  marks        Int?
+  feedback     String?
+  gradedById   String?
+  gradedAt     DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([assignmentId, enrollmentId])
+  @@index([enrollmentId])
+  @@map("training_submissions")
+}
+
+model TrainingFinalProject {
+  id           String                @id @default(uuid())
+  enrollmentId String                @unique
+  enrollment   TrainingEnrollment    @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  title        String
+  description  String?
+  repoUrl      String
+  liveUrl      String?
+  status       TrainingProjectStatus @default(SUBMITTED)
+  submittedAt  DateTime
+  marks        Int?
+  feedback     String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@map("training_final_projects")
+}
+
+model TrainingDemoSlot {
+  id                 String              @id @default(uuid())
+  batchId            String
+  batch              TrainingBatch       @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  mentorId           String
+  mentor             User                @relation("TrainingDemoMentor", fields: [mentorId], references: [id], onDelete: Restrict)
+  startsAt           DateTime
+  durationMinutes    Int
+  meetingUrl         String?
+  bookedEnrollmentId String?
+  bookedEnrollment   TrainingEnrollment? @relation(fields: [bookedEnrollmentId], references: [id], onDelete: Restrict)
+  bookedAt           DateTime?
+  result             TrainingDemoResult?
+  resultNote         String?
+  resultAt           DateTime?
+  resultById         String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([batchId, startsAt])
+  @@index([bookedEnrollmentId])
+  @@map("training_demo_slots")
+}
+
+// -----------------------------------------------------------------------------
+// Campus Ambassador programme (Phase 4)
+// -----------------------------------------------------------------------------
+
+enum AmbassadorStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  DEACTIVATED
+}
+
+enum AmbassadorRole {
+  LEAD
+  ASSOCIATE
+}
+
+enum CommissionStatus {
+  // Earned; payable once the batch's refund window has closed (payableAt)
+  PENDING
+  PAID
+  // The enrollment was refunded
+  REVERSED
+}
+
+enum AmbassadorPayoutMethod {
+  RAZORPAYX
+  MANUAL
+}
+
+enum AmbassadorPayoutStatus {
+  PROCESSING
+  PAID
+  FAILED
+}
+
+model CampusAmbassador {
+  id             String              @id @default(uuid())
+  userId         String              @unique
+  user           User                @relation("AmbassadorUser", fields: [userId], references: [id], onDelete: Restrict)
+  collegeId      String?
+  college        College?            @relation(fields: [collegeId], references: [id], onDelete: SetNull)
+  phone          String
+  branch         String?
+  yearOfStudy    Int?
+  motivation     String
+  socialReach    String?
+  pastExperience String?
+  consentAt      DateTime
+  consentVersion String
+  status         AmbassadorStatus    @default(PENDING)
+  role           AmbassadorRole?
+  referralCode   String?             @unique
+  // First approval (the role's start on the certificate); the first 30 days are a trial
+  approvedAt     DateTime?
+  trialEndsAt    DateTime?
+  // Another applicant uses the same phone number (anti-abuse flag for staff)
+  duplicateFlag  String?
+  // UPI ID for payouts: encrypted, with the part before "@" masked for display
+  upiIdEncrypted String?
+  upiIdMasked    String?
+  razorpayContactId     String?
+  razorpayFundAccountId String?
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionNote   String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  referredUsers  User[]              @relation("AmbassadorReferrals")
+  clicks         ReferralClickDaily[]
+  commissions    AmbassadorCommission[]
+  payouts        AmbassadorPayout[]
+  certificate    Certificate?
+
+  @@index([status, collegeId])
+  @@index([phone])
+  @@map("campus_ambassadors")
+}
+
+// Referral link clicks per ambassador and day (India time), counted without storing visitors.
+model ReferralClickDaily {
+  ambassadorId String
+  ambassador   CampusAmbassador @relation(fields: [ambassadorId], references: [id], onDelete: Cascade)
+  day          String
+  clicks       Int              @default(0)
+
+  @@id([ambassadorId, day])
+  @@map("referral_click_daily")
+}
+
+model AmbassadorCommission {
+  id             String              @id @default(uuid())
+  ambassadorId   String
+  ambassador     CampusAmbassador    @relation(fields: [ambassadorId], references: [id], onDelete: Restrict)
+  enrollmentId   String              @unique
+  enrollment     TrainingEnrollment  @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  amountPaise    Int
+  status         CommissionStatus    @default(PENDING)
+  payableAt      DateTime
+  payoutId       String?
+  payout         AmbassadorPayout?   @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  reversedAt     DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([ambassadorId, status])
+  @@index([payoutId])
+  @@map("ambassador_commissions")
+}
+
+model AmbassadorPayout {
+  id               String                 @id @default(uuid())
+  ambassadorId     String
+  ambassador       CampusAmbassador       @relation(fields: [ambassadorId], references: [id], onDelete: Restrict)
+  grossPaise       Int
+  tdsPaise         Int                    @default(0)
+  netPaise         Int
+  method           AmbassadorPayoutMethod
+  status           AmbassadorPayoutStatus @default(PROCESSING)
+  razorpayPayoutId String?                @unique
+  utr              String?
+  failureReason    String?
+  createdById      String?
+  paidAt           DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  commissions      AmbassadorCommission[]
+
+  @@index([ambassadorId, createdAt])
+  @@map("ambassador_payouts")
+}
+
+// -----------------------------------------------------------------------------
+// Printed certificates (Phase 3C): an optional paid add-on for Industrial Training certificates
+// -----------------------------------------------------------------------------
+
+enum PrintDeliveryType {
+  COLLEGE_BULK
+  COURIER
+}
+
+enum PrintOrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PRINTED
+  SHIPPED
+  DELIVERED
+}
+
+model CertificatePrintOrder {
+  id                String            @id @default(uuid())
+  certificateId     String
+  certificate       Certificate       @relation(fields: [certificateId], references: [id], onDelete: Restrict)
+  userId            String
+  user              User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  deliveryType      PrintDeliveryType
+  recipientName     String
+  phone             String
+  // Courier address (required for COURIER), or the college for bulk delivery
+  addressLine1      String?
+  addressLine2      String?
+  city              String?
+  state             String?
+  pincode           String?
+  collegeName       String?
+  amountPaise       Int
+  status            PrintOrderStatus  @default(PENDING_PAYMENT)
+  razorpayOrderId   String            @unique
+  razorpayPaymentId String?           @unique
+  paidAt            DateTime?
+  receiptNo         String?           @unique
+  courierName       String?
+  trackingNo        String?
+  printedAt         DateTime?
+  shippedAt         DateTime?
+  deliveredAt       DateTime?
+  updatedById       String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([certificateId])
+  @@map("certificate_print_orders")
+}
+
+// Razorpay webhook deliveries already handled (idempotency: the same event is applied once).
+model PaymentWebhookEvent {
+  id         String   @id
+  event      String
+  receivedAt DateTime @default(now())
+
+  @@map("payment_webhook_events")
 }

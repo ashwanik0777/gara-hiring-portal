@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { LegalList, LegalPage, LegalSection, buildLegalMetadata } from "@/components/legal/legal-page";
-import { COMPANY } from "@/config/site";
+import { COMPANY, PRINTED_CERTIFICATE } from "@/config/site";
+import { formatInr } from "@/features/training/money";
+
+/** Delivery options with a price set (Phase 3C). */
+const PRINT_OPTIONS = (["COLLEGE_BULK", "COURIER"] as const)
+  .map((type) => ({ type, price: PRINTED_CERTIFICATE.pricesPaise[type], expectedDelivery: PRINTED_CERTIFICATE.expectedDelivery[type] }))
+  .filter((option): option is { type: "COLLEGE_BULK" | "COURIER"; price: number; expectedDelivery: string | null } => option.price !== null && option.price > 0);
 
 export const metadata = buildLegalMetadata(
   "Shipping & Delivery Policy",
@@ -41,10 +47,27 @@ export default function ShippingPolicyPage() {
           <li>in bulk through your college, or</li>
           <li>by courier to an address you give us.</li>
         </LegalList>
-        <p>
-          The price, the expected delivery time and the tracking details are shown before and after you order. Printed
-          orders are not open yet; this section will be completed before they open.
-        </p>
+        {PRINT_OPTIONS.length > 0 ? (
+          <>
+            <LegalList>
+              {PRINT_OPTIONS.map((option) => (
+                <li key={option.type}>
+                  {option.type === "COURIER" ? "Courier" : "Bulk through your college"}: {formatInr(option.price)}
+                  {option.expectedDelivery ? `, usually ${option.expectedDelivery}` : ""}.
+                </li>
+              ))}
+            </LegalList>
+            <p>
+              You order and pay from your training page; tracking details appear there and in an email once the certificate is
+              sent{PRINTED_CERTIFICATE.courierPartner ? ` (courier partner: ${PRINTED_CERTIFICATE.courierPartner})` : ""}.
+            </p>
+          </>
+        ) : (
+          <p>
+            The price, the expected delivery time and the tracking details are shown before and after you order. Printed
+            orders are not open yet; this section will be completed before they open.
+          </p>
+        )}
       </LegalSection>
 
       <LegalSection id="problems" title="4. Delivery problems">

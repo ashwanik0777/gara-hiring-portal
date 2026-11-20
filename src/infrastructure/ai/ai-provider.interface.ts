@@ -14,7 +14,9 @@ export interface FaqKnowledgeEntry {
     | "INTERNSHIP_ONBOARDING"
     | "PROGRESS_AND_TASKS"
     | "CERTIFICATES"
-    | "FULL_TIME_AND_HRMS";
+    | "FULL_TIME_AND_HRMS"
+    | "INDUSTRIAL_TRAINING"
+    | "CAMPUS_AMBASSADOR";
   question: string;
   answer: string;
   keywords: string[];

@@ -1,15 +1,18 @@
 import Link from "next/link";
 import Image from "next/image";
-import { Briefcase, CheckCircle, HelpCircle } from "lucide-react";
+import { Briefcase, CheckCircle, GraduationCap, HelpCircle, Users } from "lucide-react";
 import { NavbarAuthActions } from "./navbar-auth-actions";
 import { LinkPendingReporter, NavigationProgressBar } from "./navigation-progress";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { PAGE_GUTTER } from "@/components/layout/page-gutter";
 
+/** Full labels from 2xl; shorter ones below, where five links share the header with the logo. */
 const PUBLIC_NAV_LINKS = [
-  { href: "/careers", label: "Careers & Openings", icon: Briefcase },
-  { href: "/verify", label: "Verify Certificate", icon: CheckCircle },
-  { href: "/help", label: "Help & FAQ", icon: HelpCircle },
+  { href: "/careers", label: "Careers", short: "Careers", icon: Briefcase },
+  { href: "/training", label: "Industrial Training", short: "Training", icon: GraduationCap },
+  { href: "/campus-ambassador", label: "Campus Ambassador", short: "Ambassador", icon: Users },
+  { href: "/verify", label: "Verify Certificate", short: "Verify", icon: CheckCircle },
+  { href: "/help", label: "Help & FAQ", short: "Help", icon: HelpCircle },
 ] as const;
 
 export function Navbar({ user }: { user?: AuthenticatedUser | null }) {
@@ -20,7 +23,7 @@ export function Navbar({ user }: { user?: AuthenticatedUser | null }) {
 
       <div className={`${PAGE_GUTTER} flex h-16 items-center justify-between gap-3`}>
         {/* Brand Logo & Title */}
-        <Link href="/" className="flex min-w-0 items-center gap-3 group">
+        <Link href="/" className="flex min-w-0 shrink-0 items-center gap-3 group">
           <div className="relative h-10 w-10 overflow-hidden rounded-lg border border-border/60 bg-white p-0.5 shadow-2xs">
             <Image
               src="/brand/gara-logo.png"
@@ -40,15 +43,22 @@ export function Navbar({ user }: { user?: AuthenticatedUser | null }) {
 
         {/* Public Navigation Links (default prefetch: the destination's App Shell) */}
         {/* From lg up (narrower headers have no room for the links without wrapping). */}
-        <nav className="hidden lg:flex items-center gap-5 xl:gap-6 text-sm font-medium whitespace-nowrap">
-          {PUBLIC_NAV_LINKS.map(({ href, label, icon: Icon }) => (
+        <nav className="hidden lg:flex items-center gap-4 xl:gap-6 text-sm font-medium whitespace-nowrap">
+          {PUBLIC_NAV_LINKS.map(({ href, label, short, icon: Icon }) => (
             <Link
               key={href}
               href={href}
               className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
             >
-              <Icon className="hidden xl:block h-4 w-4" aria-hidden="true" />
-              {label}
+              <Icon className="hidden 2xl:block h-4 w-4" aria-hidden="true" />
+              {short === label ? (
+                label
+              ) : (
+                <>
+                  <span className="2xl:hidden">{short}</span>
+                  <span className="hidden 2xl:inline">{label}</span>
+                </>
+              )}
               <LinkPendingReporter />
             </Link>
           ))}

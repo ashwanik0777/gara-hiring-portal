@@ -108,9 +108,31 @@ test.describe("Internship journey (requires E2E_DATABASE_URL)", () => {
       await hrPage.reload();
     });
 
+    await test.step("HR issues the internship offer letter and the candidate downloads it", async () => {
+      // The form submits through React; wait until the page has hydrated after the reload.
+      await hrPage.waitForLoadState("networkidle");
+      await hrPage.getByLabel("Start date *", { exact: true }).fill(dateInputValue(0));
+      await hrPage.getByLabel("Signatory name *", { exact: true }).fill("E2E Director");
+      await expect(hrPage.getByLabel("Tenure *", { exact: true })).toHaveValue("3 months");
+      await hrPage.getByRole("button", { name: "Issue offer letter" }).click();
+      await expect(hrPage.getByRole("status").filter({ hasText: "Offer letter issued." })).toBeVisible();
+
+      await candidatePage.goto(`/candidate/applications/${applicationId}`);
+      await expect(candidatePage.getByText("Your internship offer letter")).toBeVisible();
+      const download = candidatePage.getByRole("link", { name: /Download offer letter/ });
+      const href = await download.getAttribute("href");
+      expect(href).toBe(`/api/internship-offers/${applicationId}/letter`);
+      const pdf = await candidatePage.request.get(href ?? "");
+      expect(pdf.status()).toBe(200);
+      expect(pdf.headers()["content-type"]).toContain("application/pdf");
+      await hrPage.reload();
+    });
+
     await test.step("HR marks the intern as joined", async () => {
       await hrPage.getByRole("button", { name: "Mark as joined", exact: true }).click();
       const dialog = hrPage.getByRole("dialog", { name: /^Mark as joined:/ });
+      // The joining form is prefilled from the offer letter.
+      await expect(dialog.getByLabel(/^Joining date/)).toHaveValue(dateInputValue(0));
       await dialog.getByLabel(/^Employee code/).fill(candidate.employeeCode);
       await dialog.getByLabel(/^Joining date/).fill(dateInputValue(0));
       await expect(dialog.getByLabel(/^Department/)).not.toHaveValue("");

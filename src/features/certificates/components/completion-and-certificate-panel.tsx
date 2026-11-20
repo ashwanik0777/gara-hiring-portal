@@ -4,7 +4,13 @@ import React, { useState } from "react";
 import type { CertificateDetail } from "../types";
 import { CertificateStatus, CompletionStatus } from "@/types/enums";
 import { COMPLETION_CHECKLIST_TEMPLATE, SIGNATORY_FIELD_MAX_LENGTH } from "../constants";
-import { recordCompletionChecklistAction, issueCertificateAction, reissueCertificateAction } from "../actions";
+import {
+  recordCompletionChecklistAction,
+  issueCertificateAction,
+  reissueCertificateAction,
+  revokeCertificateAction,
+} from "../actions";
+import { CERTIFICATE_SIGNATORIES } from "@/config/site";
 import { CertificateCard } from "./certificate-card";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -69,8 +75,17 @@ export function CompletionAndCertificatePanel({
   const [completionNotes, setCompletionNotes] = useState<string>(
     completion?.completionNotes || ""
   );
-  const [signatoryName, setSignatoryName] = useState("");
-  const [signatoryTitle, setSignatoryTitle] = useState("");
+  // Prefilled from the configured signatories (src/config/site.ts); the issuer can change them.
+  const [signatoryName, setSignatoryName] = useState(CERTIFICATE_SIGNATORIES.primary.name ?? "");
+  const [signatoryTitle, setSignatoryTitle] = useState(CERTIFICATE_SIGNATORIES.primary.title);
+  const [secondSignatoryName, setSecondSignatoryName] = useState(CERTIFICATE_SIGNATORIES.secondary.name ?? "");
+  const [secondSignatoryTitle, setSecondSignatoryTitle] = useState(CERTIFICATE_SIGNATORIES.secondary.title);
+  const [projectTitle, setProjectTitle] = useState("");
+  const [grade, setGrade] = useState("");
+  const [periodStart, setPeriodStart] = useState("");
+  const [revokeReason, setRevokeReason] = useState("");
+  const [showRevokeDialog, setShowRevokeDialog] = useState(false);
+  const [isRevoking, setIsRevoking] = useState(false);
 
   const [isUpdatingChecklist, setIsUpdatingChecklist] = useState(false);
   const [isIssuingCert, setIsIssuingCert] = useState(false);
@@ -139,6 +154,14 @@ export function CompletionAndCertificatePanel({
     formData.append("enrollmentId", enrollmentId);
     formData.append("signatoryName", signatoryName);
     formData.append("signatoryTitle", signatoryTitle);
+    // The second signatory is printed only when a name is given.
+    if (secondSignatoryName.trim()) {
+      formData.append("secondSignatoryName", secondSignatoryName);
+      formData.append("secondSignatoryTitle", secondSignatoryTitle);
+    }
+    formData.append("projectTitle", projectTitle);
+    formData.append("grade", grade);
+    formData.append("periodStart", periodStart);
 
     try {
       const res = await issueCertificateAction(formData);
@@ -151,6 +174,30 @@ export function CompletionAndCertificatePanel({
       setError("An unexpected error occurred");
     } finally {
       setIsIssuingCert(false);
+    }
+  };
+
+  const handleRevokeCertificate = async () => {
+    if (!certificate || revokeReason.trim().length < 10) return;
+    setError(null);
+    setSuccess(null);
+    setIsRevoking(true);
+    const formData = new FormData();
+    formData.append("certificateId", certificate.id);
+    formData.append("reason", revokeReason);
+    try {
+      const res = await revokeCertificateAction(formData);
+      if (!res.success) {
+        setError(res.error || "Failed to revoke certificate");
+      } else {
+        setSuccess("Certificate revoked. The verification page now shows it as revoked.");
+        setShowRevokeDialog(false);
+        setRevokeReason("");
+      }
+    } catch {
+      setError("An unexpected error occurred");
+    } finally {
+      setIsRevoking(false);
     }
   };
 
@@ -221,7 +268,7 @@ export function CompletionAndCertificatePanel({
           <div className="space-y-3">
             <CertificateCard certificate={certificate} />
             {canIssueCertificate && isCertificateActive && (
-              <div className="flex justify-end">
+              <div className="flex flex-wrap justify-end gap-2">
                 <Button
                   variant="outline"
                   size="sm"
@@ -230,6 +277,14 @@ export function CompletionAndCertificatePanel({
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Reissue Certificate (OD-009)
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowRevokeDialog(true)}
+                  className="gap-1.5 text-xs text-destructive"
+                >
+                  Revoke Certificate
                 </Button>
               </div>
             )}
@@ -280,6 +335,53 @@ export function CompletionAndCertificatePanel({
                   onClick={handleReissueCertificate}
                 >
                   {isReissuing ? "Reissuing..." : "Confirm Reissue"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showRevokeDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="revoke-certificate-title"
+              className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl space-y-4"
+            >
+              <h4 id="revoke-certificate-title" className="text-base font-semibold text-foreground">
+                Revoke Certificate
+              </h4>
+              <p className="text-xs text-muted-foreground">
+                The certificate stops being valid at once: its PDF can no longer be downloaded and the public
+                verification page shows it as revoked. The reason is kept for staff and the audit log only; it is
+                never shown publicly. This cannot be undone.
+              </p>
+              <div>
+                <label htmlFor="certificate-revoke-reason" className="text-xs font-medium text-foreground">
+                  Reason for revocation *
+                </label>
+                <textarea
+                  id="certificate-revoke-reason"
+                  value={revokeReason}
+                  onChange={(e) => setRevokeReason(e.target.value)}
+                  rows={3}
+                  required
+                  placeholder="e.g. Plagiarism found in the submitted project."
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" size="sm" disabled={isRevoking} onClick={() => setShowRevokeDialog(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={isRevoking || revokeReason.trim().length < 10}
+                  onClick={handleRevokeCertificate}
+                >
+                  {isRevoking ? "Revoking..." : "Confirm Revocation"}
                 </Button>
               </div>
             </div>
@@ -371,8 +473,70 @@ export function CompletionAndCertificatePanel({
                     className="mt-1"
                   />
                 </div>
+                <div>
+                  <label htmlFor="second-signatory-name" className="text-xs font-medium text-foreground">
+                    Second Signatory Name (optional)
+                  </label>
+                  <Input
+                    id="second-signatory-name"
+                    value={secondSignatoryName}
+                    maxLength={SIGNATORY_FIELD_MAX_LENGTH}
+                    onChange={(e) => setSecondSignatoryName(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="second-signatory-title" className="text-xs font-medium text-foreground">
+                    Second Signatory Title
+                  </label>
+                  <Input
+                    id="second-signatory-title"
+                    value={secondSignatoryTitle}
+                    maxLength={SIGNATORY_FIELD_MAX_LENGTH}
+                    onChange={(e) => setSecondSignatoryTitle(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="certificate-period-start" className="text-xs font-medium text-foreground">
+                    Internship Start Date (optional)
+                  </label>
+                  <Input
+                    id="certificate-period-start"
+                    type="date"
+                    value={periodStart}
+                    onChange={(e) => setPeriodStart(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="certificate-project-title" className="text-xs font-medium text-foreground">
+                    Project Title (optional)
+                  </label>
+                  <Input
+                    id="certificate-project-title"
+                    value={projectTitle}
+                    maxLength={120}
+                    onChange={(e) => setProjectTitle(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="certificate-grade" className="text-xs font-medium text-foreground">
+                    Grade (optional)
+                  </label>
+                  <Input
+                    id="certificate-grade"
+                    value={grade}
+                    maxLength={40}
+                    onChange={(e) => setGrade(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
                 <p className="sm:col-span-2 text-[11px] text-muted-foreground">
-                  The official signatory has not been configured (OD-009); enter the authorized signatory for this certificate.
+                  Signatories are prefilled from the site settings when they are configured. Without a start date the
+                  certificate uses the evaluation start date. College and domain are taken from the candidate&apos;s
+                  profile and the opening.
                 </p>
               </div>
             )}

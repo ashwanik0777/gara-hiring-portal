@@ -12,6 +12,7 @@ import {
   Briefcase,
 } from "lucide-react";
 import { VisitorBeacon } from "@/components/analytics/visitor-beacon";
+import { ReferralCapture } from "@/components/analytics/referral-capture";
 import { COMPANY, confirmedCompanyFacts } from "@/config/site";
 import { POLICY_PAGES } from "@/components/legal/policy-pages";
 import { PAGE_GUTTER } from "@/components/layout/page-gutter";
@@ -229,6 +230,16 @@ export function Footer() {
                 </Link>
               </li>
               <li>
+                <Link href="/training" className="hover:text-foreground transition-colors">
+                  Industrial Training
+                </Link>
+              </li>
+              <li>
+                <Link href="/campus-ambassador" className="hover:text-foreground transition-colors">
+                  Campus Ambassador
+                </Link>
+              </li>
+              <li>
                 <Link href="/careers" className="hover:text-primary font-medium transition-colors flex items-center gap-1 text-primary/90">
                   <span>View All Openings</span>
                   <ArrowRight className="h-3 w-3" />
@@ -367,6 +378,7 @@ export function Footer() {
 
       {/* Records the visit for the admin visitor report; renders nothing. */}
       <VisitorBeacon />
+      <ReferralCapture />
 
       {/* ──────────────── BOTTOM ATTRIBUTION & LEGAL BAR ──────────────── */}
       <div className="border-t border-border/80 bg-background/80 py-6">

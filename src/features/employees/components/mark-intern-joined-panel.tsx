@@ -32,6 +32,8 @@ export interface MarkInternJoinedPanelProps {
   defaultDepartment: string;
   /** Prefill from the internship opening's title (editable). */
   defaultDesignation: string;
+  /** Prefill ("YYYY-MM-DD") from the internship offer letter's start date, when one was issued. */
+  defaultJoiningDate?: string;
   managerOptions: ReportingManagerOption[];
   /**
    * Re-joining: the person's exited employee record is reused, so its employee code is
@@ -55,6 +57,7 @@ export function MarkInternJoinedPanel({
   candidateName,
   defaultDepartment,
   defaultDesignation,
+  defaultJoiningDate = "",
   managerOptions,
   existingEmployeeCode = null,
 }: MarkInternJoinedPanelProps) {
@@ -74,7 +77,7 @@ export function MarkInternJoinedPanel({
   // No invented defaults: the employee numbering series and the joining day are entered by HR.
   // A returning person keeps their existing code.
   const [employeeCode, setEmployeeCode] = useState(existingEmployeeCode ?? "");
-  const [joiningDate, setJoiningDate] = useState("");
+  const [joiningDate, setJoiningDate] = useState(defaultJoiningDate);
   const [department, setDepartment] = useState(defaultDepartment);
   const [designation, setDesignation] = useState(defaultDesignation);
   const [initialStatus, setInitialStatus] = useState<JoiningInitialStatus | "">("");

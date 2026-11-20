@@ -14,15 +14,15 @@ import type { OfferLetterPdfPayload } from "./types";
 
 const PAGE_WIDTH = 595;
 const PAGE_HEIGHT = 842;
-const MARGIN_X = 64;
-const TOP = PAGE_HEIGHT - 64;
+export const MARGIN_X = 64;
+export const TOP = PAGE_HEIGHT - 64;
 /** Lowest baseline for body text; the footer sits below it. */
 const BOTTOM = 72;
 const FOOTER_Y = 40;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_X * 2;
 const LABEL_WIDTH = 140;
 
-const COLOR = {
+export const COLOR = {
   ink: "0.059 0.090 0.165",
   muted: "0.392 0.455 0.545",
   accent: "0.851 0.467 0.024",
@@ -107,7 +107,7 @@ export function formatLetterDateTime(instant: Date, timeZone: string): string {
 }
 
 /** Collects drawing operators page by page and keeps the text cursor. */
-class LetterLayout {
+export class LetterLayout {
   readonly pages: string[][] = [[]];
   /** Baseline of the last line drawn on the current page. */
   y = TOP;
@@ -216,9 +216,13 @@ export function buildOfferLetterPdf(payload: OfferLetterPdfPayload): Buffer {
   const reference = payload.offerReference;
 
   // Letterhead
-  layout.drawText(MARGIN_X, TOP - 12, "bold", 12, COLOR.ink, toWinAnsi("GARA INNOVATION"));
+  layout.drawText(MARGIN_X, TOP - 12, "bold", 12, COLOR.ink, toWinAnsi(payload.companyName ?? "GARA INNOVATION"));
   layout.rule(TOP - 22, COLOR.accent, 1.2);
-  layout.drawText(MARGIN_X, TOP - 58, "bold", 22, COLOR.ink, toWinAnsi("Offer letter"));
+  // Statutory lines sit between the rule and the heading (at most two lines fit).
+  (payload.companyFacts ?? []).slice(0, 2).forEach((line, index) => {
+    layout.drawText(MARGIN_X, TOP - 33 - index * 10, "regular", 8, COLOR.muted, toWinAnsi(line));
+  });
+  layout.drawText(MARGIN_X, TOP - 58, "bold", 22, COLOR.ink, toWinAnsi(payload.title ?? "Offer letter"));
   layout.drawText(MARGIN_X, TOP - 80, "regular", 10, COLOR.muted, toWinAnsi(`Offer reference: ${reference}`));
   layout.drawText(
     MARGIN_X,
@@ -243,7 +247,7 @@ export function buildOfferLetterPdf(payload: OfferLetterPdfPayload): Buffer {
   layout.drawText(MARGIN_X, layout.y, "regular", 9, COLOR.muted, toWinAnsi("Prepared for"));
   layout.paragraph(payload.candidateName, { font: "bold", size: 14, leading: 18, color: COLOR.ink });
   layout.gap(8);
-  layout.paragraph("This letter confirms the offer described below.", {
+  layout.paragraph(payload.introLine ?? "This letter confirms the offer described below.", {
     font: "regular",
     size: 11,
     leading: 16,
@@ -258,12 +262,15 @@ export function buildOfferLetterPdf(payload: OfferLetterPdfPayload): Buffer {
   if (payload.location && payload.location.trim()) {
     layout.detailRow("Location", payload.location);
   }
-  layout.detailRow("Expected joining date", formatCalendarDay(payload.expectedJoiningDate));
+  layout.detailRow(payload.joiningDateLabel ?? "Expected joining date", formatCalendarDay(payload.expectedJoiningDate));
+  for (const row of payload.extraDetails ?? []) {
+    if (row.value.trim()) layout.detailRow(row.label, row.value);
+  }
 
   // Terms, reproduced exactly as written by staff
   layout.gap(14);
   layout.ensure(40);
-  layout.paragraph("Terms summary", { font: "bold", size: 12, leading: 16, color: COLOR.ink });
+  layout.paragraph(payload.termsHeading ?? "Terms summary", { font: "bold", size: 12, leading: 16, color: COLOR.ink });
   layout.gap(2);
   layout.paragraph(payload.termsSummary, { font: "regular", size: 10.5, leading: 15, color: COLOR.ink });
 
@@ -285,6 +292,9 @@ export function buildOfferLetterPdf(payload: OfferLetterPdfPayload): Buffer {
       `Accepted electronically by ${signedName} on ${formatLetterDateTime(signedAt, payload.timeZone)} · Document hash ${documentHash.slice(0, 16)}`,
       { fill: COLOR.successFill, stroke: COLOR.successStroke, ink: COLOR.successInk }
     );
+  } else if (payload.closingNote) {
+    layout.gap(10);
+    layout.paragraph(payload.closingNote, { font: "regular", size: 10, leading: 14, color: COLOR.muted });
   } else if (!payload.statusNote) {
     layout.gap(10);
     layout.paragraph("To respond to this offer, sign in to the GARA Innovation candidate portal.", {
@@ -295,6 +305,35 @@ export function buildOfferLetterPdf(payload: OfferLetterPdfPayload): Buffer {
     });
   }
 
+  if (payload.signatory) {
+    layout.gap(28);
+    layout.ensure(48);
+    layout.rule(layout.y, COLOR.rule, 0.6);
+    layout.gap(14);
+    layout.paragraph(payload.signatory.name, { font: "bold", size: 11, leading: 15, color: COLOR.ink });
+    layout.paragraph(payload.signatory.title, { font: "regular", size: 10, leading: 14, color: COLOR.muted });
+    layout.paragraph(`For ${payload.companyName ?? "GARA INNOVATION"}`, {
+      font: "regular",
+      size: 10,
+      leading: 14,
+      color: COLOR.muted,
+    });
+  }
+
+  return finishLetterDocument(layout, {
+    title: `Offer letter ${reference}`,
+    footer: (page, count) => `Offer reference ${reference} · Page ${page} of ${count}`,
+  });
+}
+
+/**
+ * Adds the page footer and serializes the pages of a letter (shared by offer letters and payment
+ * receipts). Pure: the same layout always produces the same bytes.
+ */
+export function finishLetterDocument(
+  layout: LetterLayout,
+  { title, footer }: { title: string; footer: (page: number, pageCount: number) => string }
+): Buffer {
   // Footer on every page
   const pageCount = layout.pages.length;
   layout.pages.forEach((ops, index) => {
@@ -303,7 +342,7 @@ export function buildOfferLetterPdf(payload: OfferLetterPdfPayload): Buffer {
       "/F1 8 Tf",
       `${COLOR.muted} rg`,
       `${num(MARGIN_X)} ${num(FOOTER_Y)} Td`,
-      `(${escapePdfLiteral(toWinAnsi(`Offer reference ${reference} · Page ${index + 1} of ${pageCount}`))}) Tj`,
+      `(${escapePdfLiteral(toWinAnsi(footer(index + 1, pageCount)))}) Tj`,
       "ET"
     );
   });
@@ -316,7 +355,7 @@ export function buildOfferLetterPdf(payload: OfferLetterPdfPayload): Buffer {
     `<< /Type /Pages /Kids [${pageObjectNumbers.map((n) => `${n} 0 R`).join(" ")}] /Count ${pageCount} >>`,
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
-    `<< /Title (${escapePdfLiteral(toWinAnsi(`Offer letter ${reference}`))}) /Producer (GARA Innovation) >>`,
+    `<< /Title (${escapePdfLiteral(toWinAnsi(title))}) /Producer (GARA Innovation) >>`,
   ];
 
   layout.pages.forEach((ops, index) => {

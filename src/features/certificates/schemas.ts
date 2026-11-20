@@ -49,6 +49,17 @@ export const IssueCertificateSchema = z.object({
   enrollmentId: recordId("enrollment ID"),
   signatoryName: printableText("Signatory name", 2, SIGNATORY_FIELD_MAX_LENGTH),
   signatoryTitle: printableText("Signatory title", 2, SIGNATORY_FIELD_MAX_LENGTH),
+  // Optional (Phase 5): a second signatory and details printed on the certificate.
+  secondSignatoryName: optional(printableText("Second signatory name", 2, SIGNATORY_FIELD_MAX_LENGTH)),
+  secondSignatoryTitle: optional(printableText("Second signatory title", 2, SIGNATORY_FIELD_MAX_LENGTH)),
+  projectTitle: optional(printableText("Project title", 2, 120)),
+  grade: optional(printableText("Grade", 1, 40)),
+  periodStart: optional(z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid start date")),
+});
+
+export const RevokeCertificateSchema = z.object({
+  certificateId: recordId("certificate ID"),
+  reason: z.string().trim().min(10, "Please give a revocation reason of at least 10 characters").max(1000),
 });
 
 export const ReissueCertificateSchema = z.object({

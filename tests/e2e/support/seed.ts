@@ -16,6 +16,7 @@ import {
   E2E_EXPIRED_OPENING,
   E2E_OPENINGS,
   E2E_STAFF_PASSWORD,
+  E2E_TRAINING,
   E2E_USERS,
 } from "./fixtures";
 
@@ -56,7 +57,7 @@ export async function seedE2EFixtures(databaseUrl: string): Promise<void> {
 
   try {
     const passwordHash = hashPassword(E2E_STAFF_PASSWORD);
-    const userIds: Record<keyof typeof E2E_USERS, string> = { admin: "", hr: "", mentor: "" };
+    const userIds: Record<keyof typeof E2E_USERS, string> = { admin: "", hr: "", mentor: "", trainee: "" };
 
     for (const key of Object.keys(E2E_USERS) as Array<keyof typeof E2E_USERS>) {
       const fixture = E2E_USERS[key];
@@ -169,6 +170,89 @@ export async function seedE2EFixtures(databaseUrl: string): Promise<void> {
         data: { activeFormVersionId: formVersion.id },
       });
     }
+
+    const training = {
+      slug: E2E_TRAINING.slug,
+      title: E2E_TRAINING.title,
+      trackId: trackIds.get(E2E_TRAINING.trackSlug) ?? null,
+      summary: E2E_TRAINING.summary,
+      description: `${E2E_TRAINING.title}: end-to-end test fixture with live classes, assignments and a final project.`,
+      syllabus: E2E_TRAINING.syllabus as unknown as Prisma.InputJsonValue,
+      durationWeeks: E2E_TRAINING.durationWeeks,
+      feePaise: E2E_TRAINING.feePaise,
+      prerequisites: "Basic programming (E2E fixture).",
+      outcomes: "Ship a deployed web app (E2E fixture).",
+      status: "PUBLISHED" as const,
+    };
+    await prisma.trainingProgram.upsert({
+      where: { id: E2E_TRAINING.programId },
+      create: { id: E2E_TRAINING.programId, ...training },
+      update: training,
+    });
+    const batchDates = {
+      name: E2E_TRAINING.batchName,
+      startDate: new Date(Date.now() + E2E_TRAINING.batchStartsInDays * 86_400_000),
+      seats: E2E_TRAINING.seats,
+      status: "UPCOMING" as const,
+      enrollmentDeadline: null,
+    };
+    await prisma.trainingBatch.upsert({
+      where: { id: E2E_TRAINING.batchId },
+      create: { id: E2E_TRAINING.batchId, programId: E2E_TRAINING.programId, ...batchDates },
+      update: batchDates,
+    });
+
+    // Learning area (Phase 3B): the mentor runs the batch; the trainee has a paid enrollment,
+    // one class that has started and one open assignment. Their learning record is reset.
+    await prisma.trainingBatchMentor.upsert({
+      where: { batchId_userId: { batchId: E2E_TRAINING.batchId, userId: userIds.mentor } },
+      create: { batchId: E2E_TRAINING.batchId, userId: userIds.mentor, assignedById: userIds.admin },
+      update: {},
+    });
+    const enrollment = {
+      status: "ACTIVE" as const,
+      listPricePaise: E2E_TRAINING.feePaise,
+      amountPaidPaise: E2E_TRAINING.feePaise,
+      paidAt: new Date(),
+      receiptNo: "E2E-RCPT-000001",
+      resultAt: null,
+      resultById: null,
+      resultNote: null,
+    };
+    await prisma.trainingEnrollment.upsert({
+      where: { id: E2E_TRAINING.enrollmentId },
+      create: { id: E2E_TRAINING.enrollmentId, userId: userIds.trainee, batchId: E2E_TRAINING.batchId, ...enrollment },
+      update: enrollment,
+    });
+    await prisma.trainingSubmission.deleteMany({ where: { enrollmentId: E2E_TRAINING.enrollmentId } });
+    await prisma.trainingAttendance.deleteMany({ where: { enrollmentId: E2E_TRAINING.enrollmentId } });
+    await prisma.trainingFinalProject.deleteMany({ where: { enrollmentId: E2E_TRAINING.enrollmentId } });
+    await prisma.trainingDemoSlot.deleteMany({ where: { batchId: E2E_TRAINING.batchId } });
+    const session = {
+      title: E2E_TRAINING.sessionTitle,
+      startsAt: new Date(Date.now() - 2 * 3_600_000),
+      durationMinutes: 60,
+      meetingUrl: "https://meet.example.test/e2e",
+      status: "SCHEDULED" as const,
+      attendanceTakenAt: null,
+      attendanceTakenById: null,
+    };
+    await prisma.trainingSession.upsert({
+      where: { id: E2E_TRAINING.sessionId },
+      create: { id: E2E_TRAINING.sessionId, batchId: E2E_TRAINING.batchId, ...session },
+      update: session,
+    });
+    const assignment = {
+      title: E2E_TRAINING.assignmentTitle,
+      description: "Build a responsive landing page (end-to-end test fixture).",
+      dueAt: new Date(Date.now() + 7 * 86_400_000),
+      maxMarks: E2E_TRAINING.assignmentMaxMarks,
+    };
+    await prisma.trainingAssignment.upsert({
+      where: { id: E2E_TRAINING.assignmentId },
+      create: { id: E2E_TRAINING.assignmentId, batchId: E2E_TRAINING.batchId, ...assignment },
+      update: assignment,
+    });
   } finally {
     await prisma.$disconnect();
     await pool.end().catch(() => {});

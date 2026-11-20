@@ -9,6 +9,23 @@ import {
   OFFER_ACCEPTED_CONFIRMATION_TEMPLATE,
   renderOfferAcceptedConfirmationEmail,
 } from "./templates/offer-letter-emails";
+import {
+  renderTrainingPaymentReceivedEmail,
+  renderTrainingRefundUpdateEmail,
+  renderTrainingResultEmail,
+  renderTrainingFirstClassReminderEmail,
+  TRAINING_FIRST_CLASS_REMINDER_TEMPLATE,
+  TRAINING_PAYMENT_RECEIVED_TEMPLATE,
+  TRAINING_REFUND_UPDATE_TEMPLATE,
+  TRAINING_RESULT_TEMPLATE,
+} from "./templates/training-emails";
+import {
+  AMBASSADOR_PAYOUT_TEMPLATE,
+  AMBASSADOR_STATUS_TEMPLATE,
+  renderAmbassadorPayoutEmail,
+  renderAmbassadorStatusEmail,
+} from "./templates/ambassador-emails";
+import { PRINT_ORDER_UPDATE_TEMPLATE, renderPrintOrderUpdateEmail } from "./templates/print-order-emails";
 
 /** iCalendar invitation sent as a text/calendar part ("Add to calendar" in mail clients). */
 export interface CalendarInvite {
@@ -267,6 +284,27 @@ export class OutboxProcessorService {
     switch (templateName) {
       case OFFER_ACCEPTED_CONFIRMATION_TEMPLATE:
         return renderOfferAcceptedConfirmationEmail(data);
+
+      case TRAINING_PAYMENT_RECEIVED_TEMPLATE:
+        return renderTrainingPaymentReceivedEmail(data);
+
+      case TRAINING_REFUND_UPDATE_TEMPLATE:
+        return renderTrainingRefundUpdateEmail(data);
+
+      case TRAINING_RESULT_TEMPLATE:
+        return renderTrainingResultEmail(data);
+
+      case TRAINING_FIRST_CLASS_REMINDER_TEMPLATE:
+        return renderTrainingFirstClassReminderEmail(data);
+
+      case AMBASSADOR_STATUS_TEMPLATE:
+        return renderAmbassadorStatusEmail(data);
+
+      case AMBASSADOR_PAYOUT_TEMPLATE:
+        return renderAmbassadorPayoutEmail(data);
+
+      case PRINT_ORDER_UPDATE_TEMPLATE:
+        return renderPrintOrderUpdateEmail(data);
 
       case "APPLICATION_CONFIRMATION":
       case "APPLICATION_SUBMITTED":

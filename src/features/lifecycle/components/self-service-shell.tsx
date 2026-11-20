@@ -12,6 +12,7 @@ import {
 import { getLifecycleForUser, isStaffUser } from "../services/lifecycle-service";
 import { PortalUpgradeBanner } from "./portal-upgrade-banner";
 import { scheduleAutomationTick } from "@/features/automation/heartbeat";
+import { scheduleReferralAttribution } from "@/features/ambassadors/referral-attribution";
 
 interface SelfServiceShellProps {
   children: React.ReactNode;
@@ -55,6 +56,9 @@ export async function SelfServiceShell({ children, loginCallbackPath, staffNavIt
       </DashboardShell>
     );
   }
+
+  // A new account that came through a Campus Ambassador link counts as their sign-up.
+  await scheduleReferralAttribution(user.id);
 
   const lifecycle = await getLifecycleForUser(user);
   const stageLabel = STAGE_LABELS[lifecycle.stage];

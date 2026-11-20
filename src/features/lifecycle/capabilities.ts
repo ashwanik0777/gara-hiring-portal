@@ -62,6 +62,8 @@ const CANDIDATE_CAPABILITIES: PortalCapability[] = [
   "applications",
   "journey",
   "profile",
+  "training",
+  "ambassador",
   "verifyCertificate",
   "help",
 ];
@@ -78,10 +80,12 @@ export const STAGE_CAPABILITIES: Record<LifecycleStage, readonly PortalCapabilit
     "certificate",
     "journey",
     "profile",
+    "training",
+    "ambassador",
     "verifyCertificate",
     "help",
   ],
-  EMPLOYEE: ["employeeHome", "attendance", "leave", "payslips", "journey", "profile", "help"],
+  EMPLOYEE: ["employeeHome", "attendance", "leave", "payslips", "journey", "profile", "training", "help"],
   // Product-owner decision (2026-10-25): people who exited re-join through normal hiring with
   // the same account, so candidate features return alongside their past history.
   ALUMNI: [...CANDIDATE_CAPABILITIES, "certificate"],
@@ -157,6 +161,8 @@ export function buildSelfServiceNav(stage: LifecycleStage): DashboardNavItem[] {
         : { label: "My Journey", href: "/candidate/applications", iconName: "History" },
     ],
     ["profile", { label: "My Profile", href: "/candidate/profile", iconName: "User" }],
+    ["training", { label: "My Training", href: "/candidate/training", iconName: "BookOpen" }],
+    ["ambassador", { label: "Campus Ambassador", href: "/candidate/ambassador", iconName: "Users" }],
     ["verifyCertificate", { label: "Verify Certificate", href: "/verify", iconName: "ShieldCheck" }],
     ["help", { label: "Support & Help", href: "/help", iconName: "HelpCircle" }],
   ];

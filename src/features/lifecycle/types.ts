@@ -26,7 +26,11 @@ export type PortalCapability =
   | "payslips"
   | "certificate"
   | "verifyCertificate"
-  | "help";
+  | "help"
+  /** Industrial Training enrollments, receipts, refunds and transfers (Phase 3). */
+  | "training"
+  /** Campus Ambassador application and dashboard (Phase 4). */
+  | "ambassador";
 
 export interface LifecycleEnrollmentSummary {
   id: string;

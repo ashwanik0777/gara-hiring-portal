@@ -7,6 +7,8 @@ import { applicationService } from "@/features/applications/services/application
 import { offerService } from "@/features/employees/services/offer-service";
 import { CandidateOfferView } from "@/features/employees/components/candidate-offer-view";
 import { ReadOnlyOfferSummary } from "@/features/lifecycle/components/read-only-offer-summary";
+import { getInternshipOfferForCandidate } from "@/features/internship-offers/services/internship-offer-service";
+import { CandidateInternshipOffer } from "@/features/internship-offers/components/candidate-internship-offer";
 import {
   ApplicationStatusBadge,
   JoinedHistoryNote,
@@ -75,6 +77,7 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
 
   // Returns null unless this user may see the offer (candidate projection, no staff notes).
   const offer = await offerService.getOfferByApplicationId(user, application.id);
+  const internshipOffer = await getInternshipOfferForCandidate(application.id, user.id);
 
   return (
     <div className="space-y-8 w-full">
@@ -120,6 +123,7 @@ export default async function ApplicationDetailPage({ params }: ApplicationDetai
 
       {/* Official Employment Offer Card: actions only before joining. */}
       {offer && (readOnly ? <ReadOnlyOfferSummary offer={offer} /> : <CandidateOfferView offer={offer} />)}
+      {internshipOffer && <CandidateInternshipOffer applicationId={application.id} offer={internshipOffer} />}
 
       {/* Status Timeline */}
       <Card className="border-border shadow-xs">

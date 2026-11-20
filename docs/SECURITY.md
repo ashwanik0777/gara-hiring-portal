@@ -229,6 +229,8 @@ These actions require extra security scrutiny:
 | Payroll execution | Authorized role, audit logged, confirmation step |
 | Bulk operations | Rate limited, audit logged, confirmation step |
 | Bulk application stage changes | ADMIN/HR with `canApplications`, at most 100 per request, each item through the single-transition checks (allowed transition, self-dealing block, conditional write, history), one batch audit row plus per-item audit rows, confirmation dialog stating the count |
+| Industrial Training payment | Signed-in account with a verified email and recorded consent; price from the server, never the browser; seat held under a row lock; checkout signature (HMAC-SHA-256 of `order_id|payment_id`) and the fetched payment's order, amount and currency checked before activation; webhook signature over the raw body, event ids applied once, handlers idempotent; amounts that differ from the order are refused |
+| Training refund decision | Administrators only; the request is claimed with a conditional update before the Razorpay refund call (no double refund); rejection needs a note; audit logged |
 | Offer acceptance (e-signature) | Owner only, offer `EXTENDED` and application `OFFERED`, typed name must match the account name, letter hash must match, evidence stored atomically with the acceptance (see below) |
 
 ### E-signature Evidence (offer acceptance)
@@ -244,6 +246,10 @@ A candidate accepts an offer by typing their full name and ticking a consent box
 | `signedDocumentHash` | SHA-256 of the exact offer-letter PDF bytes. The letter is generated deterministically; the page carries the hash of the letter the candidate reviewed, and acceptance is refused if the regenerated letter hashes differently (the offer changed in between) |
 
 The status-history row records the hash, and the confirmation email shows its first 16 characters. Whether a typed-name signature is legally sufficient is an open decision (`docs/OPEN_DECISIONS.md`, round 4 item 12).
+
+### Third-Party Payment Script (Razorpay Checkout)
+
+The Content-Security-Policy allows exactly one third-party origin set, for Industrial Training payments: `script-src https://checkout.razorpay.com`, `frame-src https://api.razorpay.com https://checkout.razorpay.com`, `connect-src https://api.razorpay.com https://lumberjack.razorpay.com` and `img-src https://cdn.razorpay.com`. The allowance is site-wide because the checkout can open after a client-side navigation, which keeps the first page's policy. The script is loaded only when a student presses Pay. `Permissions-Policy` allows `payment` for the site and the Razorpay frame only, and `Cross-Origin-Opener-Policy` is `same-origin-allow-popups`, so bank and 3-D Secure popups can report back to the checkout while other sites still get no handle to this window. Card and UPI details are entered in Razorpay's frame and never reach this application.
 
 ### Public Structured Data
 

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/auth/guards";
 import { toActionError, ValidationError } from "@/lib/errors";
-import { updateCollege } from "./services/college-service";
+import { mergeColleges, updateCollege } from "./services/college-service";
 
 export type CollegeActionResult = { success: true } | { success: false; error: string };
 
@@ -30,5 +30,18 @@ export async function updateCollegeAction(input: z.input<typeof collegeUpdateSch
     return { success: true };
   } catch (error) {
     return { success: false, error: toActionError(error, "The college could not be saved.") };
+  }
+}
+
+/** Staff: merge a duplicate college into the one to keep. */
+export async function mergeCollegesAction(input: { sourceId: string; targetId: string }): Promise<CollegeActionResult> {
+  try {
+    const user = await requirePermission("canApplications");
+    const ids = z.object({ sourceId: z.uuid(), targetId: z.uuid() }).parse(input);
+    await mergeColleges(ids, user);
+    revalidatePath("/admin/colleges");
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: toActionError(error, "The colleges could not be merged.") };
   }
 }

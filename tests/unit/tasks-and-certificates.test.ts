@@ -61,7 +61,13 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import { CertificatePdfGenerator } from "@/infrastructure/pdf/certificate-pdf-generator";
 import { taskService } from "@/features/intern-tasks/services/task-service";
-import { certificateService } from "@/features/certificates/services/certificate-service";
+import {
+  certificatePdfPayload,
+  certificateService,
+  generateCertificateCode,
+} from "@/features/certificates/services/certificate-service";
+import { CERTIFICATE_CODE_ALPHABET, formatCertificateCode } from "@/features/certificates/certificate-types";
+import { COMPANY } from "@/config/site";
 import { COMPLETION_CHECKLIST_TEMPLATE } from "@/features/certificates/constants";
 import { ReviewSubmissionSchema, SubmitTaskSchema } from "@/features/intern-tasks/schemas";
 import { recordCompletionChecklistAction } from "@/features/certificates/actions";
@@ -453,7 +459,11 @@ describe("Certificate issuance (SEC-11 / BUG-14)", () => {
       ...enrollmentRef,
       status: EvaluationStatus.PASSED,
       user: { name: "Intern Name" },
-      application: { opening: { title: "Frontend" } },
+      startDate: new Date("2026-03-02T00:00:00Z"),
+      application: {
+        opening: { title: "Frontend", department: "Engineering", track: { name: "Full Stack & Web" } },
+        candidate: { college: { name: "Example Institute of Technology" } },
+      },
       completion: {
         status: CompletionStatus.APPROVED,
         isEligibleForCertificate: true,
@@ -531,7 +541,8 @@ describe("Certificate issuance (SEC-11 / BUG-14)", () => {
 
     const cert = await certificateService.issueCertificate(hr, input);
 
-    expect(cert.verificationCode).toMatch(/^GARA-CERT-\d{4}-[0-9A-F]{16}$/);
+    // GARA-{type}-{year}-{6 characters without look-alikes} (careers plan, 2026-11-19).
+    expect(cert.verificationCode).toMatch(/^GARA-IC-\d{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/);
     expect(cert.signatoryName).toBe("Signer");
     expect(cert.qrPayloadUrl).toContain(`/verify/${cert.verificationCode}`);
     expect(db.auditLog.create.mock.calls[0][0].data.action).toBe("CERTIFICATE_ISSUED");
@@ -570,6 +581,7 @@ describe("Certificate issuance (SEC-11 / BUG-14)", () => {
     db.certificate.findUnique.mockResolvedValue({
       id: CERT_ID,
       verificationCode: "GARA-CERT-2026-OLDOLDOLDOLDOLD1",
+      type: "INTERNSHIP_COMPLETION",
       status: CertificateStatus.ACTIVE,
       versionNumber: 1,
       signatoryName: "S",
@@ -611,10 +623,199 @@ describe("Certificate issuance (SEC-11 / BUG-14)", () => {
   });
 });
 
+describe("Certificates, Phase 5: snapshot, second signatory, revocation, codes and PDF", () => {
+  const issuableEnrollment = () => ({
+    ...enrollmentRef,
+    status: EvaluationStatus.PASSED,
+    startDate: new Date("2026-03-02T00:00:00Z"),
+    user: { name: "Intern Name" },
+    application: {
+      opening: { title: "Frontend", department: "Engineering", track: { name: "Full Stack & Web" } },
+      candidate: { college: { name: "Example Institute of Technology" } },
+    },
+    completion: {
+      status: CompletionStatus.APPROVED,
+      isEligibleForCertificate: true,
+      approvedAt: new Date("2026-05-01T00:00:00Z"),
+      checklistResponses: allCompleted,
+    },
+    certificate: null,
+  });
+
+  const storedCert = () => ({
+    id: CERT_ID,
+    enrollmentId: ENROLLMENT_ID,
+    type: "INTERNSHIP_COMPLETION" as const,
+    recipientName: "Intern Name",
+    programmeTitle: "Frontend Internship",
+    issueDate: new Date("2026-05-02T00:00:00Z"),
+    completionDate: new Date("2026-05-01T00:00:00Z"),
+    verificationCode: "GARA-IC-2026-7K2QXM",
+    qrPayloadUrl: "https://portal.example.test/verify/GARA-IC-2026-7K2QXM",
+    signatoryName: "Director Name",
+    signatoryTitle: "Director",
+    status: CertificateStatus.ACTIVE,
+    versionNumber: 1,
+    pdfStorageKey: null,
+    createdAt: new Date("2026-05-02T00:00:00Z"),
+    collegeName: null,
+    domain: null,
+    periodStart: null,
+    projectTitle: null,
+    grade: null,
+    secondSignatoryName: null,
+    secondSignatoryTitle: null,
+    revokedAt: null,
+  });
+
+  beforeEach(() => {
+    db.certificate.create.mockImplementation(async (args: { data: Record<string, unknown> }) => ({
+      id: CERT_ID,
+      pdfStorageKey: null,
+      createdAt: new Date(),
+      ...args.data,
+    }));
+  });
+
+  it("captures college, domain and dates at issue time, with optional project, grade and second signatory", async () => {
+    db.internshipEnrollment.findUnique.mockResolvedValue(issuableEnrollment());
+
+    await certificateService.issueCertificate(hr, {
+      enrollmentId: ENROLLMENT_ID,
+      signatoryName: "Director Name",
+      signatoryTitle: "Director",
+      secondSignatoryName: "Mentor Name",
+      secondSignatoryTitle: "Training Head / Mentor",
+      projectTitle: "Careers portal",
+      grade: "A",
+    });
+
+    expect(db.certificate.create.mock.calls[0][0].data).toMatchObject({
+      type: "INTERNSHIP_COMPLETION",
+      collegeName: "Example Institute of Technology",
+      domain: "Full Stack & Web",
+      periodStart: new Date("2026-03-02T00:00:00Z"),
+      projectTitle: "Careers portal",
+      grade: "A",
+      secondSignatoryName: "Mentor Name",
+      secondSignatoryTitle: "Training Head / Mentor",
+    });
+  });
+
+  it("needs both or neither of the second signatory's name and title", async () => {
+    db.internshipEnrollment.findUnique.mockResolvedValue(issuableEnrollment());
+    await expect(
+      certificateService.issueCertificate(hr, {
+        enrollmentId: ENROLLMENT_ID,
+        signatoryName: "Director Name",
+        signatoryTitle: "Director",
+        secondSignatoryName: "Mentor Name",
+      })
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(db.certificate.create).not.toHaveBeenCalled();
+  });
+
+  it("revokes an active certificate with a reason and an audit row; only staff who can issue may do it", async () => {
+    db.certificate.findUnique.mockResolvedValue({
+      id: CERT_ID,
+      verificationCode: "GARA-IC-2026-7K2QXM",
+      status: CertificateStatus.ACTIVE,
+      enrollment: enrollmentRef,
+    });
+    db.certificate.updateMany.mockResolvedValue({ count: 1 });
+    db.certificate.findUniqueOrThrow.mockResolvedValue({
+      ...storedCert(),
+      status: CertificateStatus.REVOKED,
+      revokedAt: new Date(),
+    });
+
+    const revoked = await certificateService.revokeCertificate(hr, {
+      certificateId: CERT_ID,
+      reason: "Plagiarism found in the final project.",
+    });
+
+    expect(revoked.status).toBe(CertificateStatus.REVOKED);
+    expect(db.certificate.updateMany).toHaveBeenCalledWith({
+      where: { id: CERT_ID, status: CertificateStatus.ACTIVE },
+      data: expect.objectContaining({ status: CertificateStatus.REVOKED, revocationReason: "Plagiarism found in the final project." }),
+    });
+    expect(db.auditLog.create.mock.calls[0][0].data.action).toBe("CERTIFICATE_REVOKED");
+
+    await expect(
+      certificateService.revokeCertificate(hr, { certificateId: CERT_ID, reason: "too short" })
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      certificateService.revokeCertificate(user("intern-x", [Role.INTERN]), {
+        certificateId: CERT_ID,
+        reason: "Plagiarism found in the final project.",
+      })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("refuses to revoke a certificate that is not active", async () => {
+    db.certificate.findUnique.mockResolvedValue({
+      id: CERT_ID,
+      verificationCode: "GARA-IC-2026-7K2QXM",
+      status: CertificateStatus.REVOKED,
+      enrollment: enrollmentRef,
+    });
+    await expect(
+      certificateService.revokeCertificate(hr, { certificateId: CERT_ID, reason: "Plagiarism found in the final project." })
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(db.certificate.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("formats codes per type with a look-alike-free alphabet", () => {
+    let i = 0;
+    const sequence = (max: number) => i++ % max;
+    expect(formatCertificateCode("INTERNSHIP_COMPLETION", 2026, sequence)).toBe("GARA-IC-2026-234567");
+    expect(formatCertificateCode("TRAINING_COMPLETION", 2027, () => 0)).toBe("GARA-TC-2027-222222");
+    expect(formatCertificateCode("CAMPUS_AMBASSADOR", 2026, () => 30)).toBe("GARA-CA-2026-ZZZZZZ");
+    expect(CERTIFICATE_CODE_ALPHABET).not.toMatch(/[01OIL]/);
+    expect(generateCertificateCode("INTERNSHIP_COMPLETION", new Date("2026-06-01"))).toMatch(/^GARA-IC-2026-[2-9A-HJKMNP-Z]{6}$/);
+  });
+
+  it("prints the type's wording, the details and the second signatory, and leaves out unset company facts", async () => {
+    const payload = certificatePdfPayload({
+      ...storedCert(),
+      type: "INTERNSHIP_COMPLETION",
+      collegeName: "Example Institute of Technology",
+      domain: "Full Stack & Web",
+      periodStart: new Date("2026-03-02T00:00:00Z"),
+      projectTitle: "Careers portal",
+      grade: "A",
+      secondSignatoryName: "Mentor Name",
+      secondSignatoryTitle: "Training Head / Mentor",
+    });
+    expect(payload).toMatchObject({
+      title: "CERTIFICATE OF COMPLETION",
+      periodStart: "2026-03-02",
+      companyName: (COMPANY.registeredName ?? COMPANY.brandName).toUpperCase(),
+    });
+    // Only confirmed statutory details are printed, never a placeholder.
+    if (COMPANY.udyamNumber) expect(payload.companyFacts).toContain(`Udyam Registration No.: ${COMPANY.udyamNumber}`);
+    if (!COMPANY.cin) expect(payload.companyFacts ?? "").not.toContain("CIN:");
+
+    const pdf = (await new CertificatePdfGenerator().generateCertificatePdf(payload)).toString("utf-8");
+    for (const text of ["of Example Institute of Technology", "Full Stack & Web", "Project: Careers portal", "Grade: A", "Mentor Name", "Training Head / Mentor"]) {
+      expect(pdf).toContain(text);
+    }
+    expect(pdf).not.toMatch(COMPANY.cin ? /TODO/ : /TODO|CIN:/);
+  });
+});
+
 describe("Certificate PDF download authorization (BUG-14)", () => {
   function cert(overrides: Record<string, unknown> = {}) {
     return {
       id: CERT_ID,
+      type: "INTERNSHIP_COMPLETION",
+      collegeName: null,
+      domain: null,
+      periodStart: null,
+      projectTitle: null,
+      grade: null,
+      secondSignatoryName: null,
+      secondSignatoryTitle: null,
       recipientName: "Intern Name",
       programmeTitle: "Frontend Internship",
       issueDate: new Date("2026-05-02T00:00:00Z"),

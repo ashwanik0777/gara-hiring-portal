@@ -30,9 +30,9 @@ interface VerificationResult {
   programmeTitle?: string;
   issueDate?: string;
   completionDate?: string;
-  signatoryTitle?: string;
-  signatoryName?: string;
-  evaluationRequirementsFulfilled?: boolean;
+  typeLabel?: string;
+  periodStart?: string;
+  revokedOn?: string;
   error?: string;
 }
 
@@ -245,7 +245,7 @@ export function VerificationPortal() {
                         <span>AUTHENTIC & VERIFIED</span>
                       </div>
                       <h2 className="text-xl font-bold text-foreground mt-1 tracking-tight">
-                        Certificate of Completion
+                        {result.typeLabel ?? "Certificate of Completion"}
                       </h2>
                     </div>
                   </div>
@@ -304,7 +304,7 @@ export function VerificationPortal() {
                     <div className="p-4 rounded-xl border border-border bg-background">
                       <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1">
                         <Award className="h-4 w-4 text-primary" />
-                        <span>Internship Programme</span>
+                        <span>Programme</span>
                       </div>
                       <p className="text-sm font-bold text-foreground">
                         {result.programmeTitle}
@@ -314,13 +314,10 @@ export function VerificationPortal() {
                     <div className="p-4 rounded-xl border border-border bg-background">
                       <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1">
                         <UserCheck className="h-4 w-4 text-primary" />
-                        <span>Authorized Signatory</span>
+                        <span>Period</span>
                       </div>
-                      <p className="text-sm font-bold text-foreground">
-                        {result.signatoryName}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {result.signatoryTitle}
+                      <p className="text-sm font-semibold text-foreground font-mono">
+                        {result.periodStart ? `${result.periodStart} to ${result.completionDate}` : "—"}
                       </p>
                     </div>
 
@@ -386,9 +383,8 @@ export function VerificationPortal() {
                       <span className="font-bold text-foreground block">
                         GARA Innovation Certificate Registry
                       </span>
-                      {result.evaluationRequirementsFulfilled
-                        ? "This certificate matches an active record in GARA Innovation's certificate registry. The record shows a passed supervised evaluation with every checkpoint reviewed and an approved completion decision."
-                        : "This certificate matches an active record in GARA Innovation's certificate registry."}
+                      {result.typeLabel ? `${result.typeLabel}. ` : ""}This certificate matches an active record in
+                      GARA Innovation&apos;s certificate registry.
                     </div>
                   </div>
                 </div>
@@ -438,7 +434,10 @@ export function VerificationPortal() {
                   <ul className="list-disc list-inside space-y-1">
                     <li>Confirm the verification code printed on the physical certificate.</li>
                     <li>Scan the QR code printed on the bottom corner of the official PDF document.</li>
-                    <li>Verification codes start with <code className="font-mono text-foreground font-semibold">GARA-CERT-</code>.</li>
+                    <li>
+                      Certificate IDs look like <code className="font-mono text-foreground font-semibold">GARA-IC-2026-7K2QXM</code>{" "}
+                      (older ones start with <code className="font-mono text-foreground font-semibold">GARA-CERT-</code>).
+                    </li>
                   </ul>
                 </div>
 

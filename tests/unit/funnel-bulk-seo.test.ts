@@ -778,6 +778,9 @@ describe("sitemap.xml and robots.txt", () => {
       `${SITE}/careers/backend-engineer`,
       // Only tracks with an open opening; the expired opening and its track are left out.
       `${SITE}/careers/tracks/full-stack`,
+      // Industrial Training index (no published programme in this scenario)
+      `${SITE}/training`,
+      `${SITE}/campus-ambassador`,
       `${SITE}/privacy`,
       `${SITE}/terms`,
       `${SITE}/refund-policy`,

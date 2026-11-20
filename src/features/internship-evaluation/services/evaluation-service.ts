@@ -1073,6 +1073,7 @@ export class EvaluationService {
           include: {
             candidate: { include: { user: true } },
             opening: true,
+            internshipOffer: true,
             // The period this application opened, if the person joined from it.
             employmentPeriods: {
               select: { employmentType: true, startDate: true },
@@ -1138,6 +1139,24 @@ export class EvaluationService {
       referenceCode: enrollment.application.referenceCode,
       candidateName: enrollment.application.candidate.user.name,
       candidateEmail: enrollment.application.candidate.user.email,
+      openingDurationText: enrollment.application.opening.durationText,
+      openingStipendText: enrollment.application.opening.stipendPolicyText,
+      internshipOffer: enrollment.application.internshipOffer
+        ? {
+            id: enrollment.application.internshipOffer.id,
+            applicationId: enrollment.application.internshipOffer.applicationId,
+            designation: enrollment.application.internshipOffer.designation,
+            department: enrollment.application.internshipOffer.department,
+            startDate: enrollment.application.internshipOffer.startDate,
+            tenureText: enrollment.application.internshipOffer.tenureText,
+            stipendText: enrollment.application.internshipOffer.stipendText,
+            signatoryName: enrollment.application.internshipOffer.signatoryName,
+            signatoryTitle: enrollment.application.internshipOffer.signatoryTitle,
+            version: enrollment.application.internshipOffer.version,
+            issuedAt: enrollment.application.internshipOffer.issuedAt,
+            updatedAt: enrollment.application.internshipOffer.updatedAt,
+          }
+        : null,
       openingTitle: enrollment.application.opening.title,
       openingDepartment: enrollment.application.opening.department,
       supervisor: enrollment.supervisor,
@@ -1203,6 +1222,15 @@ export class EvaluationService {
             versionNumber: enrollment.certificate.versionNumber,
             pdfStorageKey: enrollment.certificate.pdfStorageKey,
             createdAt: enrollment.certificate.createdAt,
+            type: enrollment.certificate.type,
+            collegeName: enrollment.certificate.collegeName,
+            domain: enrollment.certificate.domain,
+            periodStart: enrollment.certificate.periodStart,
+            projectTitle: enrollment.certificate.projectTitle,
+            grade: enrollment.certificate.grade,
+            secondSignatoryName: enrollment.certificate.secondSignatoryName,
+            secondSignatoryTitle: enrollment.certificate.secondSignatoryTitle,
+            revokedAt: enrollment.certificate.revokedAt,
           }
         : null,
     };

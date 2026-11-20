@@ -81,6 +81,23 @@ const envSchema = z.object({
       "PAYOUT_ENCRYPTION_KEY must be 32 bytes encoded as base64 (44 characters) or hex (64 characters)"
     )
     .optional(),
+  /**
+   * Razorpay (Industrial Training payments). All three are needed to take payments; without them
+   * checkout is switched off. Use test-mode keys (rzp_test_…) until the account is live.
+   */
+  RAZORPAY_KEY_ID: z
+    .string()
+    .regex(/^rzp_(test|live)_[A-Za-z0-9]+$/, "RAZORPAY_KEY_ID must look like rzp_test_… or rzp_live_…")
+    .or(z.literal(""))
+    .optional(),
+  RAZORPAY_KEY_SECRET: z.string().optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
+  // RazorpayX current account number for Campus Ambassador payouts (Phase 4); payouts stay
+  // off while it is unset.
+  RAZORPAYX_ACCOUNT_NUMBER: z
+    .string()
+    .regex(/^\d{9,20}$/, "RAZORPAYX_ACCOUNT_NUMBER must be the RazorpayX account number (digits)")
+    .optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

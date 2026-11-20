@@ -1,6 +1,6 @@
 import { FaqKnowledgeEntry } from "./ai-provider.interface";
 
-export const FAQ_KNOWLEDGE_VERSION = "v1.0.0";
+export const FAQ_KNOWLEDGE_VERSION = "v1.1.0";
 
 export const APPROVED_FAQ_KNOWLEDGE_BASE: FaqKnowledgeEntry[] = [
   {
@@ -163,5 +163,55 @@ export const APPROVED_FAQ_KNOWLEDGE_BASE: FaqKnowledgeEntry[] = [
       "salary",
     ],
     relatedPath: "/careers",
+  },
+  {
+    id: "FAQ-TRN-001",
+    version: FAQ_KNOWLEDGE_VERSION,
+    category: "INDUSTRIAL_TRAINING",
+    question: "What is Industrial Training, and how is it different from an internship?",
+    answer:
+      "Industrial Training (/training) is a paid, mentor-led programme with live classes, assignments, a final project and a live demo; the digital certificate is included in the fee. Internships at GARA Innovation are separate and always free. To enrol, choose a batch on the programme page, sign in with a verified email, accept the Refund Policy and Terms, and pay securely through Razorpay. Your Payment Receipt is on your My Training page.",
+    keywords: ["training", "industrial training", "course", "programme", "program", "batch", "fee", "enrol", "enroll", "paid", "receipt"],
+    relatedPath: "/training",
+  },
+  {
+    id: "FAQ-TRN-002",
+    version: FAQ_KNOWLEDGE_VERSION,
+    category: "INDUSTRIAL_TRAINING",
+    question: "Can I get a refund or move to another Industrial Training batch?",
+    answer:
+      "You get a full refund if you ask before the batch starts or within 24 hours after the first live class, using the Request refund button on your My Training page. After that there is no refund, but you can transfer to a later batch of the same programme free of charge, once. Approved refunds go back to your original payment method; banks usually take 5–7 working days. See the Refund & Cancellation Policy (/refund-policy).",
+    keywords: ["refund", "cancel", "cancellation", "transfer", "money back", "batch change", "24 hours"],
+    relatedPath: "/refund-policy",
+  },
+  {
+    id: "FAQ-TRN-003",
+    version: FAQ_KNOWLEDGE_VERSION,
+    category: "INDUSTRIAL_TRAINING",
+    question: "How do I pass Industrial Training and get the certificate?",
+    answer:
+      "You pass when you have at least 60% of the total assignment marks (a missed assignment counts as 0; submissions close at the due time), at least 75% attendance in live classes, a passed final project and a passed live demo. Your learning area shows a progress bar for each. Your mentor records the result: a pass issues a verifiable digital certificate; if you do not pass, you can re-attempt in a later batch free of charge, once.",
+    keywords: ["pass", "criteria", "marks", "attendance", "project", "demo", "certificate", "fail", "re-attempt", "reattempt"],
+    relatedPath: "/candidate/training",
+  },
+  {
+    id: "FAQ-CA-001",
+    version: FAQ_KNOWLEDGE_VERSION,
+    category: "CAMPUS_AMBASSADOR",
+    question: "What is the Campus Ambassador programme and how do I join?",
+    answer:
+      "Campus Ambassadors represent GARA Innovation at their college and share Industrial Training with fellow students. Apply from the Campus Ambassador page in your portal (/candidate/ambassador). Once approved you get a referral link, code and QR: students who enrol with your code get a discount, and you earn a commission for each paid enrollment once its refund window closes. Never collect money from anyone and make no promises such as a placement guarantee. Details: /campus-ambassador.",
+    keywords: ["ambassador", "campus ambassador", "referral", "refer", "code", "commission", "earn", "college", "lead", "associate"],
+    relatedPath: "/campus-ambassador",
+  },
+  {
+    id: "FAQ-CA-002",
+    version: FAQ_KNOWLEDGE_VERSION,
+    category: "CAMPUS_AMBASSADOR",
+    question: "When and how are Campus Ambassador commissions paid?",
+    answer:
+      "A commission is recorded when a student's payment with your code is confirmed. It becomes payable after that batch's refund window closes, and it is reversed if the student is refunded. Add your UPI ID in your ambassador dashboard; payouts and their bank references appear in your payout history, and tax is deducted where the law requires it.",
+    keywords: ["commission", "payout", "payment", "upi", "earnings", "paid", "tds", "withdraw"],
+    relatedPath: "/candidate/ambassador",
   },
 ];

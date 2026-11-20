@@ -109,7 +109,19 @@ Plan as written:
 - "Why do you want this role?" and a mandatory consent checkbox; one application per opening (database constraint).
 - The `ref` query parameter is freed for referral codes: the referrer host moves to its own parameter.
 
-### Phase 5 — Certificates and offer letters (before Phase 3)
+### Phase 5 — Certificates and offer letters (before Phase 3): **done (2026-11-20)**
+
+What was built:
+- **Certificate types and IDs:** `CertificateType` (INTERNSHIP_COMPLETION, TRAINING_COMPLETION, CAMPUS_AMBASSADOR; the latter two get their source records in Phases 3 and 4). New IDs `GARA-{IC|TC|CA}-{year}-{6}` from a CSPRNG over an alphabet without look-alikes (`src/features/certificates/certificate-types.ts`); reissues keep the type. Older `GARA-CERT-…` codes keep verifying.
+- **PDF:** company name (registered name once set), CIN and Udyam number only when confirmed, title and statement by type, college, domain (track or department), period (start to completion), optional project title and grade entered by the issuer, issue date, one or two signatories, ID and QR. These details are a snapshot on the certificate taken at issue time. Total hours are not printed because the system does not record them.
+- **Signatories:** `CERTIFICATE_SIGNATORIES` in `src/config/site.ts` (titles Director and Training Head / Mentor; names `null` until confirmed) prefill the issuing form; the issuer can type them.
+- **Revocation** (new): ADMIN/HR with evaluation authority, reason of at least 10 characters, audit entry `CERTIFICATE_REVOKED`; the PDF can no longer be downloaded.
+- **Public verification:** status, certificate type, name, programme, period, completion date and issue date only. Revoked certificates still show whose they were and the revocation date, never the reason. Signatories and evaluation details are no longer shown.
+- **Internship offer letter** (new, `src/features/internship-offers/`): after the evaluation passes and before joining, ADMIN/HR fill role, department, start date, tenure, stipend (defaults from the opening) and signatory; updates raise the version and are audited. The PDF (same engine as full-time letters, which are unchanged) prints the company details, the terms and the "internships are free" statement. The candidate sees and downloads it on their application page; supervisors and staff download it from the evaluation page. "Mark as joined" is prefilled from the letter.
+- **Database:** migration `20261120000000_certificates_and_internship_offers`, applied to production on 2026-11-20 after a read-only drift check and a JSON backup (`.storage/db-backups/2026-11-19T18-30-38-623Z`); verified afterwards.
+- **Verification:** TypeScript clean; ESLint clean apart from the pre-existing warning; Vitest 46 files, 1,366 tests passed; production build passed; Playwright production mode 99 passed; development mode with the journey database 123 passed plus one first-attempt flake in the new offer-letter step (fixed by waiting for hydration; both journeys then passed without retries).
+
+Plan as written:
 
 - Certificate types INTERNSHIP_COMPLETION, TRAINING_COMPLETION, CAMPUS_AMBASSADOR; new IDs `GARA-{TYPE}-{YEAR}-{6}` from an alphabet without look-alike characters; existing `GARA-CERT-…` codes keep verifying.
 - PDF with company name, CIN, Udyam number, recipient, college, programme, dates, project, grade, two signatures and QR. Fields the system does not hold are left out, never filled with made-up values.
@@ -118,11 +130,75 @@ Plan as written:
 
 ### Phase 3 — Industrial Training
 
+#### 3A Catalogue and payment: **done (2026-11-20); payments switched off until the Razorpay keys are set**
+
+What was built:
+- **Admin** (`/admin/training`, administrators only): programmes (title, slug, track, summary, description, weekly syllabus, duration, fee in rupees stored as paise, prerequisites, outcomes, draft/published/archived) and batches (start date, first live class in India time, end date, schedule, seats, last date to enrol, status). Seats cannot be set below the seats already taken.
+- **Public pages:** `/training` (programme cards with fee, duration, next batch and seats left) and `/training/[slug]` (syllabus, prerequisites, outcomes, pass criteria, refund summary, batches with seats left). Course and BreadcrumbList structured data, canonical URLs, Open Graph images; programmes are in the sitemap. Both pages render on the server per request, so seat counts are current.
+- **Checkout** (`/training/[slug]/enroll`): signed-in account with a verified email; consent to the Refund Policy and Terms (version recorded); the server holds a seat for 15 minutes under a batch row lock and creates the Razorpay order for the fee stored on the server; Razorpay Checkout collects the payment; the server checks the signature, fetches the payment, compares order, amount and currency, captures it if only authorized, and activates the enrollment.
+- **Webhook** `POST /api/webhooks/razorpay`: signature over the raw body, each event id applied once, handlers idempotent; handles `payment.authorized` (captures after checking the amount), `payment.captured`, `payment.failed`, `refund.processed`, `refund.failed`. Unknown orders are acknowledged; other errors answer 500 so Razorpay retries.
+- **Payment Receipt** PDF with sequential numbers `GARA-RCPT-{year}-{6}` from a database sequence, company details, programme, batch, list price, discount, amount paid and the Razorpay payment id; no GST line. Download from "My Training" (owner) or by an administrator.
+- **My Training** (`/candidate/training`, in every portal stage): enrollments, receipt download, refund request while the window is open (the time of the request decides), one free transfer to a later open batch of the same programme after the window.
+- **Refunds** (`/admin/training/refunds`, administrators only): approve (full amount through the Razorpay refund API; the request is claimed first so it cannot be sent twice; a refused API call returns it to the queue) or reject with a note the student sees.
+- **Emails** through the outbox, once per occurrence: payment received (with the receipt number and the refund deadline) and refund processed, rejected or failed.
+- **Security headers:** the Content-Security-Policy allows only Razorpay Checkout as a third-party script, frame and API; `Permissions-Policy` allows `payment` for the site and the Razorpay frame; `Cross-Origin-Opener-Policy` is `same-origin-allow-popups` so the bank and 3-D Secure windows can report back.
+- **Database:** migration `20261121000000_industrial_training` (6 tables, 5 enums, CHECK constraints on amounts, seats and transfers, the receipt sequence), applied to production on 2026-11-20 after a read-only drift check and a JSON backup (`.storage/db-backups/2026-11-19T19-47-16-721Z`); verified afterwards.
+- **Verification:** TypeScript clean; ESLint clean apart from the pre-existing warning; Vitest 47 files, 1,411 tests passed (45 new for training: money, policy, schemas, signatures, checkout, capture race, refunds, transfers, webhook, receipt PDF, emails); production build passed; Playwright production mode 103 passed; development mode with the journey database 140 passed.
+
+Not done in 3A (on purpose): discounts and referral codes (Phase 4 fills `discountPaise`), payment of gateway charges by the student (setting `deductGatewayChargesFromRefunds`, default off), a retry button for refunds that failed at the bank (handled by staff, see `docs/RUNBOOK.md` §5.10), an automatic refund of duplicate payments (flagged for staff).
+
+#### 3C Printed certificates: **done (2026-11-20); ordering opens once prices are set**
+
+What was built:
+- **Order** (`/candidate/training/[id]/print`, linked from the learning area of a passed student): for an active Industrial Training certificate, choose bulk delivery through the college (from the student's profile) or courier (name, mobile, address, 6-digit PIN), see the price and expected delivery, and pay through Razorpay (same checkout, signature check and webhook as training; `payment.authorized` is captured, `payment.captured` recorded once). A paid order gets a Payment Receipt number from the same sequence and a receipt PDF.
+- **Prices and delivery times** come only from `PRINTED_CERTIFICATE` in `src/config/site.ts` (both `null` now, OPEN_DECISIONS #32): an option without a price is not offered, and while both are `null` the page says printed copies are not open yet. The Shipping & Delivery Policy lists the configured options automatically.
+- **Admin** (`/admin/print-orders`): paid orders with destination and certificate PDF; mark printed, shipped (courier and tracking number; required for courier orders) and delivered. Emails: ordered (receipt number), shipped (tracking), delivered.
+- **Database:** migration `20261124000000_certificate_print_orders` (CHECKs: positive amount, a courier order has a full address and a bulk order the college, a shipped courier order has a tracking number), applied to production on 2026-11-20 after a read-only drift check and a JSON backup (`.storage/db-backups/2026-11-19T20-56-05-071Z`); verified afterwards.
+- **Verification:** Vitest 50 files, 1,464 tests (10 new); development E2E of the training suite with the new admin pages passed.
+
+Not built: cancellation and refund of printed orders (rules not decided, item 36); printing of internship or ambassador certificates (the plan sells printing for Industrial Training only).
+
+#### 3B Learning area: **done (2026-11-20)**
+
+What was built:
+- **Mentors:** administrators assign users with the Mentor role to a batch (`/admin/training/batches/[id]` → Mentors). Mentors see "Training Batches" in the staff workspace (`/subadmin/training`) and run only their batches; administrators run every batch.
+- **Classes and attendance:** classes (title, start in India time, length, meeting and recording links; cancel while no attendance is taken). Attendance is taken per class once it has started; a cancelled class does not count. Meeting links are shown only to students still learning in the batch.
+- **Assignments:** title, description, due time, maximum marks. Students submit a repository link and/or another https link before the due time and may replace it until it is graded; **submissions close at the due time** (product owner, 2026-11-20). Mentors grade with marks and feedback.
+- **Final project:** title, repository and live links; mentors mark it passed, changes requested (the student resubmits) or failed, with optional marks and feedback.
+- **Live demo:** mentors open slots; a student books one slot at a time and may cancel before it starts; **after a failed demo the student may book another slot until the batch ends** (product owner, 2026-11-20).
+- **Auto-check** (`src/features/training/progress.ts`): **marks = total marks obtained ÷ total maximum marks of every assignment, a missed assignment counts as 0** (product owner, 2026-11-20); attendance = classes attended ÷ classes held with attendance taken; final project passed; a live demo passed. The student's learning area (`/candidate/training/[id]`) shows a progress bar for each criterion.
+- **Result:** **a pass only when every criterion is met, no override; a fail only after the batch has ended** (product owner, 2026-11-20). Both need attendance taken for every held class and every submission graded. A pass sets the enrollment to COMPLETED and issues the `TRAINING_COMPLETION` certificate (ID `GARA-TC-…`, college, track as domain, batch start to completion, project title, optional grade, signatories typed by the mentor, prefilled from `CERTIFICATE_SIGNATORIES`) in the same transaction; a fail needs a reason. The criteria at that moment are stored with the result. Results are final: grades, attendance, project and demo of a decided student no longer change.
+- **Free re-attempt:** a failed student picks a later open batch of the same programme; the new enrollment is unpaid (no refund, no transfer). One per purchase: a failed re-attempt has none left.
+- **Certificates:** a certificate now comes from an internship or a training enrollment (database CHECK: exactly one). Training certificates are downloaded by the student, administrators and the batch's mentors; revoke and reissue are for administrators. Public verification is unchanged.
+- **Email:** the result (certificate issued, or not passed with the re-attempt option) through the outbox.
+- **Database:** migration `20261122000000_training_learning_area`, applied to production on 2026-11-20 after a read-only drift check and a JSON backup (`.storage/db-backups/2026-11-19T20-22-29-868Z`); verified afterwards.
+- **Verification:** TypeScript and ESLint clean (pre-existing warning only); Vitest 48 files, 1,434 tests (23 new); production build passed; Playwright production mode 103 passed; development mode with the journey database 141 passed (new: a student submits an assignment and the mentor grades it and takes attendance).
+
+Plan as written:
+
 - **3A Catalogue and payment:** TrainingProgram, Batch, Enrollment, Refund; `/training` and `/training/[slug]` (Course JSON-LD, Open Graph image); checkout with server-side pricing, Razorpay order, signature verification and an idempotent webhook; a 15-minute seat hold; Payment Receipt PDF with sequential receipt numbers and no GST line, emailed; refund button only inside the window (also enforced on the server), admin approval, Razorpay refund API; one free transfer after the window; optional gateway-charge deduction (default off).
 - **3B Learning area:** sessions (meeting link visible to enrolled students only), attendance, assignments and grading, final project, demo slot booking, progress against the pass criteria (60% marks, 75% attendance, project and demo passed, all configurable), mentor approval, certificate, one free re-attempt after a fail.
 - **3C Printed certificates:** after Phase 4, before the first batch ends.
 
-### Phase 4 — Campus Ambassador
+### Phase 4 — Campus Ambassador: **done (2026-11-20); RazorpayX payouts off until configured and the TDS rule is decided**
+
+What was built:
+- **Public page** `/campus-ambassador` (role, what you get, how payment works, Lead/Associate, rules, links to Terms and Privacy; breadcrumb data, Open Graph image, in the sitemap, navbar and footer). Values (commission ₹100, discount 10%, 30-day attribution and trial) come from `CAMPUS_AMBASSADOR_POLICY` in `src/config/site.ts`.
+- **Application** from the student portal (`/candidate/ambassador`, "Campus Ambassador" in candidate, evaluation, intern and alumni menus): mobile number, college (suggestions from the college master or a new name for review), branch, year, motivation, communities, experience, consent. One application per account; staff and employees cannot apply. The same mobile number on another application is flagged for staff.
+- **Admin** (`/admin/campus-ambassadors`): filter by status, approve as Lead or Associate (one Lead per college, enforced by a partial unique index), reject or deactivate with a reason, reactivate; performance per ambassador; issue the Campus Ambassador certificate (`GARA-CA-…`, approval date to the chosen last day).
+- **Referral code and link** on approval (`GARA-` + four letters of the name + three random characters, no look-alike characters); link `https://<domain>/?ref=CODE`; QR code (SVG, downloadable). A page opened with `?ref=` reports the code once per browser session; valid codes of active ambassadors are counted per day (no visitor data stored, rate-limited per client) and kept in an httpOnly cookie for 30 days (last click wins).
+- **Attribution:** a new account (created within the window) is counted as the ambassador's sign-up when it first opens the portal; applications are counted from those accounts.
+- **Checkout:** the enrol page pre-fills the code from the cookie; the server validates it (active ambassador, never the student's own code) and applies the 10% discount in whole rupees; the receipt shows the discount.
+- **Commission ledger:** ₹100 when a referred enrollment becomes active; payable after the batch's refund window closes (and while no refund request is open); reversed when the enrollment is refunded. Free re-attempts and self-referrals earn nothing.
+- **Ambassador dashboard:** link, code, QR, copy buttons, clicks, sign-ups, applications, paid enrollments, earnings (pending, payable, paid), commission list, overall and college leaderboards (paid enrollments), UPI ID (encrypted with `PAYOUT_ENCRYPTION_KEY`, shown masked), payout history, marketing kit (shown once the product owner provides it in `CAMPUS_AMBASSADOR_KIT`), certificate download.
+- **Payouts** (`/admin/campus-ambassadors/payouts`): payable totals per ambassador; **Pay via RazorpayX** (contact, UPI fund account and payout with an idempotency key; webhook events update it) once `RAZORPAYX_ACCOUNT_NUMBER` is set and the TDS percentage is decided; or **record a bank payout** made outside with its UTR and the TDS deducted. Commissions are claimed for a payout before money moves; a failed payout returns them to payable; a "processed" report after a failure is flagged for reconciliation instead of paying twice.
+- **Emails:** approved (code and link), rejected, deactivated, commission paid.
+- **Database:** migration `20261123000000_campus_ambassadors`, applied to production on 2026-11-20 after a read-only drift check and a JSON backup (`.storage/db-backups/2026-11-19T20-46-26-390Z`); verified afterwards.
+- **Verification:** TypeScript and ESLint clean (pre-existing warning only); Vitest 49 files, 1,454 tests (20 new); production build passed; Playwright production mode 109 passed; development mode with the journey database 147 passed plus the new apply-and-approve journey. The navbar now shows short labels below 1536 px (it overlapped the logo with five links).
+
+Not built: posters, WhatsApp template and pitch script (content needed from the product owner); a letter of recommendation document (the page promises it as the plan says; staff write it); automatic stipend internships for top performers (a staff decision).
+
+Plan as written:
 
 - `/campus-ambassador` page and application; admin approval as LEAD or ASSOCIATE (one Lead per college), 30-day trial flag.
 - Referral code, link and QR; 30-day last-click attribution cookie; code gives the student discount at checkout (default 10%).
@@ -130,7 +206,20 @@ Plan as written:
 - Commission ledger: entry when an enrollment becomes active, payable after `firstClassAt + 24h`, reversed automatically on refund; payouts through RazorpayX.
 - Anti-abuse: self-referral blocked, duplicate phone or email flagged, click tracking rate-limited.
 
-### Phase 6 — Remaining work
+### Phase 6 — Remaining work: **done (2026-11-20), except the Lighthouse measurement**
+
+What was built:
+- **First-class reminder:** when a batch with a first live class is saved, a job is queued for 24 hours before it (or at once when that is sooner); it emails every active student of the batch once, with the time and a link to the learning area. A moved or cancelled class gets a new job and the old one does nothing.
+- **Notifications:** every email of the plan is now sent through the outbox: application received and status changes (existing), offer letters (existing), payment received with the receipt, refund outcome, first-class reminder, result and certificate issued, ambassador approved/rejected/deactivated, commission paid, printed certificate ordered/shipped/delivered. WhatsApp can be added behind the same outbox later.
+- **CSV exports** for administrators (`/api/admin/exports/<dataset>`): training enrollments, payments, refunds, certificates, Campus Ambassadors, ambassador payouts and print orders. Links on the related admin pages; capped at 10,000 rows, rate-limited, audited (`EXPORT_REPORT`), cells escaped against spreadsheet formulas; UPI IDs only masked.
+- **College merge** (`/admin/colleges` → Review/Edit → "Merge this duplicate into"): students and ambassadors move to the college kept, the duplicate is removed and the merge is audited (`COLLEGE_MERGED`); refused while both colleges have an approved Lead. Certificates keep the college name printed on them.
+- **Help & FAQ:** five new answers (Industrial Training, refunds and transfers, pass criteria, Campus Ambassador programme, commissions); the FAQ knowledge base is now v1.1.0 and the portal assistant uses it.
+
+Not done: the mobile Lighthouse score of 90 or more was not measured in this environment (no Lighthouse run against the deployed site). Run it on the live domain after deployment.
+
+**Final verification of Phases 3B, 4, 3C and 6 together (2026-11-20):** TypeScript clean; ESLint clean apart from the pre-existing warning; Vitest 51 files, 1,472 tests passed; clean-copy production build passed; Playwright production mode 109 passed; development mode with the journey database 148 passed (18 skipped: production-only checks and journeys that run in the desktop project only). All four migrations are applied to production.
+
+Plan as written:
 
 - Reminder 24 hours before the first class and any notifications not shipped earlier.
 - College duplicate merge, Training and Campus Ambassador questions in Help & FAQ.

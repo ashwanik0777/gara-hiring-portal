@@ -67,7 +67,10 @@ const IP_HASH = "a".repeat(64);
 function activeCertificate(overrides: Record<string, unknown> = {}) {
   return {
     id: "cert-uuid-1",
+    type: "INTERNSHIP_COMPLETION",
     verificationCode: "GARA-CERT-2026-X89K21",
+    periodStart: new Date("2026-03-02T00:00:00Z"),
+    revokedAt: null,
     recipientName: "Test Recipient",
     programmeTitle: "AI & Autonomous Systems Engineering",
     issueDate: new Date("2026-04-12T00:00:00Z"),
@@ -102,7 +105,7 @@ describe("features/certificates/certificate-verification", () => {
       expect(result.recipientName).toBeUndefined();
     });
 
-    it("verifies a live active certificate, logs the hashed IP and reports fulfilled requirements", async () => {
+    it("verifies a live active certificate, logs the hashed IP and shows only the public fields", async () => {
       mockCertificateFindUnique.mockResolvedValueOnce(activeCertificate());
 
       const result = await certificateService.verifyCertificatePublic("gara-cert-2026-x89k21", IP_HASH, "agent");
@@ -111,37 +114,39 @@ describe("features/certificates/certificate-verification", () => {
       expect(result.recipientName).toBe("Test Recipient");
       expect(result.completionDate).toBe("2026-04-10");
       expect(result.issueDate).toBe("2026-04-12");
-      expect(result.evaluationRequirementsFulfilled).toBe(true);
+      expect(result.periodStart).toBe("2026-03-02");
+      expect(result.typeLabel).toBe("Internship completion");
+      // Careers plan: status, name, programme, dates and issue date only.
+      expect(Object.keys(result).sort()).toEqual(
+        ["completionDate", "issueDate", "periodStart", "programmeTitle", "recipientName", "status", "typeLabel", "valid", "verificationCode"].sort()
+      );
       expect(mockVerificationLogCreate.mock.calls[0][0].data.ipHash).toBe(IP_HASH);
       // Internal fields are never part of the public DTO
       expect(result).not.toHaveProperty("id");
       expect(JSON.stringify(result)).not.toContain("Internal reason");
     });
 
-    it("does not claim fulfilled checkpoints when the record does not show them", async () => {
-      mockCertificateFindUnique.mockResolvedValueOnce(
-        activeCertificate({
-          enrollment: {
-            status: EvaluationStatus.PASSED,
-            checkpoints: [{ status: CheckpointStatus.REVIEWED }, { status: CheckpointStatus.PENDING }],
-            completion: { status: CompletionStatus.APPROVED },
-          },
-        })
-      );
-      const result = await certificateService.verifyCertificatePublic("GARA-CERT-2026-X89K21", IP_HASH);
+    it("never shows signatories or evaluation details publicly", async () => {
+      mockCertificateFindUnique.mockResolvedValueOnce(activeCertificate());
+      const result = await certificateService.verifyCertificatePublic("GARA-IC-2026-7K2QXM", IP_HASH);
       expect(result.valid).toBe(true);
-      expect(result.evaluationRequirementsFulfilled).toBe(false);
+      const body = JSON.stringify(result);
+      expect(body).not.toContain("Test Signatory");
+      expect(body).not.toContain("Programme Lead");
     });
 
-    it("reports revoked certificates without personal data or the free-text revocation reason", async () => {
-      mockCertificateFindUnique.mockResolvedValueOnce(activeCertificate({ status: CertificateStatus.REVOKED }));
+    it("reports revoked certificates with whose they were, but never the revocation reason", async () => {
+      mockCertificateFindUnique.mockResolvedValueOnce(
+        activeCertificate({ status: CertificateStatus.REVOKED, revokedAt: new Date("2026-05-01T00:00:00Z") })
+      );
 
       const result = await certificateService.verifyCertificatePublic("GARA-CERT-2026-X89K21", IP_HASH);
 
       expect(result.valid).toBe(false);
       expect(result.status).toBe(CertificateStatus.REVOKED);
       expect(result.error).toBe("This certificate has been revoked by the issuer.");
-      expect(result.recipientName).toBeUndefined();
+      expect(result.recipientName).toBe("Test Recipient");
+      expect(result.revokedOn).toBe("2026-05-01");
       expect(JSON.stringify(result)).not.toContain("Internal reason");
     });
 
@@ -230,7 +235,8 @@ describe("features/certificates/certificate-verification", () => {
       expect(loggedHash).toBe(identifier);
       expect(loggedHash).not.toBe("anonymous");
       expect(html).toContain("Test Recipient");
-      expect(html).toContain("every checkpoint reviewed");
+      expect(html).toContain("Internship completion");
+      expect(html).not.toContain("Test Signatory");
       expect(html).not.toContain("Tamper-Proof");
     });
 

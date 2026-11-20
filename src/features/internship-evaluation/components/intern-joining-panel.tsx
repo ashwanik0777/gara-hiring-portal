@@ -117,8 +117,10 @@ export function InternJoiningPanel({
         <MarkInternJoinedDialog
           enrollmentId={enrollment.id}
           candidateName={enrollment.candidateName}
-          defaultDepartment={enrollment.openingDepartment}
-          defaultDesignation={enrollment.openingTitle}
+          // The internship offer letter, when issued, holds what was agreed with the intern.
+          defaultDepartment={enrollment.internshipOffer?.department ?? enrollment.openingDepartment}
+          defaultDesignation={enrollment.internshipOffer?.designation ?? enrollment.openingTitle}
+          defaultJoiningDate={enrollment.internshipOffer?.startDate.toISOString().slice(0, 10)}
           managerOptions={managerOptions}
           existingEmployeeCode={returningCode}
         />

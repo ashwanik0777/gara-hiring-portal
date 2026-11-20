@@ -7,6 +7,7 @@ import {
   IssueCertificateSchema,
   RecordCompletionSchema,
   ReissueCertificateSchema,
+  RevokeCertificateSchema,
 } from "./schemas";
 import { parseInput, readFormFields } from "@/features/internship-evaluation/form-input";
 import { revalidateEvaluationViews } from "@/features/internship-evaluation/revalidate";
@@ -46,7 +47,16 @@ export async function issueCertificateAction(
     const user = await requireAuth();
     const input = parseInput(
       IssueCertificateSchema,
-      readFormFields(formData, ["enrollmentId", "signatoryName", "signatoryTitle"])
+      readFormFields(formData, [
+        "enrollmentId",
+        "signatoryName",
+        "signatoryTitle",
+        "secondSignatoryName",
+        "secondSignatoryTitle",
+        "projectTitle",
+        "grade",
+        "periodStart",
+      ])
     );
 
     const certificate = await certificateService.issueCertificate(user, input);
@@ -73,9 +83,23 @@ export async function reissueCertificateAction(
 
     const certificate = await certificateService.reissueCertificate(user, input);
 
-    revalidateEvaluationViews(certificate.enrollmentId);
+    revalidateEvaluationViews(certificate.enrollmentId ?? undefined);
     return { success: true, data: { verificationCode: certificate.verificationCode } };
   } catch (error: unknown) {
     return { success: false, error: toActionError(error, "Failed to reissue certificate") };
+  }
+}
+
+export async function revokeCertificateAction(
+  formData: FormData
+): Promise<CertificateActionResult<{ verificationCode: string }>> {
+  try {
+    const user = await requireAuth();
+    const input = parseInput(RevokeCertificateSchema, readFormFields(formData, ["certificateId", "reason"]));
+    const certificate = await certificateService.revokeCertificate(user, input);
+    revalidateEvaluationViews(certificate.enrollmentId ?? undefined);
+    return { success: true, data: { verificationCode: certificate.verificationCode } };
+  } catch (error: unknown) {
+    return { success: false, error: toActionError(error, "Failed to revoke certificate") };
   }
 }

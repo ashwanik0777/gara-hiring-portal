@@ -377,6 +377,62 @@ Slots offered to a candidate to choose an interview time.
 
 ---
 
+#### Phase 5 additions (2026-11-20)
+- `Certificate.type` (ENUM `CertificateType`: `'INTERNSHIP_COMPLETION'`, `'TRAINING_COMPLETION'`, `'CAMPUS_AMBASSADOR'`, default internship) and printed-detail snapshot columns taken at issue time: `college_name`, `domain`, `period_start`, `project_title`, `grade`, `second_signatory_name`, `second_signatory_title` (all NULLABLE). Revocation now sets `status = REVOKED`, `revoked_at` and `revocation_reason` (staff and audit only).
+- `InternshipOffer` — internship offer letter, one per application (`application_id` UNIQUE, ON DELETE CASCADE): `designation`, `department`, `start_date`, `tenure_text`, `stipend_text` (NULLABLE), `signatory_name`, `signatory_title`, `version` (raised on each update), `issued_by` (FK -> `User.id`, ON DELETE SET NULL), `issued_at`, `updated_at`.
+
+### 3.5b Industrial Training (`src/features/training`, Phase 3A, 2026-11-20)
+
+Amounts are integer paise (INR). Migration `20261121000000_industrial_training`. Every foreign key between these tables, and to `User` for enrollments, is ON DELETE RESTRICT: payment records are never removed by deleting a programme, batch or account (`track_id` and `decided_by` are SET NULL).
+
+#### `TrainingProgram` (`training_programs`)
+- `id` (UUID, PK), `slug` (UNIQUE), `title`, `track_id` (FK -> `Track.id`, NULLABLE, ON DELETE SET NULL), `summary`, `description`, `syllabus` (JSONB: weeks with title and topics), `duration_weeks` (CHECK > 0), `fee_paise` (CHECK > 0), `prerequisites`, `outcomes` (NULLABLE), `status` (ENUM `TrainingProgramStatus`: `'DRAFT'`, `'PUBLISHED'`, `'ARCHIVED'`), timestamps.
+
+#### `TrainingBatch` (`training_batches`)
+- `id`, `program_id` (FK, ON DELETE RESTRICT), `name`, `start_date`, `first_class_at` (NULLABLE; the refund window ends 24 hours after it), `end_date` (NULLABLE), `schedule_text`, `seats` (CHECK > 0), `enrollment_deadline` (NULLABLE, end of the day in India time), `status` (ENUM `TrainingBatchStatus`: `'UPCOMING'`, `'RUNNING'`, `'COMPLETED'`, `'CANCELLED'`), timestamps.
+
+#### `TrainingEnrollment` (`training_enrollments`)
+- `id`, `user_id` (FK -> `User.id`), `batch_id` (FK); UNIQUE (`user_id`, `batch_id`).
+- `status` (ENUM `TrainingEnrollmentStatus`: `'PENDING_PAYMENT'`, `'ACTIVE'`, `'REFUND_REQUESTED'`, `'REFUNDED'`, `'COMPLETED'`, `'FAILED'`, `'CANCELLED'`).
+- `list_price_paise`, `discount_paise`, `amount_paid_paise` (CHECK list > 0, 0 ≤ discount ≤ list, paid ≥ 0), `referral_code` (Phase 4), `receipt_no` (UNIQUE, from the sequence `training_receipt_seq`), `transfer_count` (CHECK ≥ 0), `seat_hold_expires_at` (pending checkouts only), `paid_at`, `consent_at`, `consent_version`, timestamps.
+
+#### `TrainingPayment` (`training_payments`)
+- `id`, `enrollment_id` (FK), `razorpay_order_id` (UNIQUE), `razorpay_payment_id` (UNIQUE, NULLABLE), `amount_paise` (CHECK > 0), `status` (ENUM `TrainingPaymentStatus`: `'CREATED'`, `'CAPTURED'`, `'FAILED'`), `captured_at`, timestamps. One row per Razorpay order; an enrollment can have several (retries).
+
+#### `TrainingRefund` (`training_refunds`)
+- `id`, `enrollment_id` (FK), `payment_id` (FK -> `TrainingPayment.id`), `reason`, `amount_paise` (CHECK ≥ 0), `status` (ENUM `TrainingRefundStatus`: `'REQUESTED'`, `'APPROVED'`, `'PROCESSED'`, `'REJECTED'`, `'FAILED'`), `razorpay_refund_id` (UNIQUE, NULLABLE), `decided_by` (FK -> `User.id`, NULLABLE), `decision_note`, `requested_at`, `decided_at`, `processed_at`, timestamps.
+
+#### `PaymentWebhookEvent` (`payment_webhook_events`)
+- `id` (the Razorpay event id, PK), `event`, `received_at`. Each delivered event is applied once.
+
+Transitions (server-enforced): `PENDING_PAYMENT → ACTIVE` (captured payment); `ACTIVE → REFUND_REQUESTED` (inside the window) `→ REFUNDED` (processed) or back to `ACTIVE` (rejected); a transfer moves an `ACTIVE` enrollment to another batch once. Audit actions: `TRAINING_PAYMENT_CAPTURED`, `TRAINING_DUPLICATE_PAYMENT`, `TRAINING_REFUND_REQUESTED`, `TRAINING_REFUND_APPROVED`, `TRAINING_REFUND_REJECTED`, `TRAINING_REFUND_PROCESSED`, `TRAINING_REFUND_FAILED`, `TRAINING_ENROLLMENT_TRANSFERRED`.
+
+#### Learning area (Phase 3B, migration `20261122000000_training_learning_area`)
+- `TrainingBatchMentor` (`training_batch_mentors`): (`batch_id`, `user_id`) PK, both ON DELETE CASCADE, `assigned_by`.
+- `TrainingSession` (`training_sessions`): `batch_id` (RESTRICT), `title`, `starts_at`, `duration_minutes` (CHECK 1–600), `meeting_url`, `recording_url`, `status` (ENUM `TrainingSessionStatus`: `'SCHEDULED'`, `'CANCELLED'`), `attendance_taken_at`, `attendance_taken_by`.
+- `TrainingAttendance` (`training_attendance`): (`session_id`, `enrollment_id`) PK, `present`, `marked_by`, `marked_at`.
+- `TrainingAssignment` (`training_assignments`): `batch_id`, `title`, `description`, `due_at`, `max_marks` (CHECK 1–1000), `created_by`.
+- `TrainingSubmission` (`training_submissions`): UNIQUE (`assignment_id`, `enrollment_id`), `repo_url`, `link_url` (CHECK at least one), `notes`, `submitted_at`, `marks` (CHECK ≥ 0; ≤ max enforced by the server), `feedback`, `graded_by`, `graded_at`.
+- `TrainingFinalProject` (`training_final_projects`): `enrollment_id` UNIQUE, `title`, `description`, `repo_url`, `live_url`, `status` (ENUM `TrainingProjectStatus`: `'SUBMITTED'`, `'CHANGES_REQUESTED'`, `'PASSED'`, `'FAILED'`), `marks` (CHECK 0–100), `feedback`, `reviewed_by`, `reviewed_at`.
+- `TrainingDemoSlot` (`training_demo_slots`): `batch_id`, `mentor_id` (FK -> `User.id`, RESTRICT), `starts_at`, `duration_minutes` (CHECK 5–240), `meeting_url`, `booked_enrollment_id` (NULLABLE), `booked_at`, `result` (ENUM `TrainingDemoResult`: `'PASSED'`, `'FAILED'`; CHECK only with a booking), `result_note`, `result_at`, `result_by`.
+- `TrainingEnrollment` additions: `reattempt_of_id` (UNIQUE, FK to the failed enrollment; CHECK not itself), `result_at`, `result_by`, `result_note`, `result_snapshot` (JSONB: the criteria values at the decision).
+- `Certificate` change: `enrollment_id` is now NULLABLE and `training_enrollment_id` (UNIQUE, FK, RESTRICT) was added; CHECK `certificates_single_source` requires exactly one of them.
+- Actor columns (`marked_by`, `graded_by`, `reviewed_by`, `result_by`, `attendance_taken_by`) hold the user id without a foreign key: the audit log is the record, and deleting a staff account is not blocked by grades it gave.
+- Audit actions: `TRAINING_MENTOR_ASSIGNED/REMOVED`, `TRAINING_SESSION_CREATED/UPDATED/CANCELLED`, `TRAINING_ATTENDANCE_SAVED`, `TRAINING_ASSIGNMENT_CREATED/UPDATED/DELETED`, `TRAINING_SUBMISSION_GRADED`, `TRAINING_PROJECT_REVIEWED`, `TRAINING_DEMO_SLOTS_CREATED`, `TRAINING_DEMO_RESULT`, `TRAINING_RESULT_PASSED/FAILED`, `TRAINING_REATTEMPT_STARTED`, `CERTIFICATE_ISSUED`.
+
+### 3.5c Campus Ambassadors (`src/features/ambassadors`, Phase 4, migration `20261123000000_campus_ambassadors`)
+- `CampusAmbassador` (`campus_ambassadors`): `user_id` UNIQUE (RESTRICT), `college_id` (SET NULL), `phone`, `branch`, `year_of_study` (CHECK 1–6), `motivation`, `social_reach`, `past_experience`, `consent_at`, `consent_version`, `status` (ENUM `AmbassadorStatus`: `'PENDING'`, `'APPROVED'`, `'REJECTED'`, `'DEACTIVATED'`), `role` (ENUM `AmbassadorRole`: `'LEAD'`, `'ASSOCIATE'`), `referral_code` UNIQUE (CHECK present with a role when approved), `approved_at`, `trial_ends_at`, `duplicate_flag`, `upi_id_encrypted` (AES-256-GCM, context `ambassador-payout:<id>:upi`), `upi_id_masked`, `razorpay_contact_id`, `razorpay_fund_account_id`, `decided_by`, `decided_at`, `decision_note`. Partial UNIQUE index: one approved Lead per college.
+- `ReferralClickDaily` (`referral_click_daily`): (`ambassador_id`, `day` YYYY-MM-DD India time) PK, `clicks` (CHECK ≥ 0). No visitor data.
+- `User` additions: `referred_by_ambassador_id` (SET NULL), `referred_at`.
+- `AmbassadorCommission` (`ambassador_commissions`): `ambassador_id`, `enrollment_id` UNIQUE, `amount_paise` (CHECK > 0), `status` (ENUM `CommissionStatus`: `'PENDING'`, `'PAID'`, `'REVERSED'`), `payable_at` (the batch's refund window close), `payout_id` (SET NULL), `reversed_at`.
+- `AmbassadorPayout` (`ambassador_payouts`): `ambassador_id`, `gross_paise`, `tds_paise`, `net_paise` (CHECK net = gross − TDS > 0), `method` (ENUM `'RAZORPAYX'`, `'MANUAL'`; CHECK a manual payout has a UTR), `status` (ENUM `'PROCESSING'`, `'PAID'`, `'FAILED'`), `razorpay_payout_id` UNIQUE, `utr`, `failure_reason`, `created_by`, `paid_at`.
+- `Certificate` change: `ambassador_id` (UNIQUE, RESTRICT); CHECK `certificates_single_source` now requires exactly one of the internship, training and ambassador sources.
+- Audit actions: `AMBASSADOR_APPLIED`, `AMBASSADOR_APPROVED/REJECTED/DEACTIVATED`, `AMBASSADOR_UPI_SAVED`, `AMBASSADOR_PAYOUT_STARTED/RECORDED/PAID/FAILED/NEEDS_RECONCILIATION`.
+
+### 3.5d Printed certificate orders (`src/features/print-orders`, Phase 3C, migration `20261124000000_certificate_print_orders`)
+- `CertificatePrintOrder` (`certificate_print_orders`): `certificate_id` (RESTRICT), `user_id` (RESTRICT), `delivery_type` (ENUM `PrintDeliveryType`: `'COLLEGE_BULK'`, `'COURIER'`), `recipient_name`, `phone`, `address_line1/2`, `city`, `state`, `pincode` (courier), `college_name` (bulk), `amount_paise` (CHECK > 0), `status` (ENUM `PrintOrderStatus`: `'PENDING_PAYMENT'`, `'PAID'`, `'PRINTED'`, `'SHIPPED'`, `'DELIVERED'`), `razorpay_order_id` UNIQUE, `razorpay_payment_id` UNIQUE, `paid_at`, `receipt_no` UNIQUE (from `training_receipt_seq`), `courier_name`, `tracking_no` (CHECK present for shipped courier orders), `printed_at`, `shipped_at`, `delivered_at`, `updated_by`.
+- Audit actions: `PRINT_ORDER_PAID`, `PRINT_ORDER_PRINTED`, `PRINT_ORDER_SHIPPED`, `PRINT_ORDER_DELIVERED`.
+
 ### 3.6 Full-Time Recruitment & Employee Core (`src/features/employees`, Prompt 7)
 
 #### `JobOffer`

@@ -9,6 +9,7 @@ import { handleInterviewReminder } from "./interview-reminders";
 import { JOB_TYPES, type JobType } from "./job-types";
 import { DAILY_JOBS, readDailyJobDate } from "./schedule";
 import { runStaffDailyDigest } from "./staff-digest";
+import { handleTrainingFirstClassReminder } from "@/features/training/first-class-reminder";
 
 /** Wraps a daily job: runs only for a valid payload on its own business day. */
 function dailyHandler(type: JobType, run: (dateKey: string, now: Date) => Promise<unknown>): JobHandler {
@@ -31,6 +32,7 @@ export const automationHandlers: Record<string, JobHandler> = {
     runConversionReviewReminders
   ),
   [JOB_TYPES.STAFF_DAILY_DIGEST]: dailyHandler(JOB_TYPES.STAFF_DAILY_DIGEST, runStaffDailyDigest),
+  [JOB_TYPES.TRAINING_FIRST_CLASS_REMINDER]: handleTrainingFirstClassReminder,
   // CONVERSION_EFFECTIVE (accepted intern → full-time conversions), owned by the employees module.
   ...conversionJobHandlers,
 };

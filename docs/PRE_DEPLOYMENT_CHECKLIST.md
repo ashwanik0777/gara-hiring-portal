@@ -80,6 +80,10 @@ Platform level (owner actions — an application cannot absorb a volumetric atta
 - [ ] **Backups:** delete `.storage/db-backups/` on this machine after the deployment is verified (they contain user and session data).
 - [ ] **Canonical domain (2026-11-19):** in Vercel production set `BETTER_AUTH_URL=https://careers.gara-innovations.tech` explicitly (otherwise Vercel may pick the shorter `*.vercel.app` alias), keep `https://careers.gara-innovations.tech/api/auth/callback/google` in Google Cloud, and point the external cron job at the same domain (RUNBOOK §6.3b). Set `SMTP_FROM` to an address on a domain the company controls, with SPF and DKIM.
 
+- [ ] **Industrial Training payments (Phase 3A):** set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` (test keys in testing, live keys in production) and create the webhook with the five events (RUNBOOK §5.10). Without them the enrol page says "Online payment opens soon".
+
+- [ ] **Campus Ambassador payouts (Phase 4):** when RazorpayX is open, set `RAZORPAYX_ACCOUNT_NUMBER`, add the payout webhook events (RUNBOOK §5.11) and decide the TDS rule (OPEN_DECISIONS #30/#50). Provide the marketing kit (posters, WhatsApp template, pitch script) for `CAMPUS_AMBASSADOR_KIT`.
+
 ## 6. Manual test plan for the testing phase
 
 1. **Candidate:** register (job / internship / both) → code email → dashboard; sign out and sign in (password + code); wrong code 5× → friendly error; resend after 60 s; forgot password link.
@@ -90,6 +94,10 @@ Platform level (owner actions — an application cannot absorb a volumetric atta
 6. **HRMS:** leave approve/reject (not your own), attendance correction, payroll period with payout profiles (HR cannot touch their own record), CSV exports.
 7. **Roles:** sign in as Manager, Interviewer and Mentor and confirm each sees only their workspace and permitted modules; an interviewer sees only assigned applications.
 8. **Phones:** repeat steps 1–2 and the dashboards at 375 px width.
+9. **Industrial Training (Razorpay test mode):** admin creates and publishes a programme and a batch → `/training` shows it → a candidate enrols and pays with a test card → receipt on "My Training" and the email → request a refund → admin approves on `/admin/training/refunds` → status "Refunded" and the email. Repeat with a batch whose refund window has closed and use the one free transfer.
+10. **Learning area (Phase 3B):** admin assigns a mentor to a batch → mentor adds a class, an assignment and demo slots → student submits before the due time (after it the form closes), books a demo → mentor takes attendance, grades, reviews the project and records the demo → "Record pass" stays disabled until every criterion is met → pass issues the certificate (verify it on `/verify`). For a fail, end the batch first, then use the free re-attempt.
+11. **Campus Ambassador (Phase 4):** apply from `/candidate/ambassador` → admin approves → open `/?ref=CODE` in a private window, register, enrol with the pre-filled code (10% off) → commission appears as pending, payable after the refund window → record a bank payout with a UTR.
+12. **Exports and colleges (Phase 6):** download each CSV from the admin pages; merge a duplicate college.
 
 ## 7. Decisions and remaining limitations
 

@@ -5,6 +5,7 @@ import { isApplicationWindowClosed } from "@/features/openings/listing";
 import { absoluteUrl } from "@/lib/site-url";
 import { POLICY_PAGES } from "@/components/legal/policy-pages";
 import { LEGAL } from "@/config/site";
+import { listPublishedPrograms } from "@/features/training/services/program-service";
 import { openingUrl } from "./careers/_lib/seo";
 
 /** Upper bound of opening URLs in one sitemap file (the protocol allows 50,000). */
@@ -21,9 +22,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // change expires, so the sitemap costs no database query on a warm cache.
   await connection();
 
-  const [published, listed] = await Promise.all([
+  const [published, listed, programmes] = await Promise.all([
     listPublishedOpeningSlugs(MAX_SITEMAP_OPENINGS),
     getPublicOpenings(),
+    listPublishedPrograms().catch(() => []),
   ]);
   const now = new Date();
   const openings = published.filter((opening) => !isApplicationWindowClosed(opening.applyDeadline, now));
@@ -62,6 +64,22 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       changeFrequency: "weekly" as const,
       priority: 0.7,
     })),
+    {
+      url: absoluteUrl("/training"),
+      changeFrequency: "weekly" as const,
+      priority: 0.8,
+    },
+    ...programmes.map((programme) => ({
+      url: absoluteUrl(`/training/${programme.slug}`),
+      lastModified: programme.updatedAt,
+      changeFrequency: "weekly" as const,
+      priority: 0.8,
+    })),
+    {
+      url: absoluteUrl("/campus-ambassador"),
+      changeFrequency: "monthly" as const,
+      priority: 0.6,
+    },
     ...POLICY_PAGES.map((page) => ({
       url: absoluteUrl(page.href),
       ...(page.href === "/contact" ? {} : { lastModified: new Date(`${LEGAL.version}T00:00:00Z`) }),
