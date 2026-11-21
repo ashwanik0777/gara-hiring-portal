@@ -24,12 +24,6 @@ export function ChatbotOverviewStats() {
         />
         <StatCard label="Topics" value={topicCount} icon={Layers} tone="blue" hint="FAQ categories covered" />
       </StatGrid>
-      <p className="flex items-start gap-2 rounded-xl border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground">
-        <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
-        Answers come only from the approved FAQ catalogue and the signed-in person&apos;s own records. Personal
-        details are removed from questions before they are matched, and no external AI model is used (the provider
-        decision OD-011 is open).
-      </p>
     </div>
   );
 }
