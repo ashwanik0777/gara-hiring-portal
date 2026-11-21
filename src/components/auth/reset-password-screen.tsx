@@ -16,6 +16,7 @@ import {
   ArrowRight,
   ArrowLeft,
 } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 interface ResetPasswordScreenProps {
   token: string | null;
@@ -71,6 +72,7 @@ export function ResetPasswordScreen({ token, tokenError }: ResetPasswordScreenPr
         return;
       }
       setIsSuccess(true);
+      toast.success("Password updated. Redirecting to sign in...");
       setTimeout(() => {
         router.replace("/login");
       }, 1500);
@@ -109,13 +111,6 @@ export function ResetPasswordScreen({ token, tokenError }: ResetPasswordScreenPr
           <div role="alert" className="p-3.5 rounded-xl border border-destructive/20 bg-destructive/10 text-destructive text-xs flex items-center gap-2">
             <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>{errorMsg}</span>
-          </div>
-        )}
-
-        {isSuccess && (
-          <div role="status" className="p-3.5 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Password updated. Redirecting to sign in...</span>
           </div>
         )}
 

@@ -5,6 +5,7 @@ import "./globals.css";
 import { getSiteUrl } from "@/lib/site-url";
 import { FloatingSocialDock } from "@/components/navigation/floating-social-dock";
 import { FloatingActions } from "@/components/navigation/floating-actions";
+import { Toaster } from "@/components/ui/toast";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -83,6 +84,7 @@ export default function RootLayout({
           <FloatingSocialDock />
           <FloatingActions />
         </Suspense>
+        <Toaster />
       </body>
     </html>
   );

@@ -2,7 +2,7 @@
 
 import React, { useId, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, CalendarRange, CheckCircle2, Plus, X } from "lucide-react";
+import { AlertCircle, CalendarRange, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,7 @@ import {
   validateBookingSlotTimes,
 } from "../schemas";
 import type { InterviewerOption } from "../types";
+import { toast } from "@/components/ui/toast";
 
 interface BookingRequestFormProps {
   applicationId: string;
@@ -52,7 +53,6 @@ export function BookingRequestForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [success, setSuccess] = useState<string | null>(null);
 
   const updateSlot = (index: number, value: string) => {
     setSlots((current) => current.map((slot, i) => (i === index ? value : slot)));
@@ -68,7 +68,6 @@ export function BookingRequestForm({
     e.preventDefault();
     setError(null);
     setFieldErrors({});
-    setSuccess(null);
 
     if (slots.some((slot) => slot === "")) {
       setFieldErrors({ slots: "Fill in every time option or remove the empty ones." });
@@ -102,7 +101,7 @@ export function BookingRequestForm({
         setError(res.error);
         setFieldErrors(res.fieldErrors ?? {});
       } else {
-        setSuccess(`Sent ${isoSlots.length} time options to ${candidateName}.`);
+        toast.success(`Sent ${isoSlots.length} time options to ${candidateName}.`);
         setSlots(["", ""]);
         router.refresh();
       }
@@ -134,15 +133,6 @@ export function BookingRequestForm({
             >
               <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
               <span>{error}</span>
-            </div>
-          )}
-          {success && (
-            <div
-              role="status"
-              className="p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs flex items-center gap-2"
-            >
-              <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>{success}</span>
             </div>
           )}
 

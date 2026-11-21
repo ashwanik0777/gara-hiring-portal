@@ -11,7 +11,7 @@ import { absoluteUrl } from "@/lib/site-url";
 import { CAMPUS_AMBASSADOR_POLICY } from "@/config/site";
 import { formatInr } from "@/features/training/money";
 
-const DESCRIPTION = `Represent ${ORGANIZATION_NAME} at your college as a Campus Ambassador: share Industrial Training with fellow students, earn a commission for every paid enrollment made with your code and get a verifiable certificate.`;
+const DESCRIPTION = `Represent ${ORGANIZATION_NAME} at your college as a Campus Ambassador: share Industrial Training with fellow students, earn a commission on paid enrollments made with your code once GARA approves your work, and get a verifiable certificate.`;
 
 export const metadata: Metadata = {
   title: "Campus Ambassador Programme",
@@ -59,18 +59,13 @@ export default function CampusAmbassadorPage() {
             <h1 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight">
               Campus Ambassador Programme
             </h1>
-            <p className="text-sm sm:text-base text-muted-foreground">
-              A free role for students who want to represent {ORGANIZATION_NAME} at their college. You share our Industrial
-              Training programmes; students who enrol with your code get {CAMPUS_AMBASSADOR_POLICY.studentDiscountPercent}% off and
-              you earn {commission} for each paid enrollment.
-            </p>
+           
             <Link
               href="/candidate/ambassador"
               className="inline-flex h-11 items-center justify-center rounded-xl bg-primary px-6 text-sm font-semibold text-primary-foreground shadow-xs hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               Apply to become an ambassador
             </Link>
-            <p className="text-xs text-muted-foreground">You need an account; applying is free.</p>
           </header>
 
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
@@ -83,16 +78,17 @@ export default function CampusAmbassadorPage() {
             </Block>
             <Block title="What you get" icon={<Award className="h-5 w-5 text-primary" />}>
               <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-                <li>{commission} for every paid Industrial Training enrollment made with your code.</li>
+                <li>A commission of {commission} for a paid Industrial Training enrollment made with your code, once GARA reviews and approves your work.</li>
                 <li>A verifiable Campus Ambassador certificate and a letter of recommendation.</li>
                 <li>Top performers may be offered a stipend internship.</li>
               </ul>
             </Block>
             <Block title="How you are paid" icon={<Wallet className="h-5 w-5 text-primary" />}>
               <p className="text-sm text-muted-foreground">
-                A commission is recorded when the student&apos;s payment is confirmed and becomes payable once that batch&apos;s
-                refund window has closed (24 hours after the first live class). If the student is refunded, the commission is
-                reversed. Payouts go to the UPI ID in your dashboard; tax is deducted where the law requires it.
+                A commission is recorded when the student&apos;s payment is confirmed. Once that batch&apos;s refund window has
+                closed (24 hours after the first live class), GARA reviews your work and decides whether to approve it; GARA may
+                decline a commission at its discretion. If the student is refunded, the commission is reversed. Approved
+                commissions are paid to the UPI ID in your dashboard; tax is deducted where the law requires it.
               </p>
             </Block>
             <Block title="Roles" icon={<Users className="h-5 w-5 text-primary" />}>

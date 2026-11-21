@@ -1,5 +1,5 @@
 import { cacheLife, cacheTag } from "next/cache";
-import { Prisma, Role, TrainingBatchStatus, TrainingProgramStatus } from "@prisma/client";
+import { Prisma, Role, TrainingBatchStatus, TrainingProgramStatus, TrainingRefundStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
@@ -158,33 +158,87 @@ function programData(input: ReturnType<typeof trainingProgramSchema.parse>) {
   };
 }
 
-/** Staff Query: every programme with its batch count. */
-export async function listProgramsForStaff(user: AuthenticatedUser) {
+/** Upper bounds for the staff overview queries (programmes and batches stay in the tens). */
+export const STAFF_PROGRAMS_LIMIT = 500;
+export const STAFF_BATCHES_LIMIT = 5000;
+
+/**
+ * Staff Query: the Industrial Training overview. Each programme with its open batches
+ * (upcoming or running), enrolled students (seat-taking enrollments: paid, not refunded) and
+ * the start date of its next upcoming batch, plus the refund requests waiting for a decision.
+ * Counting happens in the database; no enrollment rows are loaded.
+ */
+export async function getTrainingOverviewForStaff(user: AuthenticatedUser) {
   assertTrainingAdmin(user);
-  return prisma.trainingProgram.findMany({
-    select: {
-      id: true,
-      slug: true,
-      title: true,
-      feePaise: true,
-      durationWeeks: true,
-      status: true,
-      updatedAt: true,
-      _count: { select: { batches: true } },
+  const [programs, batches, pendingRefunds] = await Promise.all([
+    prisma.trainingProgram.findMany({
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        feePaise: true,
+        durationWeeks: true,
+        status: true,
+        updatedAt: true,
+        track: { select: { name: true } },
+        _count: { select: { batches: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: STAFF_PROGRAMS_LIMIT,
+    }),
+    prisma.trainingBatch.findMany({
+      select: {
+        programId: true,
+        status: true,
+        startDate: true,
+        _count: { select: { enrollments: { where: { status: { in: [...SEAT_TAKING_STATUSES] } } } } },
+      },
+      take: STAFF_BATCHES_LIMIT,
+    }),
+    prisma.trainingRefund.count({ where: { status: TrainingRefundStatus.REQUESTED } }),
+  ]);
+
+  const perProgram = new Map<string, { openBatches: number; enrolled: number; nextStart: Date | null }>();
+  for (const batch of batches) {
+    const entry = perProgram.get(batch.programId) ?? { openBatches: 0, enrolled: 0, nextStart: null };
+    entry.enrolled += batch._count.enrollments;
+    if (batch.status === TrainingBatchStatus.UPCOMING || batch.status === TrainingBatchStatus.RUNNING) entry.openBatches += 1;
+    if (batch.status === TrainingBatchStatus.UPCOMING && (!entry.nextStart || batch.startDate < entry.nextStart)) {
+      entry.nextStart = batch.startDate;
+    }
+    perProgram.set(batch.programId, entry);
+  }
+
+  const rows = programs.map((program) => ({
+    ...program,
+    ...(perProgram.get(program.id) ?? { openBatches: 0, enrolled: 0, nextStart: null }),
+  }));
+  return {
+    programs: rows,
+    totals: {
+      programs: rows.length,
+      openBatches: rows.reduce((sum, row) => sum + row.openBatches, 0),
+      enrolled: rows.reduce((sum, row) => sum + row.enrolled, 0),
+      pendingRefunds,
     },
-    orderBy: { updatedAt: "desc" },
-  });
+  };
 }
 
-/** Staff Query: a programme with all its batches and their enrollment counts. */
+export type TrainingOverview = Awaited<ReturnType<typeof getTrainingOverviewForStaff>>;
+
+/**
+ * Staff Query: a programme with all its batches. Each batch counts its seat-taking
+ * enrollments only (an abandoned checkout, a refund or a cancellation frees the seat).
+ */
 export async function getProgramForStaff(id: string, user: AuthenticatedUser) {
   assertTrainingAdmin(user);
   const program = await prisma.trainingProgram.findUnique({
     where: { id },
     include: {
+      track: { select: { name: true, slug: true } },
       batches: {
         orderBy: { startDate: "desc" },
-        include: { _count: { select: { enrollments: true } } },
+        include: { _count: { select: { enrollments: { where: { status: { in: [...SEAT_TAKING_STATUSES] } } } } } },
       },
     },
   });

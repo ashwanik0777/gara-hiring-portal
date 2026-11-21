@@ -1,7 +1,5 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { z } from "zod";
-import { ArrowLeft } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
@@ -9,12 +7,14 @@ import { getProgramForStaff, type StaffTrainingProgram } from "@/features/traini
 import { listActiveTracks } from "@/features/openings/services/track-service";
 import { TrainingProgramForm } from "@/features/training/components/program-form";
 import { BatchManager } from "@/features/training/components/batch-manager";
+import { ProgramSummaryCard } from "@/features/training/components/training-overview";
 import { toBatchRows, toProgramFormValues } from "@/features/training/form-values";
 
 export const instant = false;
 
 export const metadata = { title: "Manage programme", robots: { index: false, follow: false } };
 
+/** Rendered inside the admin portal shell, which provides the title and "Back to Training". */
 export default async function AdminTrainingProgramPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await getCurrentUser();
@@ -33,16 +33,13 @@ export default async function AdminTrainingProgramPage({ params }: { params: Pro
 
   return (
     <div className="w-full space-y-6">
-      <Link href="/admin/training" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-3.5 w-3.5" /> All programmes
-      </Link>
-      <h2 className="text-2xl font-bold tracking-tight">{program.title}</h2>
+      <ProgramSummaryCard program={program} />
+      <BatchManager programId={program.id} programSlug={program.slug} batches={toBatchRows(program)} />
       <TrainingProgramForm
         programId={program.id}
         initial={toProgramFormValues(program)}
         tracks={tracks.map((track) => ({ id: track.id, name: track.name }))}
       />
-      <BatchManager programId={program.id} programSlug={program.slug} batches={toBatchRows(program)} />
     </div>
   );
 }

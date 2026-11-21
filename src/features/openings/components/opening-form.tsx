@@ -1,16 +1,30 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { ArrowRight, Briefcase, Building2, ChevronDown, Globe, GraduationCap, Repeat2, type LucideIcon } from "lucide-react";
 import { createOpeningSchema, CreateOpeningInput } from "../schemas";
 import { createOpeningAction, updateOpeningAction } from "../actions";
 import { MAX_SKILLS, normalizeSkills } from "../listing";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+import {
+  ChoiceTiles,
+  FieldErrorText,
+  FieldGroup,
+  FieldLabelRow,
+  fieldControlBase,
+  fieldErrorBorder,
+  fieldInputClass,
+  fieldOkBorder,
+  fieldTextareaClass,
+} from "@/components/ui/form-field";
 import { OpeningType, WorkplaceType } from "@/types/enums";
+import { toast } from "@/components/ui/toast";
 
 export interface OpeningFormTrackOption {
   id: string;
@@ -30,20 +44,25 @@ interface OpeningFormProps {
   opening?: { id: string; values: CreateOpeningInput };
 }
 
-const selectClass =
-  "flex h-10 w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-const textareaClass =
-  "flex w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const LIMITS = { title: 150, slug: 150, department: 100, location: 150, duration: 80, summary: 300, eligibility: 500, stipend: 300 } as const;
 
-function FieldError({ message }: { message?: string }) {
-  return message ? <p className="text-xs text-destructive">{message}</p> : null;
-}
+const PROGRAM_TYPES: Array<{ value: OpeningType; label: string; icon: LucideIcon }> = [
+  { value: OpeningType.INTERNSHIP, label: "Internship", icon: GraduationCap },
+  { value: OpeningType.FULL_TIME, label: "Full-time", icon: Briefcase },
+];
+const WORKPLACES: Array<{ value: WorkplaceType; label: string; icon: LucideIcon }> = [
+  { value: WorkplaceType.REMOTE, label: "Remote", icon: Globe },
+  { value: WorkplaceType.HYBRID, label: "Hybrid", icon: Repeat2 },
+  { value: WorkplaceType.ON_SITE, label: "On-site", icon: Building2 },
+];
 
 export function OpeningForm({ basePath = "/admin/openings", tracks = [], opening }: OpeningFormProps) {
   const router = useRouter();
   const isEdit = Boolean(opening);
+  const idPrefix = React.useId();
+  const fid = (name: string) => `${idPrefix}-${name}`;
+  const errId = (name: string) => `${idPrefix}-${name}-error`;
   const [error, setError] = React.useState<string | null>(null);
-  const [saved, setSaved] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [skillsText, setSkillsText] = React.useState((opening?.values.skills ?? []).join(", "));
 
@@ -51,6 +70,7 @@ export function OpeningForm({ basePath = "/admin/openings", tracks = [], opening
     register,
     handleSubmit,
     setValue,
+    control,
     formState: { errors },
   } = useForm<CreateOpeningInput>({
     resolver: zodResolver(createOpeningSchema),
@@ -59,6 +79,10 @@ export function OpeningForm({ basePath = "/admin/openings", tracks = [], opening
       workplaceType: WorkplaceType.REMOTE,
       skills: [],
     },
+  });
+  const [summary, eligibility, stipend, skills] = useWatch({
+    control,
+    name: ["summary", "eligibility", "stipendPolicyText", "skills"],
   });
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -80,12 +104,11 @@ export function OpeningForm({ basePath = "/admin/openings", tracks = [], opening
   const onSubmit = async (values: CreateOpeningInput) => {
     setIsSubmitting(true);
     setError(null);
-    setSaved(false);
     try {
       if (opening) {
         const result = await updateOpeningAction(opening.id, values);
         if (result.success) {
-          setSaved(true);
+          toast.success("Opening details saved.");
           router.refresh();
         } else {
           setError(result.error);
@@ -105,193 +128,302 @@ export function OpeningForm({ basePath = "/admin/openings", tracks = [], opening
     }
   };
 
-  return (
-    <Card className="w-full shadow-sm">
-      <CardHeader>
-        <CardTitle>{isEdit ? "Opening details" : "Create New Vacancy / Cohort"}</CardTitle>
-      </CardHeader>
+  /** Props shared by every text control: id, error state and its error message link. */
+  const a11y = (name: string, message: string | undefined) => ({
+    id: fid(name),
+    "aria-invalid": message ? true : undefined,
+    "aria-describedby": message ? errId(name) : undefined,
+  });
+  const border = (message: string | undefined) => (message ? fieldErrorBorder : fieldOkBorder);
+  const skillsError = errors.skills?.message ?? errors.skills?.[0]?.message;
+  const skillList = skills ?? [];
 
-      <form onSubmit={handleSubmit(onSubmit)} noValidate>
-        <CardContent className="space-y-6">
+  const fields = (
+        <>
           {error && (
-            <div role="alert" className="p-3 text-sm rounded-lg bg-destructive/10 text-destructive border border-destructive/20">
+            <div role="alert" className="rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
               {error}
             </div>
           )}
-          {saved && (
-            <div role="status" className="p-3 text-sm rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20">
-              Opening details saved.
-            </div>
-          )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input
-              label="Opening Title"
-              placeholder="e.g. Software Engineering Intern"
-              error={errors.title?.message}
-              {...register("title", {
-                onChange: handleTitleChange,
-              })}
-            />
-
-            <Input
-              label="URL Slug"
-              placeholder="e.g. software-engineering-intern"
-              error={errors.slug?.message}
-              {...register("slug")}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            <Input
-              label="Department"
-              placeholder="e.g. Platform Engineering"
-              error={errors.department?.message}
-              {...register("department")}
-            />
-
-            <div className="space-y-1.5">
-              <label htmlFor="opening-form-program-type" className="block text-sm font-medium text-foreground">Program Type</label>
-              <select id="opening-form-program-type" className={selectClass} {...register("type")}>
-                <option value={OpeningType.INTERNSHIP}>Internship (7-Working-Day Evaluation)</option>
-                <option value={OpeningType.FULL_TIME}>Full-Time Role</option>
-              </select>
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="opening-form-workplace-model" className="block text-sm font-medium text-foreground">Workplace Model</label>
-              <select id="opening-form-workplace-model" className={selectClass} {...register("workplaceType")}>
-                <option value={WorkplaceType.REMOTE}>Remote</option>
-                <option value={WorkplaceType.HYBRID}>Hybrid</option>
-                <option value={WorkplaceType.ON_SITE}>On-Site</option>
-              </select>
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="opening-form-track" className="block text-sm font-medium text-foreground">Track</label>
-              <select id="opening-form-track" className={selectClass} {...register("trackId")}>
-                <option value="">No track</option>
-                {tracks.map((track) => (
-                  <option key={track.id} value={track.id}>
-                    {track.name}
-                    {track.isActive ? "" : " (hidden)"}
-                  </option>
-                ))}
-              </select>
-              <FieldError message={errors.trackId?.message} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input
-              label="Location"
-              placeholder="e.g. Bengaluru, India / Remote"
-              error={errors.location?.message}
-              {...register("location")}
-            />
-            <Input
-              label="Duration (optional)"
-              placeholder="e.g. 3 months, extendable"
-              error={errors.durationText?.message}
-              {...register("durationText")}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            <Input
-              label="Last date to apply (optional)"
-              type="date"
-              error={errors.applyDeadline?.message}
-              {...register("applyDeadline")}
-            />
-            <Input
-              label="Number of positions (optional)"
-              type="number"
-              min={1}
-              max={1000}
-              inputMode="numeric"
-              error={errors.openingsCount?.message}
-              {...register("openingsCount", {
-                setValueAs: (value: unknown) => (value === "" || value == null ? null : Number(value)),
-              })}
-            />
-            <Input
-              label={`Skills (optional, comma-separated, up to ${MAX_SKILLS})`}
-              placeholder="e.g. React, TypeScript, SQL"
-              value={skillsText}
-              onChange={handleSkillsChange}
-              error={errors.skills?.message ?? errors.skills?.[0]?.message}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label htmlFor="opening-form-summary" className="block text-sm font-medium text-foreground">Card summary (optional)</label>
-              <textarea id="opening-form-summary" rows={2} className={textareaClass} placeholder="One or two sentences shown on the careers listing." {...register("summary")} />
-              <FieldError message={errors.summary?.message} />
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="opening-form-stipend" className="block text-sm font-medium text-foreground">Stipend / pay policy (optional)</label>
-              <textarea id="opening-form-stipend" rows={2} className={textareaClass} placeholder="As decided for this opening, e.g. the stipend terms." {...register("stipendPolicyText")} />
-              <FieldError message={errors.stipendPolicyText?.message} />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="opening-form-eligibility" className="block text-sm font-medium text-foreground">Eligibility (optional)</label>
-            <textarea id="opening-form-eligibility" rows={2} className={textareaClass} placeholder="e.g. years of study and branches that can apply" {...register("eligibility")} />
-            <FieldError message={errors.eligibility?.message} />
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="opening-form-job-description" className="block text-sm font-medium text-foreground">Job Description</label>
-            <textarea
-              id="opening-form-job-description"
-              rows={4}
-              className={textareaClass}
-              placeholder="Provide a comprehensive overview of the program or role..."
-              {...register("description")}
-            />
-            <FieldError message={errors.description?.message} />
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label htmlFor="opening-form-requirements-qualifications" className="block text-sm font-medium text-foreground">Requirements & Qualifications</label>
-              <textarea
-                id="opening-form-requirements-qualifications"
-                rows={4}
-                className={textareaClass}
-                placeholder="List required skills, technologies, and academic eligibility..."
-                {...register("requirements")}
+          <FieldGroup name="Basics">
+            <div className="space-y-2">
+              <FieldLabelRow htmlFor={fid("title")} label="Opening title" />
+              <input
+                {...a11y("title", errors.title?.message)}
+                placeholder="e.g. Software Engineering Intern"
+                maxLength={LIMITS.title}
+                autoComplete="off"
+                className={cn(fieldControlBase, "h-12 px-4 text-base font-medium", border(errors.title?.message))}
+                {...register("title", { onChange: handleTitleChange })}
               />
-              <FieldError message={errors.requirements?.message} />
+              <FieldErrorText id={errId("title")} message={errors.title?.message} />
             </div>
 
-            <div className="space-y-1.5">
-              <label htmlFor="opening-form-key-responsibilities" className="block text-sm font-medium text-foreground">Key Responsibilities (Optional)</label>
-              <textarea
-                id="opening-form-key-responsibilities"
-                rows={4}
-                className={textareaClass}
-                placeholder="Detail expected daily deliverables and project milestones..."
-                {...register("responsibilities")}
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("slug")} label="URL slug" />
+                <div
+                  className={cn(
+                    "flex h-11 items-stretch overflow-hidden rounded-xl border bg-background shadow-xs transition-[border-color,box-shadow] hover:border-foreground/25 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/15",
+                    errors.slug ? "border-destructive focus-within:border-destructive focus-within:ring-destructive/15" : "border-border"
+                  )}
+                >
+                  <span aria-hidden="true" className="flex items-center border-r border-border bg-muted/50 px-3 font-mono text-xs text-muted-foreground">
+                    /careers/
+                  </span>
+                  <input
+                    {...a11y("slug", errors.slug?.message)}
+                    placeholder="software-engineering-intern"
+                    maxLength={LIMITS.slug}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
+                    {...register("slug")}
+                  />
+                </div>
+                <FieldErrorText id={errId("slug")} message={errors.slug?.message} />
+              </div>
+
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("department")} label="Department" />
+                <input
+                  {...a11y("department", errors.department?.message)}
+                  placeholder="e.g. Platform Engineering"
+                  maxLength={LIMITS.department}
+                  className={cn(fieldInputClass, border(errors.department?.message))}
+                  {...register("department")}
+                />
+                <FieldErrorText id={errId("department")} message={errors.department?.message} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-[2fr_3fr]">
+              <ChoiceTiles legend="Program type" options={PROGRAM_TYPES} inputProps={() => register("type")} columns="grid-cols-2" />
+              <ChoiceTiles legend="Workplace model" options={WORKPLACES} inputProps={() => register("workplaceType")} columns="grid-cols-3" />
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("location")} label="Location" />
+                <input
+                  {...a11y("location", errors.location?.message)}
+                  placeholder="e.g. Bengaluru, India / Remote"
+                  maxLength={LIMITS.location}
+                  className={cn(fieldInputClass, border(errors.location?.message))}
+                  {...register("location")}
+                />
+                <FieldErrorText id={errId("location")} message={errors.location?.message} />
+              </div>
+
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("track")} label="Track" optional />
+                <div className="relative">
+                  <select
+                    {...a11y("track", errors.trackId?.message)}
+                    className={cn(fieldInputClass, "appearance-none pr-10", border(errors.trackId?.message))}
+                    {...register("trackId")}
+                  >
+                    <option value="">No track</option>
+                    {tracks.map((track) => (
+                      <option key={track.id} value={track.id}>
+                        {track.name}
+                        {track.isActive ? "" : " (hidden)"}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                </div>
+                <FieldErrorText id={errId("track")} message={errors.trackId?.message} />
+              </div>
+            </div>
+          </FieldGroup>
+
+          <FieldGroup name="Location and timing">
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("duration")} label="Duration" optional />
+                <input
+                  {...a11y("duration", errors.durationText?.message)}
+                  placeholder="e.g. 3 months"
+                  maxLength={LIMITS.duration}
+                  className={cn(fieldInputClass, border(errors.durationText?.message))}
+                  {...register("durationText")}
+                />
+                <FieldErrorText id={errId("duration")} message={errors.durationText?.message} />
+              </div>
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("deadline")} label="Last date to apply" optional />
+                <input
+                  {...a11y("deadline", errors.applyDeadline?.message)}
+                  type="date"
+                  className={cn(fieldInputClass, border(errors.applyDeadline?.message))}
+                  {...register("applyDeadline")}
+                />
+                <FieldErrorText id={errId("deadline")} message={errors.applyDeadline?.message} />
+              </div>
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("positions")} label="Number of positions" optional />
+                <input
+                  {...a11y("positions", errors.openingsCount?.message)}
+                  type="number"
+                  min={1}
+                  max={1000}
+                  inputMode="numeric"
+                  placeholder="e.g. 5"
+                  className={cn(fieldInputClass, border(errors.openingsCount?.message))}
+                  {...register("openingsCount", {
+                    setValueAs: (value: unknown) => (value === "" || value == null ? null : Number(value)),
+                  })}
+                />
+                <FieldErrorText id={errId("positions")} message={errors.openingsCount?.message} />
+              </div>
+            </div>
+          </FieldGroup>
+
+          <FieldGroup name="Careers listing">
+            <div className="space-y-2">
+              <FieldLabelRow htmlFor={fid("skills")} label="Skills" optional count={skillList.length} max={MAX_SKILLS} />
+              <input
+                {...a11y("skills", skillsError)}
+                placeholder="React, TypeScript, SQL"
+                value={skillsText}
+                onChange={handleSkillsChange}
+                className={cn(fieldInputClass, border(skillsError))}
               />
+              {skillList.length > 0 && (
+                <ul className="flex flex-wrap gap-1.5" aria-label="Skills added">
+                  {skillList.map((skill, index) => (
+                    <li key={`${skill}-${index}`} className="rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-xs font-medium text-primary">
+                      {skill}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <FieldErrorText id={errId("skills")} message={skillsError} />
             </div>
-          </div>
-        </CardContent>
 
-        <CardFooter className="flex justify-end gap-3">
-          {!isEdit && (
-            <Button type="button" variant="outline" onClick={() => router.back()}>
-              Cancel
-            </Button>
-          )}
-          <Button type="submit" isLoading={isSubmitting}>
-            {isEdit ? "Save details" : "Create Draft Opening"}
-          </Button>
-        </CardFooter>
-      </form>
-    </Card>
+            <div className="space-y-2">
+              <FieldLabelRow htmlFor={fid("summary")} label="Card summary" optional count={summary?.length ?? 0} max={LIMITS.summary} />
+              <textarea
+                {...a11y("summary", errors.summary?.message)}
+                rows={2}
+                maxLength={LIMITS.summary}
+                placeholder="One or two sentences for the careers listing card"
+                className={cn(fieldTextareaClass, border(errors.summary?.message))}
+                {...register("summary")}
+              />
+              <FieldErrorText id={errId("summary")} message={errors.summary?.message} />
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("eligibility")} label="Eligibility" optional count={eligibility?.length ?? 0} max={LIMITS.eligibility} />
+                <textarea
+                  {...a11y("eligibility", errors.eligibility?.message)}
+                  rows={3}
+                  maxLength={LIMITS.eligibility}
+                  placeholder="e.g. Final-year B.Tech students, any branch"
+                  className={cn(fieldTextareaClass, border(errors.eligibility?.message))}
+                  {...register("eligibility")}
+                />
+                <FieldErrorText id={errId("eligibility")} message={errors.eligibility?.message} />
+              </div>
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("stipend")} label="Stipend / pay policy" optional count={stipend?.length ?? 0} max={LIMITS.stipend} />
+                <textarea
+                  {...a11y("stipend", errors.stipendPolicyText?.message)}
+                  rows={3}
+                  maxLength={LIMITS.stipend}
+                  placeholder="e.g. The stipend terms for this opening"
+                  className={cn(fieldTextareaClass, border(errors.stipendPolicyText?.message))}
+                  {...register("stipendPolicyText")}
+                />
+                <FieldErrorText id={errId("stipend")} message={errors.stipendPolicyText?.message} />
+              </div>
+            </div>
+          </FieldGroup>
+
+          <FieldGroup name="Role description">
+            <div className="space-y-2">
+              <FieldLabelRow htmlFor={fid("description")} label="Job description" />
+              <textarea
+                {...a11y("description", errors.description?.message)}
+                rows={7}
+                placeholder="What the role is about, the team, and what the person will work on"
+                className={cn(fieldTextareaClass, border(errors.description?.message))}
+                {...register("description")}
+              />
+              <FieldErrorText id={errId("description")} message={errors.description?.message} />
+            </div>
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("requirements")} label="Requirements and qualifications" />
+                <textarea
+                  {...a11y("requirements", errors.requirements?.message)}
+                  rows={5}
+                  placeholder="Skills, tools and education the candidate needs"
+                  className={cn(fieldTextareaClass, border(errors.requirements?.message))}
+                  {...register("requirements")}
+                />
+                <FieldErrorText id={errId("requirements")} message={errors.requirements?.message} />
+              </div>
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={fid("responsibilities")} label="Key responsibilities" optional />
+                <textarea
+                  {...a11y("responsibilities", errors.responsibilities?.message)}
+                  rows={5}
+                  placeholder="Day-to-day work and deliverables"
+                  className={cn(fieldTextareaClass, border(errors.responsibilities?.message))}
+                  {...register("responsibilities")}
+                />
+                <FieldErrorText id={errId("responsibilities")} message={errors.responsibilities?.message} />
+              </div>
+            </div>
+          </FieldGroup>
+        </>
+  );
+
+  const submitButton = (
+    <Button type="submit" isLoading={isSubmitting} className="h-11 gap-2 rounded-xl px-5">
+      {isEdit ? "Save details" : "Create draft opening"}
+      {!isEdit && !isSubmitting && <ArrowRight className="h-4 w-4" aria-hidden="true" />}
+    </Button>
+  );
+
+  // Editor: one card among the editor's other cards.
+  if (isEdit) {
+    return (
+      <Card className="w-full rounded-2xl shadow-sm">
+        <CardHeader className="px-6 py-5 sm:px-8">
+          <CardTitle className="text-base">Opening details</CardTitle>
+        </CardHeader>
+        <form onSubmit={handleSubmit(onSubmit)} noValidate>
+          <div className="space-y-7 p-6 sm:p-8">{fields}</div>
+          <div className="flex justify-end border-t border-border/60 px-6 py-4 sm:px-8">{submitButton}</div>
+        </form>
+      </Card>
+    );
+  }
+
+  // Create page: the form sits on the page itself, and the action bar is pinned to the very
+  // bottom edge of the portal's scroll area, full width. Its negative offsets and margins
+  // cancel the padding of the shell's <main> (p-4 sm:p-6 lg:p-8); keep them in step.
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} noValidate className="w-full">
+      <div className="space-y-7">{fields}</div>
+      <div className="sticky -bottom-4 z-10 -mx-4 -mb-4 mt-10 border-t border-border/70 bg-card/95 px-4 py-4 backdrop-blur-sm sm:-bottom-6 sm:-mx-6 sm:-mb-6 sm:px-6 lg:-bottom-8 lg:-mx-8 lg:-mb-8 lg:px-8">
+        {/* pr-14 keeps the buttons clear of the site-wide floating help buttons (bottom-right). */}
+        <div className="flex flex-col-reverse gap-3 pr-14 sm:flex-row sm:items-center sm:justify-end">
+          <Link
+            href={basePath}
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-border bg-background px-5 text-sm font-medium text-foreground shadow-xs transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/15"
+          >
+            Cancel
+          </Link>
+          {submitButton}
+        </div>
+      </div>
+    </form>
   );
 }

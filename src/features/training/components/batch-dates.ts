@@ -18,3 +18,23 @@ export function formatBatchDay(date: Date): string {
 export function formatBatchDayTime(date: Date): string {
   return DAY_TIME.format(date);
 }
+
+const PARTS = new Intl.DateTimeFormat("en-IN", {
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: BUSINESS_TIME_ZONE,
+});
+
+/** The pieces of a date block in India time: { weekday: "Fri", day: "27", month: "Nov", time: "7:00 pm" }. */
+export function batchDateParts(date: Date): { weekday: string; day: string; month: string; time: string } {
+  const parts = Object.fromEntries(PARTS.formatToParts(date).map((part) => [part.type, part.value]));
+  return {
+    weekday: parts.weekday ?? "",
+    day: parts.day ?? "",
+    month: parts.month ?? "",
+    time: `${parts.hour ?? ""}:${parts.minute ?? ""} ${(parts.dayPeriod ?? "").toLowerCase()}`.trim(),
+  };
+}

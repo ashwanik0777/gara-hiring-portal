@@ -18,6 +18,7 @@ import {
   saveSessionAction,
   setBatchMentorAction,
 } from "../../learning-actions";
+import { toast } from "@/components/ui/toast";
 
 /*
  * Staff forms of the Industrial Training learning area. Each form calls a server action that
@@ -33,40 +34,30 @@ type ActionResult = { success: true } | { success: false; error: string };
 function useAction() {
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
-  const [notice, setNotice] = React.useState<string | null>(null);
   const [pending, startTransition] = React.useTransition();
   const run = (action: () => Promise<ActionResult>, onDone?: () => void, doneNotice?: string) => {
     setError(null);
-    setNotice(null);
     startTransition(async () => {
       const result = await action();
       if (!result.success) {
         setError(result.error);
         return;
       }
-      if (doneNotice) setNotice(doneNotice);
+      if (doneNotice) toast.success(doneNotice);
       onDone?.();
       router.refresh();
     });
   };
-  return { error, notice, pending, run };
+  return { error, pending, run };
 }
 
-export function FormMessages({ error, notice }: { error: string | null; notice?: string | null }) {
-  return (
-    <>
-      {error && (
-        <p role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
-      )}
-      {notice && (
-        <p role="status" className="text-xs text-success">
-          {notice}
-        </p>
-      )}
-    </>
-  );
+/** The action error next to the form; confirmations appear as toasts (see useAction). */
+export function FormMessages({ error }: { error: string | null }) {
+  return error ? (
+    <p role="alert" className="text-xs text-destructive">
+      {error}
+    </p>
+  ) : null;
 }
 
 function TextArea({ label, value, onChange, rows = 3, maxLength, required }: { label: string; value: string; onChange: (value: string) => void; rows?: number; maxLength?: number; required?: boolean }) {
@@ -99,13 +90,14 @@ export function MentorManager({
   return (
     <div className="space-y-3">
       {mentors.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No mentor is assigned yet. Administrators can run the batch meanwhile.</p>
+        <p className="text-sm text-muted-foreground">No mentor assigned yet.</p>
       ) : (
-        <ul className="divide-y divide-border/60">
+        <ul className="grid grid-cols-1 gap-2">
           {mentors.map((mentor) => (
-            <li key={mentor.userId} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-              <span>
-                <span className="font-medium">{mentor.name}</span> <span className="text-muted-foreground">{mentor.email}</span>
+            <li key={mentor.userId} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-background px-4 py-3 text-sm">
+              <span className="min-w-0">
+                <span className="block font-semibold text-foreground">{mentor.name}</span>
+                <span className="block truncate text-xs text-muted-foreground">{mentor.email}</span>
               </span>
               <Button size="sm" variant="ghost" disabled={pending} onClick={() => run(() => setBatchMentorAction({ batchId, userId: mentor.userId, assigned: false }))}>
                 Remove
@@ -133,7 +125,7 @@ export function MentorManager({
           </Button>
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">Every user with the Mentor role is assigned. Create mentors under Sub-Admins.</p>
+        <p className="text-xs text-muted-foreground">All mentors are assigned. Add mentors under Sub-Admins.</p>
       )}
       <FormMessages error={error} />
     </div>
@@ -164,7 +156,7 @@ export function SessionForm({ batchId, sessionId, initial, onDone }: { batchId: 
     });
   };
   return (
-    <form onSubmit={submit} className="space-y-3 rounded-md border border-border/70 bg-muted/20 p-4">
+    <form onSubmit={submit} className="space-y-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
         <Input label="Class title *" value={values.title} onChange={set("title")} maxLength={150} required />
         <Input label="Starts (India time) *" type="datetime-local" value={values.startsAt} onChange={set("startsAt")} required />
@@ -208,7 +200,7 @@ export function AttendanceSheet({
   const [present, setPresent] = React.useState<Record<string, boolean>>(() =>
     Object.fromEntries(students.map((student) => [student.enrollmentId, student.present ?? false]))
   );
-  const { error, notice, pending, run } = useAction();
+  const { error, pending, run } = useAction();
   if (students.length === 0) return <p className="text-xs text-muted-foreground">No student is learning in this batch.</p>;
   const save = () =>
     run(
@@ -218,13 +210,16 @@ export function AttendanceSheet({
     );
   return (
     <div className="space-y-2">
-      <fieldset className="grid grid-cols-1 gap-1 sm:grid-cols-2 xl:grid-cols-3">
+      <fieldset className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
         <legend className="sr-only">Present students</legend>
         {students.map((student) => (
-          <label key={student.enrollmentId} className="flex items-center gap-2 text-sm">
+          <label
+            key={student.enrollmentId}
+            className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-sm transition-colors hover:border-foreground/25 has-checked:border-primary has-checked:bg-primary/5"
+          >
             <input
               type="checkbox"
-              className="h-4 w-4 rounded border-input"
+              className="h-4 w-4 rounded border-input accent-primary"
               checked={present[student.enrollmentId] === true}
               onChange={(event) => setPresent((current) => ({ ...current, [student.enrollmentId]: event.target.checked }))}
             />
@@ -240,7 +235,7 @@ export function AttendanceSheet({
           Mark all present
         </Button>
       </div>
-      <FormMessages error={error} notice={notice} />
+      <FormMessages error={error} />
     </div>
   );
 }
@@ -257,7 +252,7 @@ export interface AssignmentFormValues {
 export function AssignmentForm({ batchId, assignmentId, initial }: { batchId: string; assignmentId?: string; initial?: AssignmentFormValues }) {
   const empty: AssignmentFormValues = { title: "", description: "", dueAt: "", maxMarks: 10 };
   const [values, setValues] = React.useState<AssignmentFormValues>(initial ?? empty);
-  const { error, notice, pending, run } = useAction();
+  const { error, pending, run } = useAction();
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     run(
@@ -269,15 +264,14 @@ export function AssignmentForm({ batchId, assignmentId, initial }: { batchId: st
     );
   };
   return (
-    <form onSubmit={submit} className="space-y-3 rounded-md border border-border/70 bg-muted/20 p-4">
+    <form onSubmit={submit} className="space-y-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <Input label="Title *" value={values.title} onChange={(event) => setValues({ ...values, title: event.target.value })} maxLength={150} required />
         <Input label="Due (India time) *" type="datetime-local" value={values.dueAt} onChange={(event) => setValues({ ...values, dueAt: event.target.value })} required />
         <Input label="Maximum marks *" type="number" min={1} max={1000} value={values.maxMarks} onChange={(event) => setValues({ ...values, maxMarks: Number(event.target.value) || 0 })} required />
       </div>
       <TextArea label="Description *" value={values.description} onChange={(description) => setValues({ ...values, description })} maxLength={5000} required />
-      <p className="text-xs text-muted-foreground">Submissions close at the due time. A missed assignment counts as 0 marks.</p>
-      <FormMessages error={error} notice={notice} />
+      <FormMessages error={error} />
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Saving…" : assignmentId ? "Save assignment" : "Add assignment"}
       </Button>
@@ -301,7 +295,7 @@ export function DeleteAssignmentButton({ assignmentId }: { assignmentId: string 
 export function GradeForm({ submissionId, maxMarks, marks, feedback }: { submissionId: string; maxMarks: number; marks: number | null; feedback: string | null }) {
   const [value, setValue] = React.useState(marks === null ? "" : String(marks));
   const [text, setText] = React.useState(feedback ?? "");
-  const { error, notice, pending, run } = useAction();
+  const { error, pending, run } = useAction();
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     run(() => gradeSubmissionAction({ submissionId, marks: value, feedback: text }), undefined, "Marks saved.");
@@ -317,7 +311,7 @@ export function GradeForm({ submissionId, maxMarks, marks, feedback }: { submiss
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Saving…" : marks === null ? "Grade" : "Update"}
       </Button>
-      <FormMessages error={error} notice={notice} />
+      <FormMessages error={error} />
     </form>
   );
 }
@@ -326,7 +320,7 @@ export function GradeForm({ submissionId, maxMarks, marks, feedback }: { submiss
 
 export function ProjectReviewForm({ projectId, status, marks, feedback }: { projectId: string; status: string; marks: number | null; feedback: string | null }) {
   const [values, setValues] = React.useState({ status: status === "SUBMITTED" ? "PASSED" : status, marks: marks === null ? "" : String(marks), feedback: feedback ?? "" });
-  const { error, notice, pending, run } = useAction();
+  const { error, pending, run } = useAction();
   const selectId = React.useId();
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -348,7 +342,7 @@ export function ProjectReviewForm({ projectId, status, marks, feedback }: { proj
         <Input label="Marks (0–100, optional)" type="number" min={0} max={100} value={values.marks} onChange={(event) => setValues({ ...values, marks: event.target.value })} />
         <Input label="Feedback" value={values.feedback} maxLength={2000} onChange={(event) => setValues({ ...values, feedback: event.target.value })} />
       </div>
-      <FormMessages error={error} notice={notice} />
+      <FormMessages error={error} />
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Saving…" : "Save review"}
       </Button>
@@ -360,7 +354,7 @@ export function DemoSlotForm({ batchId }: { batchId: string }) {
   const [starts, setStarts] = React.useState<string[]>([""]);
   const [duration, setDuration] = React.useState(20);
   const [meetingUrl, setMeetingUrl] = React.useState("");
-  const { error, notice, pending, run } = useAction();
+  const { error, pending, run } = useAction();
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     run(
@@ -370,7 +364,7 @@ export function DemoSlotForm({ batchId }: { batchId: string }) {
     );
   };
   return (
-    <form onSubmit={submit} className="space-y-3 rounded-md border border-border/70 bg-muted/20 p-4">
+    <form onSubmit={submit} className="space-y-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         {starts.map((value, index) => (
           <Input
@@ -390,7 +384,7 @@ export function DemoSlotForm({ batchId }: { batchId: string }) {
         <Input label="Minutes per demo" type="number" min={5} max={240} value={duration} onChange={(event) => setDuration(Number(event.target.value) || 0)} required />
         <Input label="Meeting link (shown to the booked student)" type="url" placeholder="https://" value={meetingUrl} onChange={(event) => setMeetingUrl(event.target.value)} />
       </div>
-      <FormMessages error={error} notice={notice} />
+      <FormMessages error={error} />
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Saving…" : "Open demo slots"}
       </Button>
@@ -476,7 +470,7 @@ export function ResultDecisionForm({
     run(() => decideTrainingResultAction({ enrollmentId, result: mode, ...values }));
   };
   return (
-    <form onSubmit={submit} className="space-y-3 rounded-md border border-border/70 bg-muted/20 p-4">
+    <form onSubmit={submit} className="space-y-4 rounded-xl border border-border bg-muted/30 p-4 sm:p-5">
       {mode === "PASS" ? (
         <>
           <p className="text-sm font-medium">Certificate details</p>

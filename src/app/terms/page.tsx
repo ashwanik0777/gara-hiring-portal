@@ -108,9 +108,10 @@ export default function TermsPage() {
           <li>not refer yourself, create fake accounts or send spam.</li>
         </LegalList>
         <p>
-          Commission is earned per paid enrolment, becomes payable only after that batch&apos;s refund window has closed
-          and is reversed if the enrolment is refunded. GARA may end an ambassador role that breaks this code and
-          withhold commission earned through abuse.
+          A commission is recorded per paid enrolment and is reversed if the enrolment is refunded. After that batch&apos;s
+          refund window has closed, GARA reviews the ambassador&apos;s work and decides, at its discretion, whether to approve
+          each commission; a commission is payable only once GARA approves it. GARA may end an ambassador role that breaks
+          this code and decline commission earned through abuse.
         </p>
       </LegalSection>
 

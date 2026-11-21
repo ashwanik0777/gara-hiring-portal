@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CERTIFICATE_SIGNATORIES } from "@/config/site";
 import { saveInternshipOfferAction } from "../actions";
+import { toast } from "@/components/ui/toast";
 
 export interface InternshipOfferPanelOffer {
   designation: string;
@@ -52,7 +53,6 @@ export function InternshipOfferPanel({
     signatoryTitle: offer?.signatoryTitle ?? CERTIFICATE_SIGNATORIES.primary.title,
   });
   const [error, setError] = React.useState<string | null>(null);
-  const [saved, setSaved] = React.useState<string | null>(null);
   const [isPending, startTransition] = React.useTransition();
   const editable = canIssue && isOpen;
 
@@ -62,14 +62,13 @@ export function InternshipOfferPanel({
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
-    setSaved(null);
     startTransition(async () => {
       const result = await saveInternshipOfferAction({ applicationId, ...values });
       if (!result.success) {
         setError(result.error);
         return;
       }
-      setSaved(result.data.version === 1 ? "Offer letter issued." : `Offer letter updated (version ${result.data.version}).`);
+      toast.success(result.data.version === 1 ? "Offer letter issued." : `Offer letter updated (version ${result.data.version}).`);
       router.refresh();
     });
   };
@@ -92,11 +91,6 @@ export function InternshipOfferPanel({
         {error && (
           <p role="alert" className="rounded-md border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
             {error}
-          </p>
-        )}
-        {saved && (
-          <p role="status" className="rounded-md border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-700 dark:text-emerald-300">
-            {saved}
           </p>
         )}
 

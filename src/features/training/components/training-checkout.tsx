@@ -10,6 +10,7 @@ import { CAMPUS_AMBASSADOR_POLICY, COMPANY } from "@/config/site";
 import { normalizeReferralCode, referralDiscountPaise } from "@/features/ambassadors/policy";
 import { formatInr } from "../money";
 import { confirmCheckoutAction, startCheckoutAction } from "../checkout-actions";
+import { toast } from "@/components/ui/toast";
 
 interface RazorpaySuccess {
   razorpay_order_id: string;
@@ -67,12 +68,10 @@ export function TrainingCheckout({
   const discount = code ? referralDiscountPaise(feePaise) : 0;
   const amountLabel = formatInr(feePaise - discount);
   const [error, setError] = React.useState<string | null>(null);
-  const [notice, setNotice] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
 
   const pay = async () => {
     setError(null);
-    setNotice(null);
     setBusy(true);
     try {
       const started = await startCheckoutAction({ batchId, consent, referralCode: referralCode.trim() || null });
@@ -94,7 +93,7 @@ export function TrainingCheckout({
         prefill: { name: session.prefill.name, email: session.prefill.email },
         theme: { color: "#1d4ed8" },
         handler: async (response: RazorpaySuccess) => {
-          setNotice("Payment received. Confirming…");
+          toast.info("Payment received. Confirming…");
           const confirmed = await confirmCheckoutAction({
             orderId: response.razorpay_order_id,
             paymentId: response.razorpay_payment_id,
@@ -103,7 +102,6 @@ export function TrainingCheckout({
           if (confirmed.success) {
             router.push("/candidate/training?paid=1");
           } else {
-            setNotice(null);
             setError(`${confirmed.error} Your payment is safe; if it does not show up within a few minutes, contact ${COMPANY.contactEmail}.`);
             setBusy(false);
           }
@@ -111,7 +109,7 @@ export function TrainingCheckout({
         modal: {
           ondismiss: () => {
             setBusy(false);
-            setNotice("Payment window closed. Your seat stays reserved for 15 minutes.");
+            toast.info("Payment window closed. Your seat stays reserved for 15 minutes.");
           },
         },
       });
@@ -176,11 +174,6 @@ export function TrainingCheckout({
       {error && (
         <p role="alert" className="rounded-md border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
           {error}
-        </p>
-      )}
-      {notice && (
-        <p role="status" className="rounded-md border border-border bg-muted/40 p-3 text-sm text-foreground">
-          {notice}
         </p>
       )}
       <Button className="w-full gap-2" size="lg" disabled={!consent || busy} onClick={pay}>

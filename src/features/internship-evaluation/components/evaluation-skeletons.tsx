@@ -1,12 +1,25 @@
 import React from "react";
-import { ListCardSkeleton, PageHeaderSkeleton } from "@/components/feedback/page-skeletons";
+import { ListCardSkeleton } from "@/components/feedback/page-skeletons";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatCardSkeleton } from "@/components/ui/stat-card";
 
-/** Body of the evaluations list: status chips and enrollment cards. */
+/** The four summary cards (same grid as StatGrid columns={4}); no live region of its own. */
+function EvaluationStatsSkeleton() {
+  return (
+    <div className="grid grid-cols-2 gap-3.5 sm:gap-4 lg:grid-cols-4">
+      {[0, 1, 2, 3].map((i) => (
+        <StatCardSkeleton key={i} />
+      ))}
+    </div>
+  );
+}
+
+/** Body of the evaluations list: summary cards, status chips and enrollment cards. */
 export function EvaluationListSkeleton({ label = "Loading evaluations" }: { label?: string }) {
   return (
-    <div role="status" aria-live="polite" aria-busy="true" className="space-y-4">
+    <div role="status" aria-live="polite" aria-busy="true" className="space-y-6">
       <span className="sr-only">{label}</span>
+      <EvaluationStatsSkeleton />
       <div className="flex flex-wrap gap-2">
         {[0, 1, 2, 3, 4].map((i) => (
           <Skeleton key={i} className="h-8 w-28 rounded-full" />
@@ -23,7 +36,7 @@ export function EvaluationListPageSkeleton({ label = "Loading evaluations" }: { 
   return (
     <div role="status" aria-live="polite" aria-busy="true" className="space-y-6">
       <span className="sr-only">{label}</span>
-      <PageHeaderSkeleton withAction={false} />
+      <EvaluationStatsSkeleton />
       <div className="flex flex-wrap gap-2">
         {[0, 1, 2, 3, 4].map((i) => (
           <Skeleton key={i} className="h-8 w-28 rounded-full" />

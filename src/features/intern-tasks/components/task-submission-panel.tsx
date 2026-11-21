@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useId, useState } from "react";
-import { AlertCircle, CheckCircle2 } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AccessibleDialog } from "@/features/employees/components/accessible-dialog";
 import { submitTaskAction } from "../actions";
+import { toast } from "@/components/ui/toast";
 
 export interface TaskSubmissionPanelProps {
   taskId: string;
@@ -24,7 +25,6 @@ export function TaskSubmissionPanel({ taskId, taskTitle, versionNumber, open, on
   const descriptionId = `${baseId}-description`;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
 
   const close = () => {
     if (isSubmitting) return;
@@ -46,11 +46,8 @@ export function TaskSubmissionPanel({ taskId, taskTitle, versionNumber, open, on
         setError(res.error);
         return;
       }
-      setSuccess(true);
-      setTimeout(() => {
-        onClose();
-        setSuccess(false);
-      }, 1500);
+      toast.success("Submission received successfully!");
+      onClose();
     } catch {
       setError(UNEXPECTED_ERROR);
     } finally {
@@ -79,16 +76,6 @@ export function TaskSubmissionPanel({ taskId, taskTitle, versionNumber, open, on
           <div role="alert" className="mt-4 flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-xs text-destructive">
             <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>{error}</span>
-          </div>
-        )}
-
-        {success && (
-          <div
-            role="status"
-            className="mt-4 flex items-center gap-2 rounded-lg bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400"
-          >
-            <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Submission received successfully!</span>
           </div>
         )}
 

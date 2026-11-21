@@ -125,10 +125,6 @@ export default function TrainingPage() {
             <h1 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight">
               Industrial Training Programmes
             </h1>
-            <p className="text-sm sm:text-base text-muted-foreground">
-              Paid, mentor-led batches with assignments, a final project and a live demo. The digital certificate is included in
-              the fee. Internships at GARA are separate and always free.
-            </p>
           </div>
           <ProgramList />
         </div>

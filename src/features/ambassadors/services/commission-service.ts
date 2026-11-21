@@ -10,14 +10,16 @@ import { AMBASSADOR_PAYOUT_TEMPLATE } from "@/infrastructure/email/templates/amb
 import { createContact, createUpiFundAccount, createUpiPayout, getRazorpayXAccountNumber } from "@/infrastructure/payments/razorpayx";
 import { formatInr } from "@/features/training/money";
 import { refundWindowClosesAt } from "@/features/training/policy";
-import { manualPayoutSchema } from "../schemas";
+import { commissionReviewSchema, manualPayoutSchema } from "../schemas";
 import { commissionBucket, payoutTdsPaise } from "../policy";
 import { upiFieldContext } from "./ambassador-service";
 
 /*
- * Commission ledger and payouts (Phase 4). Rules from the product owner's plan: an entry when a
- * referred enrollment becomes active; payable only after that batch's refund window closes;
- * reversed automatically when the enrollment is refunded.
+ * Commission ledger and payouts (Phase 4). Rules from the product owner: an entry when a referred
+ * enrollment becomes active; reversed automatically when the enrollment is refunded. Payment is at
+ * GARA's discretion (decision 2026-11-21): after the batch's refund window closes, an
+ * administrator reviews the ambassador's work and approves or declines each commission; only
+ * approved commissions are paid. Nothing is ever paid automatically.
  */
 
 function assertAdmin(user: AuthenticatedUser) {
@@ -57,23 +59,118 @@ export async function createCommissionForEnrollment(tx: Prisma.TransactionClient
 /** Called inside the refund transaction: an unpaid commission of a refunded enrollment is reversed. */
 export async function reverseCommission(tx: Prisma.TransactionClient, enrollmentId: string, now: Date): Promise<void> {
   await tx.ambassadorCommission.updateMany({
-    where: { enrollmentId, status: "PENDING", payoutId: null },
+    where: { enrollmentId, status: { in: ["PENDING", "APPROVED", "DECLINED"] }, payoutId: null },
     data: { status: "REVERSED", reversedAt: now },
   });
 }
 
+/** Approved by an administrator, not yet in a payout, and its enrollment is not being refunded. */
 const PAYABLE_WHERE = (now: Date): Prisma.AmbassadorCommissionWhereInput => ({
-  status: "PENDING",
+  status: "APPROVED",
   payoutId: null,
   payableAt: { lte: now },
   enrollment: { status: { notIn: ["REFUND_REQUESTED", "REFUNDED"] } },
 });
 
-/** Administrators: payable totals per ambassador, and payout history. */
-export async function listPayouts(user: AuthenticatedUser, now: Date) {
+/** Commissions an administrator may decide on (or change their mind about) until paid. */
+const REVIEWABLE_WHERE = (now: Date): Prisma.AmbassadorCommissionWhereInput => ({
+  status: { in: ["PENDING", "APPROVED", "DECLINED"] },
+  payoutId: null,
+  payableAt: { lte: now },
+  enrollment: { status: { notIn: ["REFUND_REQUESTED", "REFUNDED"] } },
+});
+
+/** Administrators: how many commissions wait for a decision (shown on the ambassadors page). */
+export async function countCommissionsToReview(user: AuthenticatedUser, now: Date): Promise<number> {
   assertAdmin(user);
-  const [payable, payouts] = await Promise.all([
-    prisma.ambassadorCommission.groupBy({ by: ["ambassadorId"], where: PAYABLE_WHERE(now), _sum: { amountPaise: true }, _count: { _all: true } }),
+  return prisma.ambassadorCommission.count({ where: { ...REVIEWABLE_WHERE(now), status: "PENDING" } });
+}
+
+/**
+ * Administrators: approve or decline some of one ambassador's commissions after reviewing their
+ * work. Approving makes them payable; declining (with an internal reason) means they are not paid
+ * unless approved later. Only commissions whose refund window has closed can be decided.
+ */
+export async function reviewCommissions(user: AuthenticatedUser, raw: unknown, now: Date) {
+  assertAdmin(user);
+  const parsed = commissionReviewSchema.safeParse(raw);
+  if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? "Invalid decision.");
+  const { ambassadorId, commissionIds, decision, note } = parsed.data;
+  const ids = [...new Set(commissionIds)];
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "campus_ambassadors" WHERE "id" = ${ambassadorId} FOR UPDATE`;
+    const rows = await tx.ambassadorCommission.findMany({
+      where: { ...REVIEWABLE_WHERE(now), ambassadorId, id: { in: ids } },
+      select: { id: true, amountPaise: true },
+    });
+    if (rows.length !== ids.length) {
+      throw new ConflictError("Some of these enrollments can no longer be decided (refunded, already paid or not ready). Reload the page.");
+    }
+    const status = decision === "APPROVE" ? "APPROVED" : "DECLINED";
+    await tx.ambassadorCommission.updateMany({
+      where: { id: { in: ids } },
+      data: { status, reviewedAt: now, reviewedById: user.id, reviewNote: note.length > 0 ? note : null },
+    });
+    const amountPaise = rows.reduce((sum, row) => sum + row.amountPaise, 0);
+    await tx.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorRole: Role.ADMIN,
+        action: decision === "APPROVE" ? "AMBASSADOR_COMMISSIONS_APPROVED" : "AMBASSADOR_COMMISSIONS_DECLINED",
+        resourceType: "CampusAmbassador",
+        resourceId: ambassadorId,
+        diffPayload: { commissionIds: ids, amountPaise, ...(note ? { note } : {}) },
+      },
+    });
+    return { count: ids.length, amountPaise, status };
+  });
+}
+
+/** Upper bound for the open (unpaid) commissions loaded on the payouts page. */
+export const OPEN_COMMISSIONS_LIMIT = 2000;
+
+export type PayoutCommission = {
+  id: string;
+  amountPaise: number;
+  createdAt: Date;
+  payableAt: Date;
+  reviewedAt: Date | null;
+  reviewNote: string | null;
+  student: string;
+  programme: string;
+  batch: string;
+};
+
+export type PayoutAmbassadorGroup = {
+  ambassador: { id: string; name: string; email: string; college: string | null; upiIdMasked: string | null; status: string };
+  commissions: PayoutCommission[];
+  amountPaise: number;
+};
+
+/**
+ * Administrators: the payouts workspace. Open commissions grouped per ambassador into
+ * waiting (refund window open or a refund pending), review (to decide), approved (ready to pay)
+ * and declined; plus payout history and totals. Nothing here pays anyone.
+ */
+export async function getPayoutsOverview(user: AuthenticatedUser, now: Date) {
+  assertAdmin(user);
+  const [open, payouts, paid] = await Promise.all([
+    prisma.ambassadorCommission.findMany({
+      where: { status: { in: ["PENDING", "APPROVED", "DECLINED"] }, payoutId: null },
+      orderBy: { createdAt: "asc" },
+      take: OPEN_COMMISSIONS_LIMIT,
+      select: {
+        id: true,
+        amountPaise: true,
+        status: true,
+        payableAt: true,
+        createdAt: true,
+        reviewedAt: true,
+        reviewNote: true,
+        enrollment: { select: { status: true, user: { select: { name: true } }, batch: { select: { name: true, program: { select: { title: true } } } } } },
+        ambassador: { select: { id: true, upiIdMasked: true, status: true, user: { select: { name: true, email: true } }, college: { select: { name: true } } } },
+      },
+    }),
     prisma.ambassadorPayout.findMany({
       orderBy: { createdAt: "desc" },
       take: 200,
@@ -88,27 +185,76 @@ export async function listPayouts(user: AuthenticatedUser, now: Date) {
         failureReason: true,
         createdAt: true,
         paidAt: true,
-        ambassador: { select: { user: { select: { name: true } } } },
+        ambassador: { select: { user: { select: { name: true } }, college: { select: { name: true } } } },
       },
     }),
+    prisma.ambassadorPayout.aggregate({ where: { status: "PAID" }, _sum: { netPaise: true } }),
   ]);
-  const ambassadors = await prisma.campusAmbassador.findMany({
-    where: { id: { in: payable.map((row) => row.ambassadorId) } },
-    select: { id: true, upiIdMasked: true, status: true, user: { select: { name: true, email: true } }, college: { select: { name: true } } },
-  });
-  const byId = new Map(ambassadors.map((ambassador) => [ambassador.id, ambassador]));
+
+  type Bucket = "waiting" | "review" | "approved" | "declined";
+  const groups: Record<Bucket, Map<string, PayoutAmbassadorGroup>> = {
+    waiting: new Map(),
+    review: new Map(),
+    approved: new Map(),
+    declined: new Map(),
+  };
+  for (const row of open) {
+    const notReady = row.payableAt.getTime() > now.getTime() || row.enrollment.status === "REFUND_REQUESTED" || row.enrollment.status === "REFUNDED";
+    const bucket: Bucket = row.status === "DECLINED" ? "declined" : notReady ? "waiting" : row.status === "APPROVED" ? "approved" : "review";
+    const map = groups[bucket];
+    const group =
+      map.get(row.ambassador.id) ??
+      {
+        ambassador: {
+          id: row.ambassador.id,
+          name: row.ambassador.user.name,
+          email: row.ambassador.user.email,
+          college: row.ambassador.college?.name ?? null,
+          upiIdMasked: row.ambassador.upiIdMasked,
+          status: row.ambassador.status,
+        },
+        commissions: [],
+        amountPaise: 0,
+      };
+    group.commissions.push({
+      id: row.id,
+      amountPaise: row.amountPaise,
+      createdAt: row.createdAt,
+      payableAt: row.payableAt,
+      reviewedAt: row.reviewedAt,
+      reviewNote: row.reviewNote,
+      student: row.enrollment.user.name,
+      programme: row.enrollment.batch.program.title,
+      batch: row.enrollment.batch.name,
+    });
+    group.amountPaise += row.amountPaise;
+    map.set(row.ambassador.id, group);
+  }
+  const list = (bucket: Bucket) => [...groups[bucket].values()].sort((a, b) => b.amountPaise - a.amountPaise);
+  const sum = (bucket: Bucket) => list(bucket).reduce((total, group) => total + group.amountPaise, 0);
+  const count = (bucket: Bucket) => list(bucket).reduce((total, group) => total + group.commissions.length, 0);
+
   return {
-    payable: payable.map((row) => ({
-      ambassadorId: row.ambassadorId,
-      amountPaise: row._sum.amountPaise ?? 0,
-      commissions: row._count._all,
-      ambassador: byId.get(row.ambassadorId) ?? null,
-    })),
+    waiting: list("waiting"),
+    review: list("review"),
+    approved: list("approved"),
+    declined: list("declined"),
     payouts,
+    totals: {
+      reviewCount: count("review"),
+      reviewPaise: sum("review"),
+      approvedPaise: sum("approved"),
+      approvedCount: count("approved"),
+      declinedCount: count("declined"),
+      waitingCount: count("waiting"),
+      paidPaise: paid._sum.netPaise ?? 0,
+    },
     razorpayXReady: getRazorpayXAccountNumber() !== null,
     tdsPercent: CAMPUS_AMBASSADOR_POLICY.tdsPercent,
   };
 }
+
+export type PayoutsOverview = Awaited<ReturnType<typeof getPayoutsOverview>>;
 
 async function claimPayable(tx: Prisma.TransactionClient, ambassadorId: string, now: Date) {
   await tx.$queryRaw`SELECT "id" FROM "campus_ambassadors" WHERE "id" = ${ambassadorId} FOR UPDATE`;
@@ -246,7 +392,8 @@ export async function payViaRazorpayX(user: AuthenticatedUser, ambassadorId: str
 async function releasePayout(payoutId: string, reason: string) {
   await prisma.$transaction(async (tx) => {
     await tx.ambassadorPayout.update({ where: { id: payoutId }, data: { status: "FAILED", failureReason: reason } });
-    await tx.ambassadorCommission.updateMany({ where: { payoutId, status: "PENDING" }, data: { payoutId: null } });
+    // The approved commissions return to the "ready to pay" list.
+    await tx.ambassadorCommission.updateMany({ where: { payoutId, status: "APPROVED" }, data: { payoutId: null } });
   });
 }
 
@@ -281,10 +428,10 @@ export async function recordPayoutUpdate(
     return;
   }
   if (payout.status === "FAILED") return;
-  // A reversal after a "processed" report returns the commissions to the payable list.
+  // A reversal after a "processed" report returns the commissions to the approved (payable) list.
   await prisma.$transaction(async (tx) => {
     await tx.ambassadorPayout.update({ where: { id: payout.id }, data: { status: "FAILED", failureReason: failureReason?.slice(0, 300) ?? "Payout failed" } });
-    await tx.ambassadorCommission.updateMany({ where: { payoutId: payout.id }, data: { payoutId: null, status: "PENDING" } });
+    await tx.ambassadorCommission.updateMany({ where: { payoutId: payout.id }, data: { payoutId: null, status: "APPROVED" } });
     await tx.auditLog.create({
       data: { actorId: null, actorRole: "SYSTEM", action: "AMBASSADOR_PAYOUT_FAILED", resourceType: "AmbassadorPayout", resourceId: payout.id, diffPayload: { razorpayPayoutId, failureReason } },
     });

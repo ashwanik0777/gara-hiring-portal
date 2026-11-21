@@ -18,10 +18,10 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
   Settings,
   AlertCircle,
-  CheckCircle2,
   LogOut,
   ShieldAlert,
 } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 interface EmployeeLifecycleCardProps {
   employeeId: string;
@@ -68,7 +68,6 @@ export function EmployeeLifecycleCard({
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   // Exit process state
   const [lastWorkingDate, setLastWorkingDate] = useState("");
@@ -77,7 +76,6 @@ export function EmployeeLifecycleCard({
   const handleUpdateStatus = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSuccess(null);
     setIsSubmitting(true);
 
     const formData = new FormData();
@@ -90,7 +88,7 @@ export function EmployeeLifecycleCard({
       if (!res.success) {
         setError(formatError(res));
       } else {
-        setSuccess("Employee status updated successfully.");
+        toast.success("Employee status updated successfully.");
       }
     } catch {
       setError(UNEXPECTED_ERROR);
@@ -102,7 +100,6 @@ export function EmployeeLifecycleCard({
   const handleAssignManager = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSuccess(null);
     setIsSubmitting(true);
 
     const formData = new FormData();
@@ -117,7 +114,7 @@ export function EmployeeLifecycleCard({
       if (!res.success) {
         setError(formatError(res));
       } else {
-        setSuccess("Reporting manager updated successfully.");
+        toast.success("Reporting manager updated successfully.");
       }
     } catch {
       setError(UNEXPECTED_ERROR);
@@ -136,7 +133,6 @@ export function EmployeeLifecycleCard({
       return;
 
     setError(null);
-    setSuccess(null);
     setIsSubmitting(true);
 
     const formData = new FormData();
@@ -149,7 +145,7 @@ export function EmployeeLifecycleCard({
       if (!res.success) {
         setError(formatError(res));
       } else {
-        setSuccess("Exit recorded and status set to EXITED. Clearance remains pending.");
+        toast.success("Exit recorded and status set to EXITED. Clearance remains pending.");
       }
     } catch {
       setError(UNEXPECTED_ERROR);
@@ -209,16 +205,6 @@ export function EmployeeLifecycleCard({
           >
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{error}</span>
-          </div>
-        )}
-
-        {success && (
-          <div
-            role="status"
-            className="p-3 rounded-md bg-success/10 text-success border border-success/20 flex items-center gap-2"
-          >
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>{success}</span>
           </div>
         )}
 

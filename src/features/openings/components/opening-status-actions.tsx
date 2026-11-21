@@ -42,17 +42,24 @@ export function OpeningStatusActions({ openingId, currentStatus }: OpeningStatus
     CLOSED: "destructive",
   };
 
+  const statusLabels: Record<string, string> = {
+    DRAFT: "Draft",
+    PUBLISHED: "Published",
+    PAUSED: "Paused",
+    CLOSED: "Closed",
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3">
-        <span className="text-xs text-muted-foreground">Current Lifecycle State:</span>
+        <span className="text-xs text-muted-foreground">Current status:</span>
         <Badge variant={statusVariants[currentStatus] ?? "secondary"} className="text-xs">
-          {currentStatus}
+          {statusLabels[currentStatus] ?? currentStatus}
         </Badge>
       </div>
 
       {error && (
-        <p className="text-xs text-destructive p-2 rounded bg-destructive/10 border border-destructive/20">
+        <p role="alert" className="text-xs text-destructive p-2 rounded-lg bg-destructive/10 border border-destructive/20">
           {error}
         </p>
       )}
@@ -120,8 +127,8 @@ export function OpeningStatusActions({ openingId, currentStatus }: OpeningStatus
         )}
 
         {currentStatus === OpeningStatus.CLOSED && (
-          <p className="text-xs text-muted-foreground italic">
-            This opening is in terminal CLOSED state and no longer accepts candidate submissions.
+          <p className="text-xs text-muted-foreground">
+            This opening is closed for good and no longer accepts applications.
           </p>
         )}
       </div>

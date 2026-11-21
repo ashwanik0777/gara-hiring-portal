@@ -15,7 +15,7 @@ export default async function AmbassadorOpengraphImage() {
         logo={logo}
         eyebrow="Campus Ambassador"
         title="Become a GARA Campus Ambassador"
-        subtitle="Represent GARA at your college and earn per paid enrollment."
+        subtitle="Represent GARA at your college; approved referrals earn a commission."
         footer={`${host}/campus-ambassador`}
       />
     ),

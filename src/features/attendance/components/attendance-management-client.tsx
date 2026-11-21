@@ -17,7 +17,6 @@ import { PaginationNav } from "@/components/ui/pagination-nav";
 import { DialogFallback } from "@/components/ui/dialog-fallback";
 import {
   Clock,
-  CheckCircle2,
   UserCheck,
   AlertCircle,
   Search,
@@ -28,6 +27,7 @@ import {
 } from "lucide-react";
 import type { RecordAttendanceValues } from "./record-attendance-dialog";
 import { formatMonthLabel } from "./attendance-format";
+import { toast } from "@/components/ui/toast";
 
 // The staff entry form is loaded on first use so the list paints with less JS.
 const RecordAttendanceDialog = dynamic(
@@ -102,23 +102,14 @@ function entryMethodLabel(method: AttendanceEntryMethod): string {
   return "Staff entry";
 }
 
-function FeedbackBanner({ errorMsg, successMsg }: { errorMsg: string | null; successMsg: string | null }) {
-  return (
-    <>
-      {errorMsg && (
-        <div role="alert" className="p-3.5 rounded-xl border border-destructive/20 bg-destructive/10 text-destructive text-xs flex items-center gap-2">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>{errorMsg}</span>
-        </div>
-      )}
-      {successMsg && (
-        <div role="status" className="p-3.5 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
-          <span>{successMsg}</span>
-        </div>
-      )}
-    </>
-  );
+/** The last action's error; confirmations appear as toasts. */
+function FeedbackBanner({ errorMsg }: { errorMsg: string | null }) {
+  return errorMsg ? (
+    <div role="alert" className="p-3.5 rounded-xl border border-destructive/20 bg-destructive/10 text-destructive text-xs flex items-center gap-2">
+      <AlertCircle className="h-4 w-4 shrink-0" />
+      <span>{errorMsg}</span>
+    </div>
+  ) : null;
 }
 
 function AttendanceTable({
@@ -330,7 +321,6 @@ function SelfAttendancePanel({
   const pathname = usePathname();
   const [localToday, setLocalToday] = useState<AttendanceRecordView | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const checkInButtonRef = React.useRef<HTMLButtonElement>(null);
   const currentMonth = todayUtcKey().slice(0, 7);
@@ -376,21 +366,20 @@ function SelfAttendancePanel({
 
   const runSelfAction = (kind: "in" | "out") => {
     setErrorMsg(null);
-    setSuccessMsg(null);
     startTransition(async () => {
       const res = kind === "in" ? await selfCheckInAction() : await selfCheckOutAction();
       if (!res.success) {
         setErrorMsg(res.error);
         return;
       }
-      setSuccessMsg(kind === "in" ? "Checked in for today." : "Checked out for today.");
+      toast.success(kind === "in" ? "Checked in for today." : "Checked out for today.");
       setLocalToday(res.record);
     });
   };
 
   return (
     <div className="w-full space-y-6">
-      <FeedbackBanner errorMsg={errorMsg} successMsg={successMsg} />
+      <FeedbackBanner errorMsg={errorMsg} />
 
       <div className="p-5 rounded-2xl border border-border/70 bg-card shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -478,7 +467,6 @@ function TeamAttendancePanel({
   const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
   const [searchInput, setSearchInput] = useState(filters.search ?? "");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const currentMonth = todayUtcKey().slice(0, 7);
 
@@ -512,7 +500,6 @@ function TeamAttendancePanel({
 
   const handleRecordSubmit = (values: RecordAttendanceValues) => {
     setErrorMsg(null);
-    setSuccessMsg(null);
     if (!values.employeeId) {
       setErrorMsg("Please select an employee.");
       return;
@@ -535,7 +522,7 @@ function TeamAttendancePanel({
         setErrorMsg(res.error);
         return;
       }
-      setSuccessMsg("Attendance recorded.");
+      toast.success("Attendance recorded.");
       setIsRecordModalOpen(false);
     });
   };
@@ -543,14 +530,13 @@ function TeamAttendancePanel({
   // Staff member's own check-in uses the self-service action (server time only).
   const handleSelfCheckIn = () => {
     setErrorMsg(null);
-    setSuccessMsg(null);
     startTransition(async () => {
       const res = await selfCheckInAction();
       if (!res.success) {
         setErrorMsg(res.error);
         return;
       }
-      setSuccessMsg("Checked in for today.");
+      toast.success("Checked in for today.");
       setIsRecordModalOpen(false);
     });
   };
@@ -559,7 +545,7 @@ function TeamAttendancePanel({
 
   return (
     <div className="w-full space-y-6">
-      <FeedbackBanner errorMsg={isRecordModalOpen ? null : errorMsg} successMsg={successMsg} />
+      <FeedbackBanner errorMsg={isRecordModalOpen ? null : errorMsg} />
 
       {/* Summary figures, rendered on the server (attendance-stats-cards.tsx). */}
       {statsSlot}

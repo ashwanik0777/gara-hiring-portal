@@ -149,8 +149,8 @@
 │   │   └── subadmins/                 # Staff account and permission management
 │   │
 │   ├── components/                    # Shared UI components
-│   │   ├── ui/                        # Primitives: badge, button, card, dialog-fallback, input, pagination-nav, skeleton, stat-card
-│   │   ├── dashboard/                 # Portal shell (dashboard-shell.tsx) and header notifications
+│   │   ├── ui/                        # Primitives: badge, button, card, dialog-fallback, form-field, input, pagination-nav, skeleton, stat-card, toast
+│   │   ├── dashboard/                 # Portal shell (dashboard-shell.tsx), sidebar sections (nav-sections.ts) and header notifications
 │   │   ├── navigation/                # Navbar, footer, floating actions, navigation progress
 │   │   ├── feedback/                  # Empty, error and unauthorized states, page skeletons
 │   │   ├── auth/                      # Sign-in/registration screens and the one-time-code step
@@ -258,8 +258,8 @@ Email templates live in `src/infrastructure/email/`, not in feature modules.
 
 | Folder | Purpose |
 |---|---|
-| `ui/` | Design system primitives: Badge, Button, Card, Input, Skeleton, PaginationNav, StatCard, DialogFallback. Accessible, themeable, no business logic. |
-| `dashboard/` | Portal shell (sidebar, header, mobile navigation) shared by every portal, and header notifications. |
+| `ui/` | Design system primitives: Badge, Button, Card, Input, Skeleton, PaginationNav, StatCard, DialogFallback; `form-field` (shared staff-form controls: label row with Optional and counters, choice tiles, field groups; no hint lines) and `toast` (`toast.success/info/error` with the `<Toaster />` mounted in the root layout; confirmations go to toasts, form errors stay next to the form). Accessible, themeable, no business logic. |
+| `dashboard/` | Portal shell (sidebar, header, mobile navigation) shared by every portal, and header notifications. Sidebar items may carry a `group`; consecutive items with the same group render under one heading (`nav-sections.ts`), items without a group stand alone. A group heading opens and closes its links; the choice is remembered per browser and portal (`use-collapsed-nav-groups.ts`), and the group holding the current page opens when that page is opened. |
 | `navigation/` | Public navbar, footer, floating actions, navigation progress bar. |
 | `feedback/` | Empty states, friendly error and unauthorized states, page skeletons. |
 | `auth/`, `analytics/`, `theme/`, `verification/` | Auth screens, visitor counter, theme toggle, certificate verification portal. |

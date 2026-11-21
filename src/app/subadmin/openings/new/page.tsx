@@ -1,13 +1,11 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, hasPermission } from "@/lib/auth/guards";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { OpeningForm } from "@/features/openings/components/opening-form";
 import { getTrackOptions } from "@/features/openings/services/track-service";
-import { ArrowLeft } from "lucide-react";
 
 export const metadata = {
-  title: "Create Vacancy — Sub-Admin Workspace",
+  title: "Create Opening — Sub-Admin Workspace",
 };
 
 export const instant = false;
@@ -25,19 +23,7 @@ export default async function SubAdminNewOpeningPage() {
   }
 
   return (
-    <div className="w-full space-y-6">
-      <Link
-        href="/subadmin/openings"
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" />
-        Back to Openings List
-      </Link>
-
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Create New Program Vacancy</h1>
-      </div>
-
+    <div className="w-full">
       <OpeningForm basePath="/subadmin/openings" tracks={await getTrackOptions(user)} />
     </div>
   );

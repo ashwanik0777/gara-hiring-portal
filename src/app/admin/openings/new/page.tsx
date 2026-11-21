@@ -1,19 +1,17 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { Role } from "@prisma/client";
 import { OpeningForm } from "@/features/openings/components/opening-form";
 import { getTrackOptions } from "@/features/openings/services/track-service";
-import { Navbar } from "@/components/navigation/navbar";
-import { ArrowLeft } from "lucide-react";
 
 export const metadata = {
-  title: "Create Vacancy — Recruitment Admin",
+  title: "Create Opening — Recruitment Admin",
 };
 
 export const instant = false;
 
+/** Rendered inside the admin portal shell, which provides the title and "Back to Openings". */
 export default async function NewOpeningPage() {
   const user = await getCurrentUser();
   if (!user) {
@@ -25,37 +23,12 @@ export default async function NewOpeningPage() {
 
   // Page-level guard: the /admin portal is restricted to Super Administrators.
   if (!user.roles.includes(Role.ADMIN)) {
-    return (
-      <div className="min-h-screen flex flex-col bg-background">
-        <Navbar />
-        <div className="flex-1 flex items-center justify-center p-8">
-          <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />
-        </div>
-      </div>
-    );
+    return <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />;
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <Navbar />
-
-      <main className="flex-1 py-10">
-        <div className="w-full space-y-6">
-          <Link
-            href="/admin/openings"
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Back to Openings List
-          </Link>
-
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Create New Program Vacancy</h1>
-          </div>
-
-          <OpeningForm basePath="/admin/openings" tracks={await getTrackOptions(user)} />
-        </div>
-      </main>
+    <div className="w-full">
+      <OpeningForm basePath="/admin/openings" tracks={await getTrackOptions(user)} />
     </div>
   );
 }

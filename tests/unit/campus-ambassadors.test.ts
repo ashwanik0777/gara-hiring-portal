@@ -44,6 +44,7 @@ import {
   recordManualPayout,
   recordPayoutUpdate,
   reverseCommission,
+  reviewCommissions,
 } from "@/features/ambassadors/services/commission-service";
 import { renderAmbassadorStatusEmail } from "@/infrastructure/email/templates/ambassador-emails";
 
@@ -89,10 +90,15 @@ describe("ambassador policy", () => {
   it("masks UPI IDs and sorts commissions into buckets", () => {
     expect(maskUpiId("rahul.kumar@okaxis")).toBe("ra••••••@okaxis");
     const base = { status: "PENDING", payableAt: new Date(NOW.getTime() - HOUR), payoutId: null, enrollmentStatus: "ACTIVE" };
-    expect(commissionBucket(base, NOW)).toBe("payable");
+    // Payment is at GARA's discretion: an earned commission waits for the administrator's review.
+    expect(commissionBucket(base, NOW)).toBe("review");
+    expect(commissionBucket({ ...base, status: "APPROVED" }, NOW)).toBe("approved");
+    expect(commissionBucket({ ...base, status: "DECLINED" }, NOW)).toBe("declined");
     expect(commissionBucket({ ...base, payableAt: new Date(NOW.getTime() + HOUR) }, NOW)).toBe("pending");
+    expect(commissionBucket({ ...base, status: "APPROVED", payableAt: new Date(NOW.getTime() + HOUR) }, NOW)).toBe("pending");
     expect(commissionBucket({ ...base, enrollmentStatus: "REFUND_REQUESTED" }, NOW)).toBe("pending");
-    expect(commissionBucket({ ...base, payoutId: "p1" }, NOW)).toBe("processing");
+    expect(commissionBucket({ ...base, status: "APPROVED", payoutId: "p1" }, NOW)).toBe("processing");
+    expect(commissionBucket({ ...base, status: "PAID", payoutId: "p1" }, NOW)).toBe("paid");
     expect(commissionBucket({ ...base, status: "REVERSED" }, NOW)).toBe("reversed");
   });
 
@@ -174,7 +180,7 @@ describe("commission ledger", () => {
   it("reverses an unpaid commission when the enrollment is refunded", async () => {
     await reverseCommission(db as never, ENROLLMENT_ID, NOW);
     expect(db.ambassadorCommission.updateMany.mock.calls[0][0]).toEqual({
-      where: { enrollmentId: ENROLLMENT_ID, status: "PENDING", payoutId: null },
+      where: { enrollmentId: ENROLLMENT_ID, status: { in: ["PENDING", "APPROVED", "DECLINED"] }, payoutId: null },
       data: { status: "REVERSED", reversedAt: NOW },
     });
   });
@@ -219,6 +225,12 @@ describe("payouts", () => {
     expect(db.ambassadorCommission.updateMany.mock.calls[0][0]).toEqual({ where: { id: { in: ["c1", "c2"] } }, data: { status: "PAID", payoutId: "payout-1" } });
   });
 
+  it("pays only commissions an administrator approved", async () => {
+    db.ambassadorCommission.findMany.mockResolvedValue([]);
+    await expect(recordManualPayout(ADMIN, { ambassadorId: AMBASSADOR_ID, utr: "UTR12345678" }, NOW)).rejects.toBeInstanceOf(ConflictError);
+    expect(db.ambassadorCommission.findMany.mock.calls[0][0].where).toMatchObject({ status: "APPROVED", payoutId: null, ambassadorId: AMBASSADOR_ID });
+  });
+
   it("refuses an empty payout", async () => {
     db.ambassadorCommission.findMany.mockResolvedValue([]);
     await expect(recordManualPayout(ADMIN, { ambassadorId: AMBASSADOR_ID, utr: "UTR12345678" }, NOW)).rejects.toBeInstanceOf(ConflictError);
@@ -241,7 +253,8 @@ describe("payouts", () => {
     db.$transaction.mockImplementation((fn: (tx: typeof db) => unknown) => fn(db));
     db.ambassadorPayout.findUnique.mockResolvedValue({ id: "payout-1", status: "PROCESSING" });
     await recordPayoutUpdate("pout_1", "failed", null, "Invalid VPA");
-    expect(db.ambassadorCommission.updateMany.mock.calls[0][0]).toEqual({ where: { payoutId: "payout-1" }, data: { payoutId: null, status: "PENDING" } });
+    // The commissions stay approved and return to the "ready to pay" list.
+    expect(db.ambassadorCommission.updateMany.mock.calls[0][0]).toEqual({ where: { payoutId: "payout-1" }, data: { payoutId: null, status: "APPROVED" } });
   });
 
   it("does not pay a failed payout again when a late success arrives", async () => {
@@ -249,6 +262,48 @@ describe("payouts", () => {
     await recordPayoutUpdate("pout_1", "processed", "UTR999", null);
     expect(db.ambassadorPayout.update).not.toHaveBeenCalled();
     expect(db.auditLog.create.mock.calls[0][0].data.action).toBe("AMBASSADOR_PAYOUT_NEEDS_RECONCILIATION");
+  });
+});
+
+describe("commission review (payment at GARA's discretion)", () => {
+  const C1 = "33333333-3333-4333-8333-333333333331";
+  const C2 = "33333333-3333-4333-8333-333333333332";
+
+  it("is for administrators only", async () => {
+    const hr: AuthenticatedUser = { ...ADMIN, id: "hr-1", roles: [Role.HR] };
+    await expect(reviewCommissions(hr, { ambassadorId: AMBASSADOR_ID, commissionIds: [C1], decision: "APPROVE" }, NOW)).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("approves chosen commissions, records who and when, and audits it", async () => {
+    db.ambassadorCommission.findMany.mockResolvedValue([
+      { id: C1, amountPaise: 10_000 },
+      { id: C2, amountPaise: 10_000 },
+    ]);
+    const result = await reviewCommissions(ADMIN, { ambassadorId: AMBASSADOR_ID, commissionIds: [C1, C2, C1], decision: "APPROVE" }, NOW);
+    expect(result).toEqual({ count: 2, amountPaise: 20_000, status: "APPROVED" });
+    const where = db.ambassadorCommission.findMany.mock.calls[0][0].where;
+    // Only unpaid commissions past the refund window, not being refunded, can be decided.
+    expect(where).toMatchObject({ ambassadorId: AMBASSADOR_ID, payoutId: null, status: { in: ["PENDING", "APPROVED", "DECLINED"] }, payableAt: { lte: NOW } });
+    expect(where.enrollment).toEqual({ status: { notIn: ["REFUND_REQUESTED", "REFUNDED"] } });
+    expect(db.ambassadorCommission.updateMany.mock.calls[0][0]).toEqual({
+      where: { id: { in: [C1, C2] } },
+      data: { status: "APPROVED", reviewedAt: NOW, reviewedById: ADMIN.id, reviewNote: null },
+    });
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: "AMBASSADOR_COMMISSIONS_APPROVED", resourceId: AMBASSADOR_ID });
+  });
+
+  it("needs a reason to decline and stores it", async () => {
+    await expect(reviewCommissions(ADMIN, { ambassadorId: AMBASSADOR_ID, commissionIds: [C1], decision: "DECLINE", note: "no" }, NOW)).rejects.toBeInstanceOf(ValidationError);
+    db.ambassadorCommission.findMany.mockResolvedValue([{ id: C1, amountPaise: 10_000 }]);
+    await reviewCommissions(ADMIN, { ambassadorId: AMBASSADOR_ID, commissionIds: [C1], decision: "DECLINE", note: "Referrals were not genuine" }, NOW);
+    expect(db.ambassadorCommission.updateMany.mock.calls[0][0].data).toMatchObject({ status: "DECLINED", reviewNote: "Referrals were not genuine" });
+    expect(db.auditLog.create.mock.calls[0][0].data.action).toBe("AMBASSADOR_COMMISSIONS_DECLINED");
+  });
+
+  it("refuses commissions that cannot be decided (paid, refunded or not ready)", async () => {
+    db.ambassadorCommission.findMany.mockResolvedValue([{ id: C1, amountPaise: 10_000 }]);
+    await expect(reviewCommissions(ADMIN, { ambassadorId: AMBASSADOR_ID, commissionIds: [C1, C2], decision: "APPROVE" }, NOW)).rejects.toBeInstanceOf(ConflictError);
+    expect(db.ambassadorCommission.updateMany).not.toHaveBeenCalled();
   });
 });
 

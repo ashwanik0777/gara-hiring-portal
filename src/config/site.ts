@@ -67,8 +67,8 @@ export function confirmedCompanyFacts(): Array<{ label: string; value: string }>
  * everywhere except production deployments.
  */
 export const LEGAL = {
-  version: "2026-11-20",
-  lastUpdated: "20 November 2026",
+  version: "2026-11-21",
+  lastUpdated: "21 November 2026",
   reviewed: false,
 } as const;
 

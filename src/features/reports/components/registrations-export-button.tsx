@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast";
 import { exportRegistrantsCsvAction } from "../registration-actions";
 import type { RegistrantListFilters } from "../types";
 
@@ -18,10 +19,8 @@ function yesNo(value: boolean | null): "" | "yes" | "no" {
  */
 export function RegistrantsExportButton({ filters }: { filters: RegistrantListFilters }) {
   const [isPending, startTransition] = useTransition();
-  const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   const handleExport = () => {
-    setMessage(null);
     startTransition(async () => {
       try {
         const response = await exportRegistrantsCsvAction({
@@ -33,7 +32,7 @@ export function RegistrantsExportButton({ filters }: { filters: RegistrantListFi
           search: filters.search ?? "",
         });
         if (!response.success) {
-          setMessage({ tone: "error", text: response.error.message });
+          toast.error(response.error.message);
           return;
         }
         const { fileName, csvContent, rowCount, truncated } = response.data;
@@ -45,33 +44,21 @@ export function RegistrantsExportButton({ filters }: { filters: RegistrantListFi
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
-        setMessage({
-          tone: "success",
-          text: truncated
+        toast.success(
+          truncated
             ? `Downloaded ${fileName} with the first ${rowCount} rows. Narrow the filters to export the rest.`
-            : `Downloaded ${fileName} (${rowCount} rows).`,
-        });
+            : `Downloaded ${fileName} (${rowCount} rows).`
+        );
       } catch {
-        setMessage({
-          tone: "error",
-          text: "We couldn't reach the server. Check your connection and try again.",
-        });
+        toast.error("We couldn't reach the server. Check your connection and try again.");
       }
     });
   };
 
   return (
-    <div className="flex flex-col items-start gap-1 sm:items-end">
-      <Button type="button" size="sm" variant="outline" onClick={handleExport} isLoading={isPending}>
-        <Download className="h-3.5 w-3.5" aria-hidden="true" />
-        Export CSV
-      </Button>
-      <p
-        aria-live="polite"
-        className={`text-[11px] ${message?.tone === "error" ? "text-destructive" : "text-muted-foreground"}`}
-      >
-        {message?.text ?? ""}
-      </p>
-    </div>
+    <Button type="button" size="sm" variant="outline" onClick={handleExport} isLoading={isPending}>
+      <Download className="h-3.5 w-3.5" aria-hidden="true" />
+      Export CSV
+    </Button>
   );
 }

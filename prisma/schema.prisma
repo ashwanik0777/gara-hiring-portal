@@ -65,6 +65,7 @@ model User {
   mentoredTrainingBatches      TrainingBatchMentor[]      @relation("TrainingBatchMentors")
   // Campus Ambassador programme (Phase 4)
   campusAmbassador             CampusAmbassador?          @relation("AmbassadorUser")
+  reviewedAmbassadorCommissions AmbassadorCommission[]    @relation("AmbassadorCommissionReviewers")
   referredByAmbassadorId       String?
   referredByAmbassador         CampusAmbassador?          @relation("AmbassadorReferrals", fields: [referredByAmbassadorId], references: [id], onDelete: SetNull)
   referredAt                   DateTime?
@@ -1837,8 +1838,13 @@ enum AmbassadorRole {
 }
 
 enum CommissionStatus {
-  // Earned; payable once the batch's refund window has closed (payableAt)
+  // Earned; waits for the batch's refund window to close (payableAt), then for an
+  // administrator's review of the ambassador's work
   PENDING
+  // An administrator approved it for payout
+  APPROVED
+  // An administrator decided not to pay it; it can be reconsidered until it is paid
+  DECLINED
   PAID
   // The enrollment was refunded
   REVERSED
@@ -1922,6 +1928,12 @@ model AmbassadorCommission {
   payoutId       String?
   payout         AmbassadorPayout?   @relation(fields: [payoutId], references: [id], onDelete: SetNull)
   reversedAt     DateTime?
+  // Administrator review (payment is at GARA's discretion, decision 2026-11-21)
+  reviewedAt     DateTime?
+  reviewedById   String?
+  reviewedBy     User?               @relation("AmbassadorCommissionReviewers", fields: [reviewedById], references: [id], onDelete: SetNull)
+  // Internal note; required when declining
+  reviewNote     String?
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 

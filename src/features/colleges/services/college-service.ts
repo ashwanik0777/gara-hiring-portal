@@ -98,7 +98,7 @@ export async function listCollegesForStaff(user: AuthenticatedUser) {
       state: true,
       status: true,
       createdAt: true,
-      _count: { select: { candidates: true } },
+      _count: { select: { candidates: true, ambassadors: true } },
     },
     orderBy: [{ status: "desc" }, { name: "asc" }],
     take: STAFF_COLLEGE_LIMIT,

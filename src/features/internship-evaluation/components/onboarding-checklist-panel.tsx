@@ -8,13 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
-  CheckCircle2,
   AlertCircle,
   CreditCard,
   Lock,
   Sparkles,
   ShieldCheck,
 } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 interface OnboardingChecklistPanelProps {
   enrollmentId: string;
@@ -48,7 +48,6 @@ export function OnboardingChecklistPanel({
   const [showReissue, setShowReissue] = useState(false);
   const [reissueReason, setReissueReason] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const isEvaluationPassed = evaluationStatus === EvaluationStatus.PASSED;
   const isOnboardingComplete = onboarding?.status === OnboardingStatus.COMPLETED;
@@ -79,7 +78,6 @@ export function OnboardingChecklistPanel({
 
   const handleIssueIdCard = async (reason?: string) => {
     setError(null);
-    setSuccess(null);
     setIsIssuing(true);
 
     const formData = new FormData();
@@ -93,9 +91,9 @@ export function OnboardingChecklistPanel({
       if (!res.success) {
         setError(res.error);
       } else if (res.data.alreadyIssued) {
-        setSuccess(`This intern already has an issued ID card: ${res.data.cardNumber}`);
+        toast.success(`This intern already has an issued ID card: ${res.data.cardNumber}`);
       } else {
-        setSuccess(
+        toast.success(
           res.data.reissued
             ? `Intern ID card reissued: ${res.data.cardNumber}`
             : `Intern ID card issued: ${res.data.cardNumber}`
@@ -130,13 +128,6 @@ export function OnboardingChecklistPanel({
         <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{error}</span>
-        </div>
-      )}
-
-      {success && (
-        <div className="p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
-          <span>{success}</span>
         </div>
       )}
 

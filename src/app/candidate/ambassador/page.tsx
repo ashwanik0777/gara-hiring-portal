@@ -18,7 +18,15 @@ export const instant = false;
 
 export const metadata: Metadata = { title: "Campus Ambassador", robots: { index: false, follow: false } };
 
-const BUCKET_LABELS = { pending: "Pending", payable: "Payable", processing: "Being paid", paid: "Paid", reversed: "Reversed" } as const;
+const BUCKET_LABELS = {
+  pending: "Waiting",
+  review: "Under review",
+  approved: "Approved",
+  declined: "Not approved",
+  processing: "Being paid",
+  paid: "Paid",
+  reversed: "Reversed",
+} as const;
 
 function Leaderboard({ title, rows, myId }: { title: string; rows: NonNullable<MyAmbassador["leaderboards"]>["overall"]; myId: string }) {
   return (
@@ -107,12 +115,12 @@ async function Dashboard({ ambassador, now }: { ambassador: MyAmbassador; now: D
           <CardContent className="space-y-4">
             <dl className="grid grid-cols-3 gap-3 text-sm">
               <div>
-                <dt className="text-xs text-muted-foreground">Pending</dt>
+                <dt className="text-xs text-muted-foreground">Under review</dt>
                 <dd className="font-semibold">{formatInr(stats.earnings.pending)}</dd>
               </div>
               <div>
-                <dt className="text-xs text-muted-foreground">Payable</dt>
-                <dd className="font-semibold">{formatInr(stats.earnings.payable)}</dd>
+                <dt className="text-xs text-muted-foreground">Approved</dt>
+                <dd className="font-semibold">{formatInr(stats.earnings.approved)}</dd>
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">Paid</dt>
@@ -126,11 +134,11 @@ async function Dashboard({ ambassador, now }: { ambassador: MyAmbassador; now: D
                     <span>
                       {commission.enrollment.batch.program.title} · {commission.enrollment.batch.name}
                       <span className="block text-xs text-muted-foreground">
-                        {commission.bucket === "pending" ? `Payable from ${formatBatchDay(commission.payableAt)}` : `Recorded ${formatBatchDay(commission.createdAt)}`}
+                        {commission.bucket === "pending" ? `Review after ${formatBatchDay(commission.payableAt)}` : `Recorded ${formatBatchDay(commission.createdAt)}`}
                       </span>
                     </span>
                     <span className="flex items-center gap-2">
-                      {formatInr(commission.amountPaise)} <Badge variant={commission.bucket === "reversed" ? "destructive" : commission.bucket === "paid" ? "success" : "outline"}>{BUCKET_LABELS[commission.bucket]}</Badge>
+                      {formatInr(commission.amountPaise)} <Badge variant={commission.bucket === "reversed" || commission.bucket === "declined" ? "destructive" : commission.bucket === "paid" || commission.bucket === "approved" ? "success" : "outline"}>{BUCKET_LABELS[commission.bucket]}</Badge>
                     </span>
                   </li>
                 ))}

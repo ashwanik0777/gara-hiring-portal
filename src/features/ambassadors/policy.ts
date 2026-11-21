@@ -61,12 +61,24 @@ export interface CommissionLike {
   enrollmentStatus: string;
 }
 
-/** Earned but not yet payable, payable now, or paid (reversed ones are not counted). */
-export function commissionBucket(commission: CommissionLike, now: Date): "pending" | "payable" | "processing" | "paid" | "reversed" {
+export type CommissionBucket = "pending" | "review" | "approved" | "declined" | "processing" | "paid" | "reversed";
+
+/**
+ * Where a commission stands. Payment is at GARA's discretion (decision 2026-11-21): once the
+ * batch's refund window has closed, an administrator reviews it and approves or declines it;
+ * only approved commissions are paid.
+ * - pending: the refund window is open (or a refund request is undecided)
+ * - review: waiting for the administrator's decision
+ * - approved / declined: decided, not paid
+ * - processing / paid / reversed
+ */
+export function commissionBucket(commission: CommissionLike, now: Date): CommissionBucket {
   if (commission.status === "REVERSED") return "reversed";
   if (commission.status === "PAID") return "paid";
   if (commission.payoutId) return "processing";
+  if (commission.status === "DECLINED") return "declined";
   // A refund request keeps the commission on hold until it is decided.
   if (commission.payableAt.getTime() > now.getTime() || commission.enrollmentStatus === "REFUND_REQUESTED") return "pending";
-  return "payable";
+  if (commission.status === "APPROVED") return "approved";
+  return "review";
 }

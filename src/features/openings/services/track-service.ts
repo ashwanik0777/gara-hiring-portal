@@ -51,7 +51,7 @@ function isUniqueViolation(error: unknown): boolean {
 export async function listTracksForStaff(user: AuthenticatedUser) {
   await assertPermission(user, "canOpenings");
   return prisma.track.findMany({
-    select: { ...publicTrackSelect, sortOrder: true, isActive: true, _count: { select: { openings: true } } },
+    select: { ...publicTrackSelect, sortOrder: true, isActive: true, _count: { select: { openings: true, programmes: true } } },
     orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
   });
 }

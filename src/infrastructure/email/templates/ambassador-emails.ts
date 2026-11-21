@@ -42,7 +42,7 @@ export function renderAmbassadorStatusEmail(payload: unknown): EmailContent {
   const rows: Array<[string, string]> = [];
   if (status === "APPROVED") {
     subject = "[GARA Innovation] You are a Campus Ambassador";
-    lead = "Your Campus Ambassador application is approved. Share your referral link; students who enrol in Industrial Training with your code get a discount and you earn a commission once their refund window closes.";
+    lead = "Your Campus Ambassador application is approved. Share your referral link; students who enrol in Industrial Training with your code get a discount, and commissions are paid once GARA reviews and approves your work.";
     rows.push(["Role", data.role === "LEAD" ? "Lead" : "Associate"]);
     if (code) rows.push(["Referral code", code]);
     if (link) rows.push(["Referral link", link]);

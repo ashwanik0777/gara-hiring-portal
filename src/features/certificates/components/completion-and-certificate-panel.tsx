@@ -18,12 +18,12 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Award,
-  CheckCircle2,
   AlertCircle,
   Lock,
   RotateCcw,
   Sparkles,
 } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 interface ChecklistItem {
   id: string;
@@ -93,7 +93,6 @@ export function CompletionAndCertificatePanel({
   const [reissueReason, setReissueReason] = useState("");
   const [showReissueDialog, setShowReissueDialog] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const isCertificateActive = certificate?.status === CertificateStatus.ACTIVE;
   const isCompletionApproved = completion?.status === CompletionStatus.APPROVED;
@@ -115,7 +114,6 @@ export function CompletionAndCertificatePanel({
 
   const handleSaveChecklist = async () => {
     setError(null);
-    setSuccess(null);
     setIsUpdatingChecklist(true);
 
     const formData = new FormData();
@@ -132,7 +130,7 @@ export function CompletionAndCertificatePanel({
       if (!res.success) {
         setError(res.error || "Failed to update completion checklist");
       } else {
-        setSuccess(
+        toast.success(
           res.data.status === CompletionStatus.APPROVED
             ? "Completion checklist recorded and approved."
             : "Completion checklist saved. Every required item must be completed before approval."
@@ -147,7 +145,6 @@ export function CompletionAndCertificatePanel({
 
   const handleIssueCertificate = async () => {
     setError(null);
-    setSuccess(null);
     setIsIssuingCert(true);
 
     const formData = new FormData();
@@ -168,7 +165,7 @@ export function CompletionAndCertificatePanel({
       if (!res.success) {
         setError(res.error || "Failed to issue certificate");
       } else {
-        setSuccess("Certificate of Completion issued.");
+        toast.success("Certificate of Completion issued.");
       }
     } catch {
       setError("An unexpected error occurred");
@@ -180,7 +177,6 @@ export function CompletionAndCertificatePanel({
   const handleRevokeCertificate = async () => {
     if (!certificate || revokeReason.trim().length < 10) return;
     setError(null);
-    setSuccess(null);
     setIsRevoking(true);
     const formData = new FormData();
     formData.append("certificateId", certificate.id);
@@ -190,7 +186,7 @@ export function CompletionAndCertificatePanel({
       if (!res.success) {
         setError(res.error || "Failed to revoke certificate");
       } else {
-        setSuccess("Certificate revoked. The verification page now shows it as revoked.");
+        toast.success("Certificate revoked. The verification page now shows it as revoked.");
         setShowRevokeDialog(false);
         setRevokeReason("");
       }
@@ -204,7 +200,6 @@ export function CompletionAndCertificatePanel({
   const handleReissueCertificate = async () => {
     if (!certificate || !reissueReason.trim()) return;
     setError(null);
-    setSuccess(null);
     setIsReissuing(true);
 
     const formData = new FormData();
@@ -216,7 +211,7 @@ export function CompletionAndCertificatePanel({
       if (!res.success) {
         setError(res.error || "Failed to reissue certificate");
       } else {
-        setSuccess("Certificate reissued. The previous verification code now reports as superseded.");
+        toast.success("Certificate reissued. The previous verification code now reports as superseded.");
         setShowReissueDialog(false);
         setReissueReason("");
       }
@@ -254,13 +249,6 @@ export function CompletionAndCertificatePanel({
           <div role="alert" className="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-xs text-destructive">
             <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{error}</span>
-          </div>
-        )}
-
-        {success && (
-          <div role="status" className="flex items-center gap-2 rounded-lg bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>{success}</span>
           </div>
         )}
 

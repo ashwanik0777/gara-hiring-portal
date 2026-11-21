@@ -4,7 +4,8 @@ import React, { useState } from "react";
 import { triggerEvaluationStartAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
-import { Calendar, Play, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Calendar, Play, AlertCircle } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 interface StartEvaluationDialogProps {
   enrollmentId: string;
@@ -20,7 +21,6 @@ export function StartEvaluationDialog({
   const [startDate, setStartDate] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   if (currentStatus !== "PENDING_TRIGGER") {
     return null;
@@ -29,7 +29,6 @@ export function StartEvaluationDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSuccess(null);
 
     if (!startDate) {
       setError("Please select the evaluation start date.");
@@ -47,7 +46,7 @@ export function StartEvaluationDialog({
       if (!res.success) {
         setError(res.error);
       } else {
-        setSuccess("7-working-day evaluation window initiated successfully.");
+        toast.success("7-working-day evaluation window initiated successfully.");
       }
     } catch {
       setError("We couldn't start the evaluation. Please check your connection and try again.");
@@ -69,13 +68,6 @@ export function StartEvaluationDialog({
             <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{error}</span>
-            </div>
-          )}
-
-          {success && (
-            <div className="p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>{success}</span>
             </div>
           )}
 

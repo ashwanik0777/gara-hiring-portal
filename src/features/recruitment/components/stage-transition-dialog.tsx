@@ -6,7 +6,8 @@ import { VALID_APPLICATION_TRANSITIONS, getManualTransitionTargets } from "../sc
 import { transitionStatusAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
-import { ArrowRight, AlertCircle, CheckCircle2, ShieldAlert } from "lucide-react";
+import { ArrowRight, AlertCircle, ShieldAlert } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 interface StageTransitionDialogProps {
   applicationId: string;
@@ -31,7 +32,6 @@ export function StageTransitionDialog({
   const [candidateMessage, setCandidateMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   if (allowedNextStatuses.length === 0 && hasWorkflowOwnedTargets) {
     return (
@@ -58,7 +58,6 @@ export function StageTransitionDialog({
     if (!toStatus) return;
 
     setError(null);
-    setSuccess(null);
     setIsSubmitting(true);
 
     const formData = new FormData();
@@ -72,7 +71,7 @@ export function StageTransitionDialog({
       if (!res.success) {
         setError(res.error);
       } else {
-        setSuccess(`Application stage successfully advanced to ${toStatus.replace(/_/g, " ")}.`);
+        toast.success(`Application stage successfully advanced to ${toStatus.replace(/_/g, " ")}.`);
         setInternalNotes("");
         setCandidateMessage("");
       }
@@ -99,13 +98,6 @@ export function StageTransitionDialog({
             <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{error}</span>
-            </div>
-          )}
-
-          {success && (
-            <div className="p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>{success}</span>
             </div>
           )}
 

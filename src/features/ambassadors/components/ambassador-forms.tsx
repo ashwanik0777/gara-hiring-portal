@@ -10,32 +10,29 @@ import {
   applyAsAmbassadorAction,
   decideAmbassadorAction,
   issueAmbassadorCertificateAction,
-  payViaRazorpayXAction,
-  recordManualPayoutAction,
   saveUpiIdAction,
 } from "../actions";
+import { toast } from "@/components/ui/toast";
 
 type ActionResult = { success: true } | { success: false; error: string };
 
 function useAction() {
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
-  const [notice, setNotice] = React.useState<string | null>(null);
   const [pending, startTransition] = React.useTransition();
   const run = (action: () => Promise<ActionResult>, doneNotice?: string) => {
     setError(null);
-    setNotice(null);
     startTransition(async () => {
       const result = await action();
       if (!result.success) {
         setError(result.error);
         return;
       }
-      if (doneNotice) setNotice(doneNotice);
+      if (doneNotice) toast.success(doneNotice);
       router.refresh();
     });
   };
-  return { error, notice, pending, run };
+  return { error, pending, run };
 }
 
 function TextArea({ label, value, onChange, required, maxLength }: { label: string; value: string; onChange: (value: string) => void; required?: boolean; maxLength: number }) {
@@ -192,7 +189,7 @@ export function CopyButton({ value, label = "Copy" }: { value: string; label?: s
 
 export function UpiForm({ masked }: { masked: string | null }) {
   const [upiId, setUpiId] = React.useState("");
-  const { error, notice, pending, run } = useAction();
+  const { error, pending, run } = useAction();
   return (
     <form
       onSubmit={(event) => {
@@ -212,7 +209,7 @@ export function UpiForm({ masked }: { masked: string | null }) {
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">Stored encrypted; only payouts use it.</p>
-      <FormMessages error={error} notice={notice} />
+      <FormMessages error={error} />
     </form>
   );
 }
@@ -246,7 +243,7 @@ export function AmbassadorDecisionForm({ ambassadorId, status }: { ambassadorId:
       {(status === "PENDING" || status === "APPROVED") && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
           <div className="flex-1">
-            <Input label="Reason (required to reject or deactivate)" value={note} maxLength={1000} onChange={(event) => setNote(event.target.value)} />
+            <Input label="Reason" placeholder="Needed to reject or deactivate" value={note} maxLength={1000} onChange={(event) => setNote(event.target.value)} />
           </div>
           <Button
             size="sm"
@@ -265,7 +262,7 @@ export function AmbassadorDecisionForm({ ambassadorId, status }: { ambassadorId:
 
 export function AmbassadorCertificateForm({ ambassadorId, defaults }: { ambassadorId: string; defaults: { name: string; title: string; periodEnd: string } }) {
   const [values, setValues] = React.useState({ signatoryName: defaults.name, signatoryTitle: defaults.title, periodEnd: defaults.periodEnd });
-  const { error, notice, pending, run } = useAction();
+  const { error, pending, run } = useAction();
   return (
     <form
       onSubmit={(event) => {
@@ -279,40 +276,10 @@ export function AmbassadorCertificateForm({ ambassadorId, defaults }: { ambassad
         <Input label="Signatory name" value={values.signatoryName} onChange={(event) => setValues({ ...values, signatoryName: event.target.value })} required maxLength={120} />
         <Input label="Signatory title" value={values.signatoryTitle} onChange={(event) => setValues({ ...values, signatoryTitle: event.target.value })} required maxLength={120} />
       </div>
-      <FormMessages error={error} notice={notice} />
+      <FormMessages error={error} />
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Issuing…" : "Issue certificate"}
       </Button>
     </form>
-  );
-}
-
-export function PayoutActions({ ambassadorId, canUseRazorpayX, razorpayXReason }: { ambassadorId: string; canUseRazorpayX: boolean; razorpayXReason: string | null }) {
-  const [utr, setUtr] = React.useState("");
-  const [tds, setTds] = React.useState("");
-  const { error, notice, pending, run } = useAction();
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={pending || !canUseRazorpayX} onClick={() => run(() => payViaRazorpayXAction(ambassadorId), "Payout sent to RazorpayX.")}>
-          Pay via RazorpayX
-        </Button>
-        {razorpayXReason && <span className="text-xs text-muted-foreground">{razorpayXReason}</span>}
-      </div>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          run(() => recordManualPayoutAction({ ambassadorId, utr, tdsRupees: tds }), "Payout recorded.");
-        }}
-        className="flex flex-col gap-2 sm:flex-row sm:items-end"
-      >
-        <Input label="Bank UTR (paid outside)" value={utr} onChange={(event) => setUtr(event.target.value)} maxLength={30} required />
-        <Input label="TDS deducted (₹)" type="number" min={0} step="0.01" value={tds} onChange={(event) => setTds(event.target.value)} />
-        <Button type="submit" size="sm" variant="outline" disabled={pending}>
-          Record payout
-        </Button>
-      </form>
-      <FormMessages error={error} notice={notice} />
-    </div>
   );
 }

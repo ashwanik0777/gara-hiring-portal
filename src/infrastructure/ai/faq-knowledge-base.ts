@@ -200,7 +200,7 @@ export const APPROVED_FAQ_KNOWLEDGE_BASE: FaqKnowledgeEntry[] = [
     category: "CAMPUS_AMBASSADOR",
     question: "What is the Campus Ambassador programme and how do I join?",
     answer:
-      "Campus Ambassadors represent GARA Innovation at their college and share Industrial Training with fellow students. Apply from the Campus Ambassador page in your portal (/candidate/ambassador). Once approved you get a referral link, code and QR: students who enrol with your code get a discount, and you earn a commission for each paid enrollment once its refund window closes. Never collect money from anyone and make no promises such as a placement guarantee. Details: /campus-ambassador.",
+      "Campus Ambassadors represent GARA Innovation at their college and share Industrial Training with fellow students. Apply from the Campus Ambassador page in your portal (/candidate/ambassador). Once approved you get a referral link, code and QR: students who enrol with your code get a discount, and GARA reviews your work after the refund window closes and decides whether to approve a commission for each paid enrollment. Never collect money from anyone and make no promises such as a placement guarantee. Details: /campus-ambassador.",
     keywords: ["ambassador", "campus ambassador", "referral", "refer", "code", "commission", "earn", "college", "lead", "associate"],
     relatedPath: "/campus-ambassador",
   },
@@ -210,7 +210,7 @@ export const APPROVED_FAQ_KNOWLEDGE_BASE: FaqKnowledgeEntry[] = [
     category: "CAMPUS_AMBASSADOR",
     question: "When and how are Campus Ambassador commissions paid?",
     answer:
-      "A commission is recorded when a student's payment with your code is confirmed. It becomes payable after that batch's refund window closes, and it is reversed if the student is refunded. Add your UPI ID in your ambassador dashboard; payouts and their bank references appear in your payout history, and tax is deducted where the law requires it.",
+      "A commission is recorded when a student's payment with your code is confirmed. After that batch's refund window closes, GARA reviews your work and decides whether to approve it; only approved commissions are paid, and a commission is reversed if the student is refunded. Add your UPI ID in your ambassador dashboard; payouts and their bank references appear in your payout history, and tax is deducted where the law requires it.",
     keywords: ["commission", "payout", "payment", "upi", "earnings", "paid", "tds", "withdraw"],
     relatedPath: "/candidate/ambassador",
   },

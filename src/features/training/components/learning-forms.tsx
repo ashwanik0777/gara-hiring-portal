@@ -12,29 +12,28 @@ import {
   submitFinalProjectAction,
 } from "../learning-actions";
 import { fieldClass, FormMessages } from "./staff/staff-forms";
+import { toast } from "@/components/ui/toast";
 
 type ActionResult = { success: true } | { success: false; error: string };
 
 function useAction() {
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
-  const [notice, setNotice] = React.useState<string | null>(null);
   const [pending, startTransition] = React.useTransition();
   const run = (action: () => Promise<ActionResult>, doneNotice?: string, onDone?: () => void) => {
     setError(null);
-    setNotice(null);
     startTransition(async () => {
       const result = await action();
       if (!result.success) {
         setError(result.error);
         return;
       }
-      if (doneNotice) setNotice(doneNotice);
+      if (doneNotice) toast.success(doneNotice);
       onDone?.();
       router.refresh();
     });
   };
-  return { error, notice, pending, run };
+  return { error, pending, run };
 }
 
 /** Submit or replace an assignment before its due time. */
@@ -48,7 +47,7 @@ export function SubmissionForm({
   initial: { repoUrl: string; linkUrl: string; notes: string } | null;
 }) {
   const [values, setValues] = React.useState(initial ?? { repoUrl: "", linkUrl: "", notes: "" });
-  const { error, notice, pending, run } = useAction();
+  const { error, pending, run } = useAction();
   const notesId = React.useId();
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -66,7 +65,7 @@ export function SubmissionForm({
         </label>
         <textarea id={notesId} rows={2} maxLength={2000} className={fieldClass} value={values.notes} onChange={(event) => setValues({ ...values, notes: event.target.value })} />
       </div>
-      <FormMessages error={error} notice={notice} />
+      <FormMessages error={error} />
       <Button type="submit" size="sm" disabled={pending || (!values.repoUrl.trim() && !values.linkUrl.trim())}>
         {pending ? "Submitting…" : initial ? "Replace submission" : "Submit"}
       </Button>
@@ -83,7 +82,7 @@ export function ProjectForm({
   initial: { title: string; description: string; repoUrl: string; liveUrl: string } | null;
 }) {
   const [values, setValues] = React.useState(initial ?? { title: "", description: "", repoUrl: "", liveUrl: "" });
-  const { error, notice, pending, run } = useAction();
+  const { error, pending, run } = useAction();
   const descriptionId = React.useId();
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -102,7 +101,7 @@ export function ProjectForm({
         </label>
         <textarea id={descriptionId} rows={3} maxLength={2000} className={fieldClass} value={values.description} onChange={(event) => setValues({ ...values, description: event.target.value })} />
       </div>
-      <FormMessages error={error} notice={notice} />
+      <FormMessages error={error} />
       <Button type="submit" size="sm" disabled={pending}>
         {pending ? "Saving…" : initial ? "Resubmit project" : "Submit project"}
       </Button>

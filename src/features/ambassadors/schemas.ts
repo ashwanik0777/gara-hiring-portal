@@ -58,3 +58,16 @@ export const ambassadorCertificateSchema = z.object({
   signatoryName: z.string().trim().min(2).max(120),
   signatoryTitle: z.string().trim().min(2).max(120),
 });
+
+/** An administrator's decision on some of one ambassador's commissions (payment is discretionary). */
+export const commissionReviewSchema = z
+  .object({
+    ambassadorId: z.uuid(),
+    commissionIds: z.array(z.uuid()).min(1, "Choose at least one enrollment.").max(200),
+    decision: z.enum(["APPROVE", "DECLINE"]),
+    note: z.string().trim().max(1000).optional().default(""),
+  })
+  .refine((value) => value.decision === "APPROVE" || value.note.length >= 5, {
+    path: ["note"],
+    message: "Write a short reason (at least 5 characters) to decline.",
+  });

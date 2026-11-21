@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import type { Metadata } from "next";
-import { Award, BookOpen, CheckCircle2, Download, GraduationCap } from "lucide-react";
+import { Award, BookOpen, Download, GraduationCap } from "lucide-react";
 import { requirePortalCapability } from "@/features/lifecycle/services/lifecycle-service";
 import { linkButtonClass } from "@/features/lifecycle/components/self-service-ui";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -18,6 +18,7 @@ import { canTransfer, isRefundWindowOpen, refundWindowClosesAt } from "@/feature
 import { formatInr } from "@/features/training/money";
 import { formatBatchDay, formatBatchDayTime } from "@/features/training/components/batch-dates";
 import { RefundRequestForm, TransferForm } from "@/features/training/components/enrollment-actions";
+import { ToastOnMount } from "@/components/ui/toast-on-mount";
 
 export const instant = false;
 
@@ -192,10 +193,7 @@ export default async function MyTrainingPage({ searchParams }: { searchParams: P
       </header>
 
       {paid === "1" && (
-        <p role="status" className="flex items-start gap-2 rounded-md border border-success/30 bg-success/10 p-3 text-sm text-foreground">
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
-          Payment received. Your seat is confirmed and your receipt is ready below.
-        </p>
+        <ToastOnMount message="Payment received. Your seat is confirmed and your receipt is ready below." clearParam="paid" />
       )}
 
       {enrollments.length === 0 ? (

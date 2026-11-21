@@ -124,13 +124,15 @@ async function performance(ambassadorIds: string[], now: Date) {
     const bucket = commissionBucket({ status: row.status, payableAt: row.payableAt, payoutId: row.payoutId, enrollmentStatus: row.enrollment.status }, now);
     if (bucket === "reversed") continue;
     entry.paidEnrollments += 1;
-    entry.earnings[bucket === "processing" ? "payable" : bucket] += row.amountPaise;
+    const key = bucket === "review" ? "pending" : bucket === "processing" ? "approved" : bucket;
+    entry.earnings[key] += row.amountPaise;
   }
   return result;
 }
 
 function emptyPerformance() {
-  return { clicks: 0, signups: 0, applications: 0, paidEnrollments: 0, earnings: { pending: 0, payable: 0, paid: 0 } };
+  // pending: waiting for the refund window or the review; approved: approved, not yet paid.
+  return { clicks: 0, signups: 0, applications: 0, paidEnrollments: 0, earnings: { pending: 0, approved: 0, declined: 0, paid: 0 } };
 }
 
 /** Top ambassadors by paid enrollments (overall, or within one college). */
@@ -279,6 +281,15 @@ export async function listAmbassadorsForStaff(user: AuthenticatedUser, filter: {
 }
 
 export type StaffAmbassadorRow = Awaited<ReturnType<typeof listAmbassadorsForStaff>>[number];
+
+/** Administrators: how many ambassadors are in each status (for the filters and summary). */
+export async function countAmbassadorsByStatus(user: AuthenticatedUser): Promise<Record<AmbassadorStatus, number>> {
+  assertAdmin(user);
+  const rows = await prisma.campusAmbassador.groupBy({ by: ["status"], _count: { _all: true } });
+  const counts: Record<AmbassadorStatus, number> = { PENDING: 0, APPROVED: 0, REJECTED: 0, DEACTIVATED: 0 };
+  for (const row of rows) counts[row.status] = row._count._all;
+  return counts;
+}
 
 const DECISION_FROM: Record<"APPROVE" | "REJECT" | "DEACTIVATE", AmbassadorStatus[]> = {
   APPROVE: [AmbassadorStatus.PENDING, AmbassadorStatus.DEACTIVATED],

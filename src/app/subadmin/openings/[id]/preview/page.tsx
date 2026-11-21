@@ -9,7 +9,6 @@ import { openingIdSchema } from "@/features/openings/schemas";
 import { env } from "@/lib/env";
 import { OpeningPreviewView } from "@/features/openings/components/opening-preview-view";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
-import { Eye } from "lucide-react";
 
 interface SubAdminPreviewOpeningPageProps {
   params: Promise<{ id: string }>;
@@ -54,14 +53,7 @@ export default async function SubAdminPreviewOpeningPage({
   }
 
   return (
-    <div className="w-full space-y-6">
-      <div className="rounded-lg bg-primary/10 border border-primary/20 py-2.5 px-4 text-center text-xs font-medium text-foreground flex items-center justify-center gap-2">
-        <Eye className="h-4 w-4 text-primary" />
-        <span>
-          Preview Mode — Viewing Opening: <span className="font-semibold">{opening.title}</span> (
-          Status: {opening.status})
-        </span>
-      </div>
+    <div className="w-full">
       <OpeningPreviewView opening={opening} basePath="/subadmin/openings" documentMode={env.DOCUMENT_STORAGE_MODE} />
     </div>
   );

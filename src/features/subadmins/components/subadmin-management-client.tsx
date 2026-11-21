@@ -9,9 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PaginationNav } from "@/components/ui/pagination-nav";
 import { DialogFallback } from "@/components/ui/dialog-fallback";
-import { Trash2, Settings2, AlertCircle, CheckCircle2, Search, X } from "lucide-react";
+import { Trash2, Settings2, AlertCircle, Search, X } from "lucide-react";
 import { initialsOf, isStaffRole } from "./subadmin-ui";
 import type { CreateSubAdminValues } from "./create-subadmin-dialog";
+import { toast } from "@/components/ui/toast";
 
 export type { SubAdminItem } from "../types";
 
@@ -53,7 +54,6 @@ export function SubAdminManagementClient({ items, page, statsSlot, search }: Sub
   const [editingSubAdmin, setEditingSubAdmin] = useState<SubAdminItem | null>(null);
   const [searchInput, setSearchInput] = useState(search ?? "");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   // Listen for open-subadmin-modal event from navbar button
@@ -89,7 +89,6 @@ export function SubAdminManagementClient({ items, page, statsSlot, search }: Sub
 
   const handleCreateSubmit = (values: CreateSubAdminValues) => {
     setErrorMsg(null);
-    setSuccessMsg(null);
     startTransition(async () => {
       const res = await createSubAdminAction({
         name: values.name,
@@ -102,7 +101,7 @@ export function SubAdminManagementClient({ items, page, statsSlot, search }: Sub
         setErrorMsg(res.error || "Failed to create Sub-Admin");
         return;
       }
-      setSuccessMsg(res.message || "Sub-Admin successfully created!");
+      toast.success(res.message || "Sub-Admin successfully created!");
       setIsCreating(false);
     });
   };
@@ -114,7 +113,6 @@ export function SubAdminManagementClient({ items, page, statsSlot, search }: Sub
       return;
     }
     setErrorMsg(null);
-    setSuccessMsg(null);
     startTransition(async () => {
       const res = await updateSubAdminPermissionsAction({
         subAdminId: subAdmin.id,
@@ -125,7 +123,7 @@ export function SubAdminManagementClient({ items, page, statsSlot, search }: Sub
         setErrorMsg(res.error || "Failed to update permissions");
         return;
       }
-      setSuccessMsg(`Permissions updated successfully for ${subAdmin.name}.`);
+      toast.success(`Permissions updated successfully for ${subAdmin.name}.`);
       setEditingSubAdmin(null);
     });
   };
@@ -133,14 +131,13 @@ export function SubAdminManagementClient({ items, page, statsSlot, search }: Sub
   const handleDelete = (id: string, name: string) => {
     if (!confirm(`Revoke staff access for ${name}? Their account and history are kept, but they lose all sub-admin roles and are signed out.`)) return;
     setErrorMsg(null);
-    setSuccessMsg(null);
     startTransition(async () => {
       const res = await deleteSubAdminAction(id);
       if (!res.success) {
         setErrorMsg(res.error || "Failed to revoke Sub-Admin access");
         return;
       }
-      setSuccessMsg(`Staff access for ${name} revoked.`);
+      toast.success(`Staff access for ${name} revoked.`);
       if (editingSubAdmin?.id === id) setEditingSubAdmin(null);
     });
   };
@@ -151,12 +148,6 @@ export function SubAdminManagementClient({ items, page, statsSlot, search }: Sub
         <div role="alert" className="p-3.5 rounded-xl border border-destructive/20 bg-destructive/10 text-destructive text-xs flex items-center gap-2">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{errorMsg}</span>
-        </div>
-      )}
-      {successMsg && (
-        <div role="status" className="p-3.5 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
-          <span>{successMsg}</span>
         </div>
       )}
 

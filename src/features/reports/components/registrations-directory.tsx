@@ -56,7 +56,7 @@ export function RegistrationsDirectory({ user, basePath, searchParams }: Registr
 
   return (
     <div className="w-full space-y-6">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      {/* <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-2xl text-xs text-muted-foreground">
           Everyone who created a candidate account, newest first, with what they entered at sign-up. Staff accounts are
           never listed. Applications are reported separately in the hiring funnel.
@@ -68,7 +68,7 @@ export function RegistrationsDirectory({ user, basePath, searchParams }: Registr
           Registration analytics
           <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
         </Link>
-      </div>
+      </div> */}
 
       <Suspense fallback={<RegistrationDirectoryFiguresSkeleton />}>
         <RegistrationDirectoryFigures user={user} listPath={listPath} />

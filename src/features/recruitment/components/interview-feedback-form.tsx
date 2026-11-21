@@ -5,7 +5,8 @@ import { InterviewRecommendation } from "@/types/enums";
 import { submitFeedbackAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
-import { CheckCircle2, AlertCircle, FileCheck, ShieldAlert } from "lucide-react";
+import { AlertCircle, FileCheck, ShieldAlert } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 interface InterviewFeedbackFormProps {
   scheduleId: string;
@@ -42,12 +43,10 @@ export function InterviewFeedbackForm({
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSuccess(null);
 
     if (summaryNotes.trim().length < 5) {
       setError("Please provide detailed summary notes (at least 5 characters).");
@@ -74,7 +73,7 @@ export function InterviewFeedbackForm({
       if (!res.success) {
         setError(res.error);
       } else {
-        setSuccess("Interviewer evaluation & recommendation submitted successfully.");
+        toast.success("Interviewer evaluation & recommendation submitted successfully.");
       }
     } catch {
       setError("Failed to submit feedback. Please try again.");
@@ -101,13 +100,6 @@ export function InterviewFeedbackForm({
             <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{error}</span>
-            </div>
-          )}
-
-          {success && (
-            <div className="p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>{success}</span>
             </div>
           )}
 

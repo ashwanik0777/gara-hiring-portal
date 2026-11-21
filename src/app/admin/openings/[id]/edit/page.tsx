@@ -9,7 +9,6 @@ import {
 import { openingIdSchema } from "@/features/openings/schemas";
 import { OpeningEditorView } from "@/features/openings/components/opening-editor-view";
 import { getTrackOptions } from "@/features/openings/services/track-service";
-import { Navbar } from "@/components/navigation/navbar";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 
 interface EditOpeningPageProps {
@@ -34,14 +33,7 @@ export default async function EditOpeningPage({ params }: EditOpeningPageProps) 
 
   // Page-level guard: the /admin portal is restricted to Super Administrators.
   if (!user.roles.includes(Role.ADMIN)) {
-    return (
-      <div className="min-h-screen flex flex-col bg-background">
-        <Navbar />
-        <div className="flex-1 flex items-center justify-center p-8">
-          <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />
-        </div>
-      </div>
-    );
+    return <UnauthorizedState message="The administrator portal is restricted to Super Administrators." />;
   }
 
   if (!openingIdSchema.safeParse(id).success) {
@@ -62,18 +54,12 @@ export default async function EditOpeningPage({ params }: EditOpeningPageProps) 
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <Navbar />
-
-      <main className="flex-1 py-10">
-        <div className="w-full">
-          <OpeningEditorView
-            opening={opening}
-            basePath="/admin/openings"
-            tracks={await getTrackOptions(user, opening.trackId)}
-          />
-        </div>
-      </main>
+    <div className="w-full">
+      <OpeningEditorView
+        opening={opening}
+        basePath="/admin/openings"
+        tracks={await getTrackOptions(user, opening.trackId)}
+      />
     </div>
   );
 }

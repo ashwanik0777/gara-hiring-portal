@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Plus, Trash2, ShieldAlert, Check, Layers, Link2 } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 /** True when the form has at least one document (file) field. */
 function hasDocumentField(schema: FormSchemaDefinition): boolean {
@@ -39,7 +40,7 @@ export function FormBuilderClient({
   const collectsLink = documentMode === "link";
   const [schema, setSchema] = React.useState<FormSchemaDefinition>(initialSchema);
   const [isSaving, setIsSaving] = React.useState(false);
-  const [statusMessage, setStatusMessage] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [statusMessage, setStatusMessage] = React.useState<{ type: "error"; text: string } | null>(null);
 
   const toggleFieldRequired = (sectionIndex: number, fieldIndex: number) => {
     setSchema((prev) => {
@@ -83,10 +84,7 @@ export function FormBuilderClient({
     try {
       const res = await saveOpeningFormVersionAction(openingId, schema, shouldPublish);
       if (res.success) {
-        setStatusMessage({
-          type: "success",
-          text: `Form version ${res.data.versionNumber} ${shouldPublish ? "published successfully" : "saved as draft"}.`,
-        });
+        toast.success(`Form version ${res.data.versionNumber} ${shouldPublish ? "published successfully" : "saved as draft"}.`);
       } else {
         setStatusMessage({ type: "error", text: res.error });
       }
@@ -119,12 +117,8 @@ export function FormBuilderClient({
 
       {statusMessage && (
         <div
-          role="status"
-          className={`p-3 text-sm rounded-lg border ${
-            statusMessage.type === "success"
-              ? "bg-success/10 text-success border-success/20"
-              : "bg-destructive/10 text-destructive border-destructive/20"
-          }`}
+          role="alert"
+          className="p-3 text-sm rounded-lg border bg-destructive/10 text-destructive border-destructive/20"
         >
           {statusMessage.text}
         </div>

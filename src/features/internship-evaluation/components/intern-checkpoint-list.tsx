@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { AlertCircle, CheckCircle2, FileText } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 /** Only the fields the intern's own checkpoint list renders. */
 export interface InternCheckpointView {
@@ -50,7 +51,6 @@ function CheckpointSubmitForm({ checkpoint }: { checkpoint: InternCheckpointView
   const [notes, setNotes] = useState(checkpoint.submissionNotes ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -59,7 +59,6 @@ function CheckpointSubmitForm({ checkpoint }: { checkpoint: InternCheckpointView
       return;
     }
     setError(null);
-    setSaved(false);
     setIsSubmitting(true);
 
     const formData = new FormData();
@@ -71,7 +70,7 @@ function CheckpointSubmitForm({ checkpoint }: { checkpoint: InternCheckpointView
       if (!res.success) {
         setError(res.error);
       } else {
-        setSaved(true);
+        toast.success("Notes submitted.");
       }
     } catch {
       setError("We couldn't save your notes. Please check your connection and try again.");
@@ -102,12 +101,6 @@ function CheckpointSubmitForm({ checkpoint }: { checkpoint: InternCheckpointView
         <p id={`${fieldId}-error`} role="alert" className="flex items-center gap-1.5 text-xs text-destructive">
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
           {error}
-        </p>
-      )}
-      {saved && (
-        <p role="status" className="flex items-center gap-1.5 text-xs text-success">
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-          Notes submitted.
         </p>
       )}
       <div className="flex justify-end">

@@ -7,7 +7,7 @@ import { toActionError } from "@/lib/errors";
 import { defaultRateLimiter, type RateLimitPolicy } from "@/lib/security/rate-limit";
 import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
 import { applyAsAmbassador, decideAmbassador, saveUpiId } from "./services/ambassador-service";
-import { payViaRazorpayX, recordManualPayout } from "./services/commission-service";
+import { payViaRazorpayX, recordManualPayout, reviewCommissions } from "./services/commission-service";
 import { issueAmbassadorCertificate } from "./services/ambassador-certificate";
 
 type Result<T = null> = { success: true; data: T } | { success: false; error: string };
@@ -47,6 +47,15 @@ export async function decideAmbassadorAction(input: unknown) {
   ]);
   if (result.success) scheduleOutboxFlush();
   return result;
+}
+
+/** Approve or decline commissions after reviewing the ambassador's work (administrators). */
+export async function reviewCommissionsAction(input: unknown) {
+  return run(
+    "The decision could not be saved.",
+    (user, now) => reviewCommissions(user, input, now).then((result) => ({ count: result.count, amountPaise: result.amountPaise })),
+    ["/admin/campus-ambassadors/payouts", "/admin/campus-ambassadors", "/candidate/ambassador"]
+  );
 }
 
 export async function recordManualPayoutAction(input: unknown) {

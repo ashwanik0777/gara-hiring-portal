@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { AccessibleDialog } from "@/features/employees/components/accessible-dialog";
 import { SubmissionReviewStatus } from "@/types/enums";
 import { reviewSubmissionAction } from "../actions";
+import { toast } from "@/components/ui/toast";
 
 export interface ReviewSubmissionPanelProps {
   taskId: string;
@@ -37,7 +38,6 @@ export function ReviewSubmissionPanel({
   const titleId = `${baseId}-title`;
   const [pendingAction, setPendingAction] = useState<ReviewAction | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
   const isSubmitting = pendingAction !== null;
 
   const close = () => {
@@ -64,11 +64,8 @@ export function ReviewSubmissionPanel({
         setError(res.error);
         return;
       }
-      setSuccess(true);
-      setTimeout(() => {
-        onClose();
-        setSuccess(false);
-      }, 1200);
+      toast.success("Review submitted successfully!");
+      onClose();
     } catch {
       setError(UNEXPECTED_ERROR);
     } finally {
@@ -87,16 +84,6 @@ export function ReviewSubmissionPanel({
           <div role="alert" className="mt-4 flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-xs text-destructive">
             <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>{error}</span>
-          </div>
-        )}
-
-        {success && (
-          <div
-            role="status"
-            className="mt-4 flex items-center gap-2 rounded-lg bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400"
-          >
-            <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Review submitted successfully!</span>
           </div>
         )}
 

@@ -5,7 +5,8 @@ import { EvaluationStatus } from "@/types/enums";
 import { finalizeEvaluationAction } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
-import { Award, AlertCircle, CheckCircle2, ShieldAlert } from "lucide-react";
+import { Award, AlertCircle, ShieldAlert } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 interface FinalizeEvaluationDialogProps {
   enrollmentId: string;
@@ -23,12 +24,12 @@ export function FinalizeEvaluationDialog({
   const [notes, setNotes] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  // Set once the outcome is recorded, so the form cannot be submitted twice.
+  const [decided, setDecided] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSuccess(null);
 
     if (status !== EvaluationStatus.PASSED && status !== EvaluationStatus.FAILED) {
       setError("Please choose the final outcome.");
@@ -52,7 +53,8 @@ export function FinalizeEvaluationDialog({
       if (!res.success) {
         setError(res.error);
       } else {
-        setSuccess(
+        setDecided(true);
+        toast.success(
           status === EvaluationStatus.PASSED
             ? "Evaluation outcome recorded as PASSED. The onboarding checklist is now available."
             : "Evaluation outcome recorded as FAILED."
@@ -86,13 +88,6 @@ export function FinalizeEvaluationDialog({
             </div>
           )}
 
-          {success && (
-            <div className="p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>{success}</span>
-            </div>
-          )}
-
           <div className="space-y-1.5">
             <label htmlFor="finalize-evaluation-dialog-final-outcome-status" className="block text-xs font-medium text-foreground">
               Final Outcome Status <span className="text-destructive">*</span>
@@ -103,7 +98,7 @@ export function FinalizeEvaluationDialog({
               onChange={(e) => setStatus(e.target.value as EvaluationStatus | "")}
               className="w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               required
-              disabled={Boolean(success)}
+              disabled={decided}
             >
               <option value="" disabled>
                 Select the final outcome…
@@ -137,7 +132,7 @@ export function FinalizeEvaluationDialog({
           </div>
         </CardContent>
         <CardFooter className="py-3 border-t border-border/50 flex justify-end">
-          <Button type="submit" size="sm" isLoading={isSubmitting} disabled={Boolean(success)}>
+          <Button type="submit" size="sm" isLoading={isSubmitting} disabled={decided}>
             Record Final Decision
           </Button>
         </CardFooter>

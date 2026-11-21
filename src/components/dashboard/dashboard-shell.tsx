@@ -31,6 +31,7 @@ import {
   Eye,
   LogOut,
   Loader2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Search,
@@ -47,11 +48,18 @@ import {
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { DashboardNotifications } from "./dashboard-notifications";
+import { buildNavSections, navSectionHeadingId } from "./nav-sections";
+import { useCollapsedNavGroups } from "./use-collapsed-nav-groups";
 
 export interface DashboardNavItem {
   label: string;
   href: string;
   iconName: string;
+  /**
+   * Sidebar group heading. Consecutive items with the same group are shown together under
+   * it; items without a group stand alone.
+   */
+  group?: string;
   badge?: string;
   badgeVariant?: "default" | "secondary" | "outline" | "success" | "warning";
 }
@@ -172,10 +180,15 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
     label: "Industrial Training",
     iconName: "BookOpen",
     action: {
-      label: "Refund Requests",
-      href: "/admin/training/refunds",
-      iconName: "CreditCard",
+      label: "New Programme",
+      href: "/admin/training/new",
+      iconName: "Plus",
     },
+  },
+  "/admin/training/new": {
+    label: "New Programme",
+    iconName: "BookOpen",
+    action: { label: "Back to Training", href: "/admin/training", iconName: "ArrowLeft" },
   },
   "/admin/openings": {
     label: "Job Openings",
@@ -275,7 +288,7 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
     },
   },
   "/subadmin/openings/new": {
-    label: "Create Vacancy",
+    label: "Create Opening",
     iconName: "Briefcase",
     action: {
       label: "Back to Openings",
@@ -313,6 +326,55 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
   },
   "/help": { label: "Support & FAQs", iconName: "HelpCircle" },
 };
+
+/**
+ * Header for routes with an id in the path, checked after exact ROUTE_CONFIG matches and
+ * before prefix matches (which would otherwise give an opening's editor the list's
+ * "Create Opening" action).
+ */
+const ROUTE_PATTERNS: Array<{ pattern: RegExp; meta: (pathname: string) => TabMeta }> = [
+  {
+    pattern: /^\/admin\/training\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    meta: () => ({
+      label: "Manage Programme",
+      iconName: "BookOpen",
+      action: { label: "Back to Training", href: "/admin/training", iconName: "ArrowLeft" },
+    }),
+  },
+  {
+    pattern: /^\/(admin|subadmin)\/openings\/[^/]+\/edit$/,
+    meta: (pathname) => ({
+      label: "Edit Opening",
+      iconName: "Briefcase",
+      action: { label: "Back to Openings", href: pathname.replace(/\/[^/]+\/edit$/, ""), iconName: "ArrowLeft" },
+    }),
+  },
+  {
+    pattern: /^\/(admin|subadmin)\/openings\/[^/]+\/preview$/,
+    meta: (pathname) => ({
+      label: "Opening Preview",
+      iconName: "Eye",
+      action: { label: "Back to Openings", href: pathname.replace(/\/[^/]+\/preview$/, ""), iconName: "ArrowLeft" },
+    }),
+  },
+];
+
+/** Header title, icon and action for the current route. */
+export function resolveRouteMeta(pathname: string): TabMeta | undefined {
+  const exact = ROUTE_CONFIG[pathname];
+  if (exact) return exact;
+  const patterned = ROUTE_PATTERNS.find(({ pattern }) => pattern.test(pathname));
+  if (patterned) return patterned.meta(pathname);
+  return Object.entries(ROUTE_CONFIG).find(
+    ([path]) =>
+      path !== "/admin" &&
+      path !== "/subadmin" &&
+      path !== "/candidate/dashboard" &&
+      path !== "/intern/dashboard" &&
+      path !== "/hrms" &&
+      pathname.startsWith(path)
+  )?.[1];
+}
 
 function getInitials(name: string): string {
   if (!name) return "GA";
@@ -368,16 +430,7 @@ export function DashboardShell({
   const userRole = user.role || "Member";
 
   // Route metadata lookup
-  const routeMeta =
-    ROUTE_CONFIG[pathname] ||
-    Object.entries(ROUTE_CONFIG).find(([path]) =>
-      path !== "/admin" &&
-      path !== "/subadmin" &&
-      path !== "/candidate/dashboard" &&
-      path !== "/intern/dashboard" &&
-      path !== "/hrms" &&
-      pathname.startsWith(path)
-    )?.[1];
+  const routeMeta = resolveRouteMeta(pathname);
 
   // Compute active item from navItems
   const activeNavItem = navItems.find((item) => {
@@ -388,6 +441,39 @@ export function DashboardShell({
     if (item.href === "/hrms") return pathname === "/hrms";
     return pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
   });
+
+  const navGroups = useCollapsedNavGroups(portalBadge || portalName, activeNavItem?.group ?? null);
+
+  const renderNavLink = (item: DashboardNavItem) => {
+    const Icon = ICON_MAP[item.iconName] || LayoutDashboard;
+    const isActive = item === activeNavItem;
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        onClick={() => setMobileOpen(false)}
+        title={collapsed ? item.label : undefined}
+        aria-current={isActive ? "page" : undefined}
+        className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all ${
+          isActive
+            ? "bg-blue-50 text-blue-600 dark:bg-blue-950/50 dark:text-blue-400 font-semibold shadow-2xs"
+            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+        } ${collapsed ? "justify-center px-0" : ""}`}
+      >
+        <Icon
+          className={`h-4 w-4 shrink-0 transition-colors ${
+            isActive ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground group-hover:text-foreground"
+          }`}
+        />
+        {!collapsed && <span className="truncate flex-1">{item.label}</span>}
+        {!collapsed && item.badge && (
+          <span className="text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-primary/10 text-primary font-semibold">
+            {item.badge}
+          </span>
+        )}
+      </Link>
+    );
+  };
 
   const displayTitle =
     title ||
@@ -485,52 +571,88 @@ export function DashboardShell({
           </div>
         </div>
 
-        {/* Navigation Items List */}
-        <div className="flex-1 overflow-y-auto px-2.5 py-3 space-y-1">
-          {navItems.map((item) => {
-            const Icon = ICON_MAP[item.iconName] || LayoutDashboard;
-            const isExact = pathname === item.href;
-            const isSubPath =
-              item.href !== "/admin" &&
-              item.href !== "/subadmin" &&
-              item.href !== "/candidate/dashboard" &&
-              item.href !== "/intern/dashboard" &&
-              item.href !== "/hrms" &&
-              item.href !== "/" &&
-              pathname.startsWith(item.href);
-            const isActive = isExact || isSubPath;
+        {/* Navigation: titled groups and standalone links, in the configured order */}
+        <nav
+          aria-label={`${portalBadge || portalName} navigation`}
+          className="flex-1 overflow-y-auto px-2.5 py-3"
+        >
+          {buildNavSections(navItems).map((section, index) => {
+            const key = section.label ?? `standalone-${index}`;
+            const spacing = index > 0 ? "mt-3" : undefined;
+            const rule = <div aria-hidden="true" className="mx-3 mb-3 border-t border-border/60" />;
 
+            // Standalone links: a thin rule separates them from the block above.
+            if (!section.label) {
+              return (
+                <div key={key} className={spacing}>
+                  {index > 0 && rule}
+                  <div className="space-y-1">{section.items.map(renderNavLink)}</div>
+                </div>
+              );
+            }
+
+            const headingId = navSectionHeadingId(section.label);
+
+            // Icon-only sidebar: every icon stays reachable; the group name is kept for
+            // screen readers and a rule marks where the group starts.
+            if (collapsed) {
+              return (
+                <div key={key} role="group" aria-labelledby={headingId} className={spacing}>
+                  {index > 0 && rule}
+                  <p id={headingId} className="sr-only">
+                    {section.label}
+                  </p>
+                  <div className="space-y-1">{section.items.map(renderNavLink)}</div>
+                </div>
+              );
+            }
+
+            // Full sidebar: the heading opens and closes its group.
+            const label = section.label;
+            const open = navGroups.isOpen(label);
+            const listId = `${headingId}-links`;
+            const holdsCurrentPage = activeNavItem?.group === label;
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setMobileOpen(false)}
-                title={collapsed ? item.label : undefined}
-                className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all ${
-                  isActive
-                    ? "bg-blue-50 text-blue-600 dark:bg-blue-950/50 dark:text-blue-400 font-semibold shadow-2xs"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                } ${collapsed ? "justify-center px-0" : ""}`}
-              >
-                <Icon
-                  className={`h-4 w-4 shrink-0 transition-colors ${
-                    isActive
-                      ? "text-blue-600 dark:text-blue-400"
-                      : "text-muted-foreground group-hover:text-foreground"
+              <div key={key} role="group" aria-labelledby={headingId} className={spacing}>
+                <button
+                  id={headingId}
+                  type="button"
+                  aria-expanded={open}
+                  aria-controls={listId}
+                  onClick={() => navGroups.toggle(label)}
+                  title={open ? `Collapse ${label}` : `Expand ${label}`}
+                  className={`flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
+                    !open && holdsCurrentPage ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground/80"
                   }`}
-                />
-                {!collapsed && (
-                  <span className="truncate flex-1">{item.label}</span>
-                )}
-                {!collapsed && item.badge && (
-                  <span className="text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-primary/10 text-primary font-semibold">
-                    {item.badge}
-                  </span>
-                )}
-              </Link>
+                >
+                  <span className="flex-1 truncate">{label}</span>
+                  {!open && holdsCurrentPage && (
+                    <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-600 dark:bg-blue-400" />
+                  )}
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={`h-3.5 w-3.5 shrink-0 transition-transform duration-200 motion-reduce:transition-none ${
+                      open ? "" : "-rotate-90"
+                    }`}
+                  />
+                </button>
+                {/* Closed links are inert (out of the keyboard and screen-reader order) and
+                    become invisible once the closing animation ends. */}
+                <div
+                  id={listId}
+                  inert={!open}
+                  className={`grid transition-[grid-template-rows,visibility] duration-200 ease-out motion-reduce:transition-none ${
+                    open ? "grid-rows-[1fr] visible" : "grid-rows-[0fr] invisible"
+                  }`}
+                >
+                  <div className="min-h-0 overflow-hidden">
+                    <div className="space-y-1 pt-1">{section.items.map(renderNavLink)}</div>
+                  </div>
+                </div>
+              </div>
             );
           })}
-        </div>
+        </nav>
 
         {/* Bottom User Profile Section */}
         <div className="p-2.5 border-t border-border/50">
@@ -646,14 +768,14 @@ export function DashboardShell({
                   className="h-8 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs shrink-0 cursor-pointer"
                 >
                   <Plus className="h-3.5 w-3.5 shrink-0" />
-                  <span className="hidden sm:inline">Create Opening</span>
+                  <span className="sr-only sm:not-sr-only">Create Opening</span>
                 </Link>
                 <Link
                   href="/admin/subadmins"
                   className="h-8 px-3 rounded-xl border border-border/80 bg-background hover:bg-muted text-foreground text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs shrink-0 cursor-pointer"
                 >
                   <ShieldCheck className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
-                  <span className="hidden sm:inline">Manage Staff</span>
+                  <span className="sr-only sm:not-sr-only">Manage Staff</span>
                 </Link>
               </div>
             ) : pathname === "/admin/leave" || pathname === "/subadmin/leave" || pathname === "/hrms/leave" ? (
@@ -666,7 +788,7 @@ export function DashboardShell({
                   className="h-8 px-3 rounded-xl border border-border/80 bg-background hover:bg-muted text-foreground text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs shrink-0 cursor-pointer"
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="hidden sm:inline">New Category</span>
+                  <span className="sr-only sm:not-sr-only">New Category</span>
                 </button>
                 <button
                   type="button"
@@ -676,7 +798,7 @@ export function DashboardShell({
                   className="h-8 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs shrink-0 cursor-pointer"
                 >
                   <Plus className="h-3.5 w-3.5 shrink-0" />
-                  <span className="hidden sm:inline">Grant / Apply Leave</span>
+                  <span className="sr-only sm:not-sr-only">Grant / Apply Leave</span>
                 </button>
               </div>
             ) : currentAction ? (
@@ -686,7 +808,7 @@ export function DashboardShell({
                   className="h-8 px-3 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer"
                 >
                   <ActionIcon className="h-3.5 w-3.5 shrink-0" />
-                  <span className="hidden sm:inline">{currentAction.label}</span>
+                  <span className="sr-only sm:not-sr-only">{currentAction.label}</span>
                 </Link>
               ) : (
                 <button
@@ -699,15 +821,17 @@ export function DashboardShell({
                   className="h-8 px-3 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer"
                 >
                   <ActionIcon className="h-3.5 w-3.5 shrink-0" />
-                  <span className="hidden sm:inline">{currentAction.label}</span>
+                  <span className="sr-only sm:not-sr-only">{currentAction.label}</span>
                 </button>
               )
             ) : null}
           </div>
         </header>
 
-        {/* Scrollable Content Body */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6">
+        {/* Scrollable Content Body. `relative` makes it the containing block of absolutely
+            positioned content (sr-only labels, legends): without it such elements escape the
+            scroll area and lengthen the document, so the whole dashboard scrolls. */}
+        <main className="relative flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6">
           {children}
         </main>
       </section>

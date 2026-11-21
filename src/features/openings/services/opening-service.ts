@@ -327,8 +327,9 @@ export const ADMIN_OPENINGS_LIMIT = 500;
 
 /**
  * Administrative Query: Lists openings across all lifecycle statuses, newest first.
- * Selects only the table columns plus the highest published ("Live") form version, never
- * every form version or its schema.
+ * Selects only the list columns, the track name, the application count (counted in the
+ * database) and the highest published ("Live") form version, never every form version or
+ * its schema.
  */
 export async function getAdminOpenings(user: AuthenticatedUser) {
   await assertOpeningsAccess(user);
@@ -341,6 +342,11 @@ export async function getAdminOpenings(user: AuthenticatedUser) {
       department: true,
       type: true,
       status: true,
+      location: true,
+      workplaceType: true,
+      applyDeadline: true,
+      track: { select: { name: true, slug: true } },
+      _count: { select: { applications: true } },
       formVersions: {
         where: { isPublished: true },
         select: { id: true, versionNumber: true, isPublished: true },

@@ -8,7 +8,8 @@ import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Award, ArrowRight, Calendar, Clock, UserCheck } from "lucide-react";
+import { Award, ArrowRight, Calendar, CheckCircle2, ClipboardCheck, Clock, UserCheck } from "lucide-react";
+import { StatCard, StatGrid } from "@/components/ui/stat-card";
 import { employeeService } from "@/features/employees/services/employee-service";
 import type { ReportingManagerOption } from "@/features/employees/types";
 import { FilterChipLink } from "@/features/employees/components/filter-chip-link";
@@ -107,8 +108,11 @@ interface EvaluationListSectionProps {
   page: number;
 }
 
-/** Streamed list body: status chips with database counts, one page of enrollments, paging. */
-async function EvaluationListSection({ user, access, paths, status, page }: EvaluationListSectionProps) {
+/**
+ * Streamed list body: summary cards and status chips from database counts, one page of
+ * enrollments, paging. Exported for tests; pages render it through EvaluationListView.
+ */
+export async function EvaluationListSection({ user, access, paths, status, page }: EvaluationListSectionProps) {
   let result: EvaluationEnrollmentListPage;
   try {
     result = await evaluationService.listEnrollmentsForStaff(user, { status: status ?? undefined, page });
@@ -138,11 +142,6 @@ async function EvaluationListSection({ user, access, paths, status, page }: Eval
       emptyState = (
         <EmptyState
           title={access.scope === "ALL" ? "No candidates in evaluation yet" : "No interns are assigned to you"}
-          description={
-            access.scope === "ALL"
-              ? "Candidates enrolled into the supervised evaluation will appear here."
-              : "Interns appear here once HR or an administrator assigns you as their supervisor."
-          }
           action={
             access.permissions.canApplications ? (
               <Link href={paths.applications}>
@@ -156,7 +155,6 @@ async function EvaluationListSection({ user, access, paths, status, page }: Eval
       emptyState = (
         <EmptyState
           title={`No evaluations with status "${activeFilter.label}"`}
-          description="Choose another status or show every evaluation in your scope."
           action={
             <Link href={hrefFor({ status: null, page: 1 })}>
               <Button size="sm" variant="outline">
@@ -170,7 +168,6 @@ async function EvaluationListSection({ user, access, paths, status, page }: Eval
       emptyState = (
         <EmptyState
           title="No evaluations on this page"
-          description="The list is shorter than the requested page."
           action={
             <Link href={hrefFor({ page: 1 })}>
               <Button size="sm" variant="outline">
@@ -183,8 +180,37 @@ async function EvaluationListSection({ user, access, paths, status, page }: Eval
     }
   }
 
+  const countOf = (value: EvaluationStatus) => result.statusCounts[value] ?? 0;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Figures for the viewer's scope (all evaluations, or the interns they supervise),
+          from the same database counts as the status chips. Each card opens its filter. */}
+      <StatGrid columns={4} label="Evaluation summary">
+        <StatCard label="Total Evaluations" value={scopeTotal} icon={Award} tone="blue" href={hrefFor({ status: null, page: 1 })} />
+        <StatCard
+          label="In Progress"
+          value={countOf(EvaluationStatus.IN_PROGRESS)}
+          icon={Clock}
+          tone="amber"
+          href={hrefFor({ status: EvaluationStatus.IN_PROGRESS, page: 1 })}
+        />
+        <StatCard
+          label="Under Review"
+          value={countOf(EvaluationStatus.UNDER_REVIEW)}
+          icon={ClipboardCheck}
+          tone="violet"
+          href={hrefFor({ status: EvaluationStatus.UNDER_REVIEW, page: 1 })}
+        />
+        <StatCard
+          label="Passed"
+          value={countOf(EvaluationStatus.PASSED)}
+          icon={CheckCircle2}
+          tone="emerald"
+          href={hrefFor({ status: EvaluationStatus.PASSED, page: 1 })}
+        />
+      </StatGrid>
+
       <nav aria-label="Filter evaluations by status" className="flex flex-wrap gap-2">
         <FilterChipLink
           href={hrefFor({ status: null, page: 1 })}

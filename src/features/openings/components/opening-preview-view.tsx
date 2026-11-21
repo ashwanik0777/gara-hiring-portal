@@ -2,18 +2,16 @@ import Link from "next/link";
 import type { AdminOpeningDetail } from "../services/opening-service";
 import { FormSchemaDefinition, type DocumentStorageMode } from "@/features/application-forms/types";
 import { DocumentModeNotice } from "@/features/application-forms/components/document-mode-notice";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import {
-  ArrowLeft,
-  Briefcase,
-  Building,
-  MapPin,
-  Edit,
-  Layers,
-  CalendarCheck,
-} from "lucide-react";
+import { Briefcase, Building, MapPin, Edit, Eye, Layers, CalendarCheck } from "lucide-react";
+
+const STATUS_LABELS: Record<string, string> = {
+  DRAFT: "Draft",
+  PUBLISHED: "Published",
+  PAUSED: "Paused",
+  CLOSED: "Closed",
+};
 
 interface OpeningPreviewViewProps {
   opening: AdminOpeningDetail;
@@ -35,23 +33,28 @@ export function OpeningPreviewView({ opening, basePath, documentMode }: OpeningP
     sections: [],
   };
 
+  const statusLabel = STATUS_LABELS[opening.status] ?? opening.status;
+
   return (
     <div className="space-y-8">
-      {/* Back & Actions Bar */}
-      <div className="flex items-center justify-between">
+      {/* Preview notice (the portal header links back to the editor) */}
+      <div
+        role="note"
+        className="flex flex-col gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-xs text-foreground sm:flex-row sm:items-center sm:justify-between"
+      >
+        <p className="flex items-center gap-2">
+          <Eye className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+          <span>
+            Preview: this is how candidates see the opening. Current status:{" "}
+            <span className="font-semibold">{statusLabel}</span>.
+          </span>
+        </p>
         <Link
           href={`${basePath}/${opening.id}/edit`}
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-lg border border-border bg-background px-3 font-semibold transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:self-auto"
         >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Back to Opening Editor
-        </Link>
-
-        <Link href={`${basePath}/${opening.id}/edit`}>
-          <Button size="sm" variant="outline" className="gap-1.5">
-            <Edit className="h-3.5 w-3.5" />
-            Edit Details & Form
-          </Button>
+          <Edit className="h-3.5 w-3.5" aria-hidden="true" />
+          Edit details and form
         </Link>
       </div>
 
@@ -74,9 +77,9 @@ export function OpeningPreviewView({ opening, basePath, documentMode }: OpeningP
           </span>
         </div>
 
-        <h1 className="text-3xl font-extrabold tracking-tight text-foreground">
+        <h2 className="text-2xl font-extrabold tracking-tight text-foreground wrap-break-word sm:text-3xl">
           {opening.title}
-        </h1>
+        </h2>
       </div>
 
       {/* Description & Requirements */}

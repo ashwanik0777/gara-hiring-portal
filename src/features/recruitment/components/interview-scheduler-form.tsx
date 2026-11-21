@@ -6,7 +6,8 @@ import type { InterviewerOption } from "../types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
-import { Calendar, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Calendar, AlertCircle } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 
 interface InterviewSchedulerFormProps {
   applicationId: string;
@@ -59,12 +60,10 @@ export function InterviewSchedulerForm({
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSuccess(null);
 
     if (!scheduledAt) {
       setError("Please select a scheduled date and time.");
@@ -89,7 +88,7 @@ export function InterviewSchedulerForm({
       if (!res.success) {
         setError(res.error);
       } else {
-        setSuccess(`Interview "${roundName}" scheduled successfully.`);
+        toast.success(`Interview "${roundName}" scheduled successfully.`);
         setMeetingLink("");
       }
     } catch {
@@ -112,13 +111,6 @@ export function InterviewSchedulerForm({
             <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center gap-2">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{error}</span>
-            </div>
-          )}
-
-          {success && (
-            <div className="p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>{success}</span>
             </div>
           )}
 

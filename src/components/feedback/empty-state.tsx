@@ -12,7 +12,6 @@ interface EmptyStateProps {
 
 export function EmptyState({
   title = "No records found",
-  description = "There is no data to display right now.",
   icon,
   action,
   className,
@@ -28,7 +27,6 @@ export function EmptyState({
         {icon ?? <FolderOpen className="h-6 w-6" />}
       </div>
       <h4 className="text-base font-semibold text-foreground mb-1">{title}</h4>
-      <p className="text-sm text-muted-foreground mb-4 max-w-sm">{description}</p>
       {action && <div className="mt-2">{action}</div>}
     </div>
   );

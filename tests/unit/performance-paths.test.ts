@@ -163,8 +163,11 @@ describe("list queries stay small", () => {
     expect(args.take).toBe(ADMIN_OPENINGS_LIMIT);
     expect(args.include).toBeUndefined();
     expect(Object.keys(args.select).sort()).toEqual(
-      ["department", "formVersions", "id", "slug", "status", "title", "type"].sort()
+      ["_count", "applyDeadline", "department", "formVersions", "id", "location", "slug", "status", "title", "track", "type", "workplaceType"].sort()
     );
+    // Only the track label and the application count, never the applications themselves.
+    expect(args.select.track).toEqual({ select: { name: true, slug: true } });
+    expect(args.select._count).toEqual({ select: { applications: true } });
     expect(args.select.formVersions).toEqual({
       where: { isPublished: true },
       select: { id: true, versionNumber: true, isPublished: true },

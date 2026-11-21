@@ -1,7 +1,8 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement> {
+/** Inline (a <span>), so it can sit inside headings and paragraphs. */
+export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   variant?: "default" | "secondary" | "success" | "warning" | "destructive" | "outline";
 }
 
@@ -20,7 +21,7 @@ export function Badge({
   };
 
   return (
-    <div
+    <span
       className={cn(
         "inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-medium transition-colors focus:outline-none",
         variants[variant],
