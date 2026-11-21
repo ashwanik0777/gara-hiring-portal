@@ -168,7 +168,7 @@ const DATASETS: Record<string, Dataset> = {
       ).map((row) => [iso(row.createdAt), row.ambassador.user.name, row.ambassador.user.email, rupees(row.grossPaise), rupees(row.tdsPaise), rupees(row.netPaise), row.method, row.status, row.utr, iso(row.paidAt), row.failureReason]),
   },
   "print-orders": {
-    headers: ["Paid at", "Certificate ID", "Recipient", "Phone", "Delivery", "Address", "City", "State", "PIN", "College", "Status", "Courier", "Tracking", "Amount (INR)", "Receipt"],
+    headers: ["Paid at", "Certificate ID", "Recipient", "Phone", "Delivery", "Zone", "Address", "City", "State", "PIN", "College", "Expected delivery", "Status", "Courier", "Tracking", "Amount (INR)", "Receipt"],
     rows: async () =>
       (
         await prisma.certificatePrintOrder.findMany({
@@ -180,6 +180,8 @@ const DATASETS: Record<string, Dataset> = {
             recipientName: true,
             phone: true,
             deliveryType: true,
+            deliveryZone: true,
+            expectedDelivery: true,
             addressLine1: true,
             addressLine2: true,
             city: true,
@@ -200,11 +202,13 @@ const DATASETS: Record<string, Dataset> = {
         row.recipientName,
         row.phone,
         row.deliveryType,
+        row.deliveryZone,
         [row.addressLine1, row.addressLine2].filter(Boolean).join(", "),
         row.city,
         row.state,
         row.pincode,
         row.collegeName,
+        row.expectedDelivery,
         row.status,
         row.courierName,
         row.trackingNo,

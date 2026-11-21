@@ -1,12 +1,13 @@
 "use server";
 
 import { z } from "zod";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { requireAuth } from "@/lib/auth/guards";
 import { toActionError } from "@/lib/errors";
 import { defaultRateLimiter, type RateLimitPolicy } from "@/lib/security/rate-limit";
 import { scheduleOutboxFlush } from "@/infrastructure/email/outbox-dispatch";
 import { advancePrintOrder, confirmPrintCheckout, startPrintCheckout, type PrintCheckoutSession } from "./services/print-order-service";
+import { PRINT_SETTINGS_TAG, updatePrintSettings } from "./services/print-settings-service";
 
 type Result<T> = { success: true; data: T } | { success: false; error: string };
 
@@ -51,5 +52,18 @@ export async function advancePrintOrderAction(input: unknown): Promise<Result<nu
     return { success: true, data: null };
   } catch (error) {
     return { success: false, error: toActionError(error, "The order could not be updated.") };
+  }
+}
+
+export async function updatePrintSettingsAction(input: unknown): Promise<Result<null>> {
+  try {
+    const user = await requireAuth();
+    await updatePrintSettings(user, input);
+    // The Shipping & Delivery Policy reads the cached settings.
+    updateTag(PRINT_SETTINGS_TAG);
+    revalidatePath("/admin/print-orders", "layout");
+    return { success: true, data: null };
+  } catch (error) {
+    return { success: false, error: toActionError(error, "The print settings could not be saved.") };
   }
 }

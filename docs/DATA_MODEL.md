@@ -432,7 +432,9 @@ Transitions (server-enforced): `PENDING_PAYMENT → ACTIVE` (captured payment); 
 
 ### 3.5d Printed certificate orders (`src/features/print-orders`, Phase 3C, migration `20261124000000_certificate_print_orders`)
 - `CertificatePrintOrder` (`certificate_print_orders`): `certificate_id` (RESTRICT), `user_id` (RESTRICT), `delivery_type` (ENUM `PrintDeliveryType`: `'COLLEGE_BULK'`, `'COURIER'`), `recipient_name`, `phone`, `address_line1/2`, `city`, `state`, `pincode` (courier), `college_name` (bulk), `amount_paise` (CHECK > 0), `status` (ENUM `PrintOrderStatus`: `'PENDING_PAYMENT'`, `'PAID'`, `'PRINTED'`, `'SHIPPED'`, `'DELIVERED'`), `razorpay_order_id` UNIQUE, `razorpay_payment_id` UNIQUE, `paid_at`, `receipt_no` UNIQUE (from `training_receipt_seq`), `courier_name`, `tracking_no` (CHECK present for shipped courier orders), `printed_at`, `shipped_at`, `delivered_at`, `updated_by`.
-- Audit actions: `PRINT_ORDER_PAID`, `PRINT_ORDER_PRINTED`, `PRINT_ORDER_SHIPPED`, `PRINT_ORDER_DELIVERED`.
+- Migration `20261127000000_print_settings`: `delivery_zone` (ENUM `PrintDeliveryZone`: `'NCR'`, `'OUTSIDE_NCR'`, NULLABLE; CHECK only courier orders have one) and `expected_delivery` (TEXT, the delivery time promised at order time) on `certificate_print_orders`.
+- `PrintSettings` (`print_settings`, one row, CHECK `id = 1`): `ordering_open` (default false; CHECK needs at least one price), `college_bulk_price_paise`, `courier_ncr_price_paise`, `courier_outside_price_paise` (NULLABLE = option closed; CHECK ₹1–₹10,000), `college_bulk_delivery`, `courier_ncr_delivery`, `courier_outside_delivery`, `ncr_pin_prefixes` (TEXT[], CHECK 2–6 digits not starting with 0, at most 50), `courier_partner`, `updated_by`, timestamps. No row means printed copies cannot be ordered. Checkout reads it uncached; the Shipping & Delivery Policy reads it through a `"use cache"` entry tagged `print:settings`, refreshed on save.
+- Audit actions: `PRINT_ORDER_PAID`, `PRINT_ORDER_PRINTED`, `PRINT_ORDER_SHIPPED`, `PRINT_ORDER_DELIVERED`, `PRINT_SETTINGS_UPDATED` (old and new values).
 
 ### 3.6 Full-Time Recruitment & Employee Core (`src/features/employees`, Prompt 7)
 

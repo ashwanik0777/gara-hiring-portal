@@ -1982,6 +1982,12 @@ enum PrintOrderStatus {
   DELIVERED
 }
 
+/// Courier destination zone, from the delivery PIN code (print_settings.ncrPinPrefixes).
+enum PrintDeliveryZone {
+  NCR
+  OUTSIDE_NCR
+}
+
 model CertificatePrintOrder {
   id                String            @id @default(uuid())
   certificateId     String
@@ -1998,6 +2004,10 @@ model CertificatePrintOrder {
   state             String?
   pincode           String?
   collegeName       String?
+  // Courier only: NCR or outside, decided from the PIN code when the order was placed
+  deliveryZone      PrintDeliveryZone?
+  // The delivery time shown when the order was placed
+  expectedDelivery  String?
   amountPaise       Int
   status            PrintOrderStatus  @default(PENDING_PAYMENT)
   razorpayOrderId   String            @unique
@@ -2017,6 +2027,27 @@ model CertificatePrintOrder {
   @@index([status, createdAt])
   @@index([certificateId])
   @@map("certificate_print_orders")
+}
+
+/// Printed certificate prices and delivery times, set by administrators (a single row, id 1).
+/// A null price closes that option; nothing can be ordered while orderingOpen is false.
+model PrintSettings {
+  id                       Int      @id @default(1)
+  orderingOpen             Boolean  @default(false)
+  collegeBulkPricePaise    Int?
+  courierNcrPricePaise     Int?
+  courierOutsidePricePaise Int?
+  collegeBulkDelivery      String?
+  courierNcrDelivery       String?
+  courierOutsideDelivery   String?
+  // PIN code beginnings that count as NCR, e.g. "110" for Delhi
+  ncrPinPrefixes           String[] @default([])
+  courierPartner           String?
+  updatedById              String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@map("print_settings")
 }
 
 // Razorpay webhook deliveries already handled (idempotency: the same event is applied once).

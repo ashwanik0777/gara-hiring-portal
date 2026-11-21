@@ -33,6 +33,7 @@ export function renderPrintOrderUpdateEmail(payload: unknown): EmailContent {
     lead = "We received your payment for a printed copy of your certificate. We will email you when it is sent.";
     rows.push(["Amount paid", text(data.amount, "—")]);
     if (typeof data.receiptNo === "string" && data.receiptNo) rows.push(["Receipt number", data.receiptNo]);
+    if (typeof data.expectedDelivery === "string" && data.expectedDelivery) rows.push(["Expected delivery", data.expectedDelivery]);
   }
   const plain = `Hello ${name},\n\n${lead}\n\n${rows.map(([label, value]) => `${label}: ${value}`).join("\n")}\n\nYour training page: ${portalUrl}\n\n— GARA Innovation`;
   const html = renderEmailShell({

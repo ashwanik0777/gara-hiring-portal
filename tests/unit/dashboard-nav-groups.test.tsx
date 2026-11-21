@@ -55,7 +55,8 @@ describe("ADMIN_NAV_ITEMS", () => {
     expect(buildNavSections(ADMIN_NAV_ITEMS).map((s) => [s.label, s.items.map((i) => i.label)])).toEqual([
       [null, ["Overview"]],
       ["Hiring", ["Job Openings", "Registrations", "Applications", "Interviews", "Evaluations"]],
-      ["Training & Outreach", ["Industrial Training", "Campus Ambassadors", "Colleges", "Print Orders"]],
+      ["Training & Outreach", ["Industrial Training", "Campus Ambassadors", "Colleges"]],
+      ["Certificates", ["Issued Certificates", "Print Orders"]],
       ["People & HR", ["Employees", "Intern Reviews", "Attendance", "Leave Management", "Payroll"]],
       [null, ["Analytics & Reports", "Sub-Admins", "Chatbot Support"]],
     ]);
@@ -94,6 +95,7 @@ describe("DashboardShell sidebar", () => {
     expect(groups.map((g) => g.getAttribute("aria-labelledby"))).toEqual([
       "nav-group-hiring",
       "nav-group-training-outreach",
+      "nav-group-certificates",
       "nav-group-people-hr",
     ]);
     const hiring = within(nav).getByRole("group", { name: "Hiring" });

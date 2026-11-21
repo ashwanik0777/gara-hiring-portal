@@ -21,6 +21,21 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/privacy",
 }));
 
+const { printOffer, closedOffer } = vi.hoisted(() => {
+  const closedOffer: import("@/features/print-orders/pricing").PrintOffer = {
+    open: false,
+    collegeBulk: null,
+    courierNcr: null,
+    courierOutside: null,
+    ncrPinPrefixes: [],
+    courierPartner: null,
+  };
+  return { closedOffer, printOffer: { current: closedOffer } };
+});
+vi.mock("@/features/print-orders/services/print-settings-service", () => ({
+  getPublicPrintOffer: async () => printOffer.current,
+}));
+
 vi.mock("@/lib/auth/auth-client", () => ({
   authClient: {
     useSession: vi.fn(() => ({ data: null, isPending: false })),
@@ -31,7 +46,7 @@ vi.mock("@/lib/auth/auth-client", () => ({
 const PAGES: Array<{
   path: string;
   title: string;
-  Page: () => React.JSX.Element;
+  Page: () => React.JSX.Element | Promise<React.JSX.Element>;
   metadata: Metadata;
 }> = [
   { path: "/privacy", title: "Privacy Policy", Page: PrivacyPolicyPage, metadata: privacyMetadata },
@@ -43,6 +58,7 @@ const PAGES: Array<{
 ];
 
 beforeEach(() => {
+  printOffer.current = closedOffer;
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ count: 1 }) }));
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -63,8 +79,9 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function pageText(Page: () => React.JSX.Element): string {
-  const { container } = render(<Page />);
+/** Pages are server components (some async); render what they return. */
+async function pageText(Page: () => React.JSX.Element | Promise<React.JSX.Element>): Promise<string> {
+  const { container } = render(await Page());
   return (container.textContent ?? "").replace(/\s+/g, " ");
 }
 
@@ -74,8 +91,8 @@ describe("Policy and contact pages", () => {
   });
 
   for (const { path: pagePath, title, Page, metadata } of PAGES) {
-    it(`${pagePath} has its heading, canonical URL and no placeholder text`, () => {
-      render(<Page />);
+    it(`${pagePath} has its heading, canonical URL and no placeholder text`, async () => {
+      render(await Page());
       expect(screen.getByRole("heading", { level: 1, name: title })).toBeTruthy();
       expect(metadata.title).toBe(title);
       expect(String(metadata.description).length).toBeGreaterThan(50);
@@ -86,8 +103,8 @@ describe("Policy and contact pages", () => {
     });
   }
 
-  it("the refund policy states exactly the owner's training rules", () => {
-    const text = pageText(RefundPolicyPage);
+  it("the refund policy states exactly the owner's training rules", async () => {
+    const text = await pageText(RefundPolicyPage);
     expect(text).toContain("Internships and job applications at");
     expect(text).toContain("before your batch's start date");
     expect(text).toContain(`within ${TRAINING_POLICY.refundHoursAfterFirstClass} hours after the first live class`);
@@ -99,8 +116,32 @@ describe("Policy and contact pages", () => {
     );
   });
 
-  it("the terms say internships are free and set the ambassador rules", () => {
-    const text = pageText(TermsPage);
+  it("the shipping policy lists the print prices and delivery times from the print settings", async () => {
+    expect(await pageText(ShippingPolicyPage)).toContain("Printed orders are not open yet");
+    printOffer.current = {
+      open: true,
+      collegeBulk: { pricePaise: 9_900, expectedDelivery: "7–12 working days" },
+      courierNcr: { pricePaise: 14_900, expectedDelivery: "5–8 working days" },
+      courierOutside: { pricePaise: 17_900, expectedDelivery: "7–12 working days" },
+      ncrPinPrefixes: ["110", "201", "122", "121"],
+      courierPartner: null,
+    };
+    cleanup();
+    const text = await pageText(ShippingPolicyPage);
+    expect(text).toContain("Bulk through your college: ₹99, usually 7–12 working days.");
+    expect(text).toContain("Courier within NCR (PIN codes starting with 110, 201, 122 or 121): ₹149, usually 5–8 working days.");
+    expect(text).toContain("Courier outside NCR: ₹179, usually 7–12 working days.");
+    expect(text).not.toContain("not open yet");
+  });
+
+  it("the refund policy states what happens to a printed certificate order", async () => {
+    const text = await pageText(RefundPolicyPage);
+    expect(text).toContain("A paid order cannot be cancelled from the portal");
+    expect(text).not.toContain("will be published here before printed orders open");
+  });
+
+  it("the terms say internships are free and set the ambassador rules", async () => {
+    const text = await pageText(TermsPage);
     expect(text).toContain("GARA never charges a fee, deposit, registration charge or certificate fee for an internship");
     expect(text).toContain("never collect money from anyone");
     expect(text).toContain("such as a placement guarantee");
@@ -108,8 +149,8 @@ describe("Policy and contact pages", () => {
     expect(text).not.toMatch(/Tax Invoice|GSTIN/);
   });
 
-  it("the privacy policy follows the DPDP Act and never stores card data", () => {
-    const text = pageText(PrivacyPolicyPage);
+  it("the privacy policy follows the DPDP Act and never stores card data", async () => {
+    const text = await pageText(PrivacyPolicyPage);
     expect(text).toContain("Digital Personal Data Protection Act, 2023");
     expect(text).toContain("they never reach us and we never store them");
     expect(text).toContain("Data Protection Board of India");
@@ -117,8 +158,8 @@ describe("Policy and contact pages", () => {
     expect(text).toContain(COMPANY.contactEmail);
   });
 
-  it("the cookie policy names the cookies and storage keys the code really uses", () => {
-    const text = pageText(CookiePolicyPage);
+  it("the cookie policy names the cookies and storage keys the code really uses", async () => {
+    const text = await pageText(CookiePolicyPage);
     const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
 
     const visitorCookie = /COOKIE_NAME = "([^"]+)"/.exec(read("src/app/api/analytics/visitors/route.ts"))?.[1];
@@ -132,8 +173,8 @@ describe("Policy and contact pages", () => {
     expect(text).toContain("no third-party analytics");
   });
 
-  it("the contact page lists only confirmed company details", () => {
-    const text = pageText(ContactPage);
+  it("the contact page lists only confirmed company details", async () => {
+    const text = await pageText(ContactPage);
     expect(text).toContain(COMPANY.contactEmail);
     for (const [label, value] of [
       ["CIN:", COMPANY.cin],

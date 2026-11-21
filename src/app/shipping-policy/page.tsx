@@ -1,12 +1,25 @@
 import Link from "next/link";
 import { LegalList, LegalPage, LegalSection, buildLegalMetadata } from "@/components/legal/legal-page";
-import { COMPANY, PRINTED_CERTIFICATE } from "@/config/site";
+import { COMPANY } from "@/config/site";
 import { formatInr } from "@/features/training/money";
+import type { PrintOffer, PrintPrice } from "@/features/print-orders/pricing";
+import { getPublicPrintOffer } from "@/features/print-orders/services/print-settings-service";
 
-/** Delivery options with a price set (Phase 3C). */
-const PRINT_OPTIONS = (["COLLEGE_BULK", "COURIER"] as const)
-  .map((type) => ({ type, price: PRINTED_CERTIFICATE.pricesPaise[type], expectedDelivery: PRINTED_CERTIFICATE.expectedDelivery[type] }))
-  .filter((option): option is { type: "COLLEGE_BULK" | "COURIER"; price: number; expectedDelivery: string | null } => option.price !== null && option.price > 0);
+/** "110, 201 or 122". */
+function joinOr(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
+}
+
+/** Priced delivery options from the administrators' print settings. */
+function printOptionLines(offer: PrintOffer): Array<{ key: string; label: string; price: PrintPrice }> {
+  const lines: Array<{ key: string; label: string; price: PrintPrice }> = [];
+  if (offer.collegeBulk) lines.push({ key: "bulk", label: "Bulk through your college", price: offer.collegeBulk });
+  if (offer.courierNcr) {
+    lines.push({ key: "ncr", label: `Courier within NCR (PIN codes starting with ${joinOr(offer.ncrPinPrefixes)})`, price: offer.courierNcr });
+  }
+  if (offer.courierOutside) lines.push({ key: "outside", label: offer.courierNcr ? "Courier outside NCR" : "Courier", price: offer.courierOutside });
+  return lines;
+}
 
 export const metadata = buildLegalMetadata(
   "Shipping & Delivery Policy",
@@ -16,7 +29,9 @@ export const metadata = buildLegalMetadata(
 
 const linkClass = "font-medium text-primary hover:underline underline-offset-4";
 
-export default function ShippingPolicyPage() {
+export default async function ShippingPolicyPage() {
+  const offer = await getPublicPrintOffer();
+  const options = offer.open ? printOptionLines(offer) : [];
   return (
     <LegalPage
       title="Shipping & Delivery Policy"
@@ -47,19 +62,19 @@ export default function ShippingPolicyPage() {
           <li>in bulk through your college, or</li>
           <li>by courier to an address you give us.</li>
         </LegalList>
-        {PRINT_OPTIONS.length > 0 ? (
+        {options.length > 0 ? (
           <>
             <LegalList>
-              {PRINT_OPTIONS.map((option) => (
-                <li key={option.type}>
-                  {option.type === "COURIER" ? "Courier" : "Bulk through your college"}: {formatInr(option.price)}
-                  {option.expectedDelivery ? `, usually ${option.expectedDelivery}` : ""}.
+              {options.map((option) => (
+                <li key={option.key}>
+                  {option.label}: {formatInr(option.price.pricePaise)}
+                  {option.price.expectedDelivery ? `, usually ${option.price.expectedDelivery}` : ""}.
                 </li>
               ))}
             </LegalList>
             <p>
               You order and pay from your training page; tracking details appear there and in an email once the certificate is
-              sent{PRINTED_CERTIFICATE.courierPartner ? ` (courier partner: ${PRINTED_CERTIFICATE.courierPartner})` : ""}.
+              sent{offer.courierPartner ? ` (courier partner: ${offer.courierPartner})` : ""}.
             </p>
           </>
         ) : (

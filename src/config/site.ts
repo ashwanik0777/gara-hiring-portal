@@ -144,22 +144,6 @@ export const CAMPUS_AMBASSADOR_KIT: {
   posters: [],
 };
 
-/**
- * Printed certificates (Phase 3C): an optional paid add-on for Industrial Training certificates.
- * Prices in paise and delivery times come from the product owner (docs/OPEN_DECISIONS.md #32);
- * a `null` price keeps that delivery option closed, and ordering stays off while both are null.
- */
-export const PRINTED_CERTIFICATE: {
-  pricesPaise: Record<"COLLEGE_BULK" | "COURIER", number | null>;
-  /** Shown before ordering, for example "10–15 working days". */
-  expectedDelivery: Record<"COLLEGE_BULK" | "COURIER", string | null>;
-  courierPartner: string | null;
-} = {
-  pricesPaise: { COLLEGE_BULK: null, COURIER: null },
-  expectedDelivery: { COLLEGE_BULK: null, COURIER: null },
-  courierPartner: null,
-};
-
 /** Home page announcement pill; `null` hides it. */
 export const ANNOUNCEMENT: SiteAnnouncement | null = {
   text: "Winter 2026 cohort — applications open",

@@ -156,7 +156,17 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
     },
   },
   "/subadmin/training": { label: "Training Batches", iconName: "BookOpen" },
-  "/admin/print-orders": { label: "Print Orders", iconName: "Package" },
+  "/admin/print-orders": {
+    label: "Print Orders",
+    iconName: "Package",
+    action: { label: "Settings", href: "/admin/print-orders/settings", iconName: "Settings" },
+  },
+  "/admin/print-orders/settings": {
+    label: "Print Settings",
+    iconName: "Settings",
+    action: { label: "Back to Print Orders", href: "/admin/print-orders", iconName: "ArrowLeft" },
+  },
+  "/admin/certificates": { label: "Certificates", iconName: "Award" },
   "/admin/campus-ambassadors/payouts": {
     label: "Ambassador Payouts",
     iconName: "CreditCard",

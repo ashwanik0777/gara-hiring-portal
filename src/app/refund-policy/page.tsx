@@ -90,11 +90,19 @@ export default function RefundPolicyPage() {
 
       <LegalSection id="printed-certificates" title="7. Printed certificates">
         <p>
-          The printed certificate is an optional add-on. Its delivery terms are in the{" "}
+          The printed certificate is an optional add-on. Its prices and delivery times are in the{" "}
           <Link href="/shipping-policy" className={linkClass}>
             Shipping &amp; Delivery Policy
           </Link>
-          ; its refund terms will be published here before printed orders open.
+          . A paid order cannot be cancelled from the portal. If your printed certificate does not arrive or arrives damaged,
+          write to{" "}
+          <a href={`mailto:${COMPANY.contactEmail}`} className={linkClass}>
+            {COMPANY.contactEmail}
+          </a>{" "}
+          with your order details.
+          {TRAINING_POLICY.deductGatewayChargesFromRefunds
+            ? " Any refund of a printed certificate order is the amount paid minus the payment gateway charges (Razorpay's fee and the GST on it)."
+            : ""}
         </p>
       </LegalSection>
     </LegalPage>

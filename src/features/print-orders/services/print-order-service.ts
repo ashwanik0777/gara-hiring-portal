@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logging/logger";
-import { COMPANY, confirmedCompanyFacts, PRINTED_CERTIFICATE } from "@/config/site";
+import { COMPANY, confirmedCompanyFacts } from "@/config/site";
 import { BUSINESS_TIME_ZONE } from "@/lib/time/business-time";
 import { queueAutomationEmailsOnce } from "@/features/automation/outbox-once";
 import { normalizeIndianPhone } from "@/features/ambassadors/schemas";
@@ -20,30 +20,21 @@ import {
 } from "@/infrastructure/payments/razorpay";
 import { buildPaymentReceiptPdf } from "@/infrastructure/pdf/payment-receipt-pdf-generator";
 import { PRINT_ORDER_UPDATE_TEMPLATE } from "@/infrastructure/email/templates/print-order-emails";
+import { courierPriceFor, PIN_CODE_PATTERN, type PrintPrice } from "../pricing";
+import { getPrintOffer, readPrintSettings } from "./print-settings-service";
 
 /*
  * Printed certificate orders (Phase 3C). A student with an active Industrial Training
  * certificate orders a printed copy, delivered through their college or by courier, and pays
- * through Razorpay. Prices come only from PRINTED_CERTIFICATE; staff move the order through
- * printed, shipped (tracking number) and delivered.
+ * through Razorpay. Prices come only from the administrators' print settings (courier priced by
+ * NCR or outside NCR from the PIN code); staff move the order through printed, shipped (tracking
+ * number) and delivered.
  */
 
 export const DELIVERY_LABELS: Record<PrintDeliveryType, string> = {
   COLLEGE_BULK: "Bulk delivery through your college",
   COURIER: "Courier to your address",
 };
-
-/** Delivery options that have a price set by the product owner. */
-export function printOptions() {
-  return (Object.keys(PRINTED_CERTIFICATE.pricesPaise) as PrintDeliveryType[])
-    .filter((type) => PRINTED_CERTIFICATE.pricesPaise[type] !== null && (PRINTED_CERTIFICATE.pricesPaise[type] ?? 0) > 0)
-    .map((type) => ({
-      type,
-      label: DELIVERY_LABELS[type],
-      pricePaise: PRINTED_CERTIFICATE.pricesPaise[type] as number,
-      expectedDelivery: PRINTED_CERTIFICATE.expectedDelivery[type],
-    }));
-}
 
 const text = (label: string, min: number, max: number) => z.string().trim().min(min, `Enter the ${label}`).max(max, `${label} is too long`);
 
@@ -66,7 +57,7 @@ export const printCheckoutSchema = z
   .refine(
     (value) =>
       value.deliveryType !== "COURIER" ||
-      (Boolean(value.addressLine1 && value.addressLine1.length >= 5) && Boolean(value.city) && Boolean(value.state) && /^[1-9]\d{5}$/.test(value.pincode ?? "")),
+      (Boolean(value.addressLine1 && value.addressLine1.length >= 5) && Boolean(value.city) && Boolean(value.state) && PIN_CODE_PATTERN.test(value.pincode ?? "")),
     { path: ["addressLine1"], message: "Enter the full address with a 6-digit PIN code" }
   );
 
@@ -84,8 +75,21 @@ export async function startPrintCheckout(user: AuthenticatedUser, raw: unknown):
   const parsed = printCheckoutSchema.safeParse(raw);
   if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? "Invalid order.");
   const input = parsed.data;
-  const option = printOptions().find((item) => item.type === input.deliveryType);
-  if (!option) throw new ConflictError("Printed copies are not available for this delivery option yet.");
+  const courier = input.deliveryType === "COURIER";
+  // The price always comes from the saved settings, never from the browser.
+  const offer = await getPrintOffer();
+  if (!offer.open) throw new ConflictError("Printed copies cannot be ordered right now.");
+  let option: PrintPrice | null;
+  let zone: ReturnType<typeof courierPriceFor>["zone"] | null = null;
+  if (courier) {
+    const quote = courierPriceFor(offer, input.pincode ?? "");
+    zone = quote.zone;
+    option = quote.price;
+    if (!option) throw new ConflictError("Courier delivery is not available for this PIN code yet.");
+  } else {
+    option = offer.collegeBulk;
+    if (!option) throw new ConflictError("Bulk delivery through your college is not available right now.");
+  }
 
   const [account, certificate, profile] = await Promise.all([
     prisma.user.findUnique({ where: { id: user.id }, select: { name: true, email: true, emailVerified: true } }),
@@ -111,7 +115,6 @@ export async function startPrintCheckout(user: AuthenticatedUser, raw: unknown):
   if (order.amount !== option.pricePaise || order.currency !== "INR") {
     throw new PaymentsUnavailableError("The payment order did not match the price. Please try again.");
   }
-  const courier = input.deliveryType === "COURIER";
   await prisma.certificatePrintOrder.create({
     data: {
       certificateId: certificate.id,
@@ -125,6 +128,8 @@ export async function startPrintCheckout(user: AuthenticatedUser, raw: unknown):
       state: courier ? input.state : null,
       pincode: courier ? input.pincode : null,
       collegeName: courier ? null : collegeName,
+      deliveryZone: zone,
+      expectedDelivery: option.expectedDelivery,
       amountPaise: option.pricePaise,
       razorpayOrderId: order.id,
     },
@@ -140,7 +145,7 @@ export async function isPrintOrder(razorpayOrderId: string): Promise<boolean> {
 async function queuePrintEmail(tx: Prisma.TransactionClient, orderId: string, status: PrintOrderStatus, now: Date) {
   const order = await tx.certificatePrintOrder.findUnique({
     where: { id: orderId },
-    select: { deliveryType: true, amountPaise: true, receiptNo: true, courierName: true, trackingNo: true, user: { select: { name: true, email: true } } },
+    select: { deliveryType: true, amountPaise: true, receiptNo: true, courierName: true, trackingNo: true, expectedDelivery: true, user: { select: { name: true, email: true } } },
   });
   if (!order) return;
   await queueAutomationEmailsOnce(
@@ -156,6 +161,7 @@ async function queuePrintEmail(tx: Prisma.TransactionClient, orderId: string, st
           receiptNo: order.receiptNo,
           courierName: order.courierName,
           trackingNo: order.trackingNo,
+          expectedDelivery: order.expectedDelivery,
         },
         dedupeKey: `${PRINT_ORDER_UPDATE_TEMPLATE}:${orderId}:${status}`,
       },
@@ -238,6 +244,8 @@ export async function listMyPrintOrders(userId: string, certificateId?: string) 
       deliveredAt: true,
       city: true,
       collegeName: true,
+      deliveryZone: true,
+      expectedDelivery: true,
     },
   });
 }
@@ -266,11 +274,16 @@ export async function listPrintOrdersForStaff(user: AuthenticatedUser, status: P
       state: true,
       pincode: true,
       collegeName: true,
+      deliveryZone: true,
+      expectedDelivery: true,
       amountPaise: true,
       receiptNo: true,
       paidAt: true,
       courierName: true,
       trackingNo: true,
+      printedAt: true,
+      shippedAt: true,
+      deliveredAt: true,
       certificate: { select: { verificationCode: true, recipientName: true, programmeTitle: true, id: true } },
       user: { select: { email: true } },
     },
@@ -278,6 +291,19 @@ export async function listPrintOrdersForStaff(user: AuthenticatedUser, status: P
 }
 
 export type StaffPrintOrder = Awaited<ReturnType<typeof listPrintOrdersForStaff>>[number];
+
+/** Administrators: paid orders per status (unpaid checkouts are not orders). */
+export async function countPrintOrdersByStatus(user: AuthenticatedUser): Promise<Record<"PAID" | "PRINTED" | "SHIPPED" | "DELIVERED", number>> {
+  assertAdmin(user);
+  const rows = await prisma.certificatePrintOrder.groupBy({
+    by: ["status"],
+    where: { status: { not: PrintOrderStatus.PENDING_PAYMENT } },
+    _count: { _all: true },
+  });
+  const counts = { PAID: 0, PRINTED: 0, SHIPPED: 0, DELIVERED: 0 };
+  for (const row of rows) if (row.status !== PrintOrderStatus.PENDING_PAYMENT) counts[row.status] = row._count._all;
+  return counts;
+}
 
 const NEXT_STATUS: Partial<Record<PrintOrderStatus, PrintOrderStatus>> = {
   PAID: PrintOrderStatus.PRINTED,
@@ -298,6 +324,7 @@ export async function advancePrintOrder(user: AuthenticatedUser, raw: unknown, n
   const parsed = statusUpdateSchema.safeParse(raw);
   if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? "Invalid update.");
   const input = parsed.data;
+  const courierPartner = input.status === "SHIPPED" && !input.courierName ? (await readPrintSettings()).courierPartner : null;
   return prisma.$transaction(async (tx) => {
     const order = await tx.certificatePrintOrder.findUnique({ where: { id: input.orderId }, select: { id: true, status: true, deliveryType: true } });
     if (!order) throw new NotFoundError("Print order not found");
@@ -311,7 +338,7 @@ export async function advancePrintOrder(user: AuthenticatedUser, raw: unknown, n
         status: input.status,
         updatedById: user.id,
         ...(input.status === "PRINTED" ? { printedAt: now } : {}),
-        ...(input.status === "SHIPPED" ? { shippedAt: now, courierName: input.courierName || PRINTED_CERTIFICATE.courierPartner, trackingNo: input.trackingNo || null } : {}),
+        ...(input.status === "SHIPPED" ? { shippedAt: now, courierName: input.courierName || courierPartner, trackingNo: input.trackingNo || null } : {}),
         ...(input.status === "DELIVERED" ? { deliveredAt: now } : {}),
       },
     });

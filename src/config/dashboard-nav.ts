@@ -20,7 +20,10 @@ export const ADMIN_NAV_ITEMS: DashboardNavItem[] = [
   { label: "Industrial Training", href: "/admin/training", iconName: "BookOpen", group: "Training & Outreach" },
   { label: "Campus Ambassadors", href: "/admin/campus-ambassadors", iconName: "Users", group: "Training & Outreach" },
   { label: "Colleges", href: "/admin/colleges", iconName: "GraduationCap", group: "Training & Outreach" },
-  { label: "Print Orders", href: "/admin/print-orders", iconName: "Package", group: "Training & Outreach" },
+
+  // Certificates of every kind (internship, training, ambassador) and printed copies.
+  { label: "Issued Certificates", href: "/admin/certificates", iconName: "Award", group: "Certificates" },
+  { label: "Print Orders", href: "/admin/print-orders", iconName: "Package", group: "Certificates" },
 
   // People who have joined.
   { label: "Employees", href: "/admin/employees", iconName: "UserCheck", group: "People & HR" },

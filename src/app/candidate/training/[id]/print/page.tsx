@@ -9,7 +9,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { prisma } from "@/lib/db";
 import { getRazorpayConfig } from "@/infrastructure/payments/razorpay";
-import { DELIVERY_LABELS, listMyPrintOrders, printOptions } from "@/features/print-orders/services/print-order-service";
+import { DELIVERY_LABELS, listMyPrintOrders } from "@/features/print-orders/services/print-order-service";
+import { getPrintOffer } from "@/features/print-orders/services/print-settings-service";
+import { ZONE_LABELS } from "@/features/print-orders/pricing";
 import { PrintOrderForm } from "@/features/print-orders/components/print-order-forms";
 import { formatInr } from "@/features/training/money";
 import { formatBatchDay } from "@/features/training/components/batch-dates";
@@ -30,34 +32,26 @@ export default async function PrintCertificatePage({ params }: { params: Promise
     select: {
       userId: true,
       status: true,
-      batch: { select: { program: { select: { title: true } } } },
       certificate: { select: { id: true, status: true, verificationCode: true } },
     },
   });
   if (!enrollment || enrollment.userId !== user.id || !enrollment.certificate) notFound();
   const certificate = enrollment.certificate;
-  const [orders, profile] = await Promise.all([
+  const [orders, profile, offer] = await Promise.all([
     listMyPrintOrders(user.id, certificate.id),
     prisma.candidateProfile.findUnique({ where: { userId: user.id }, select: { college: { select: { name: true } } } }),
+    getPrintOffer(),
   ]);
-  const options = printOptions();
-  const open = certificate.status === "ACTIVE" && options.length > 0 && getRazorpayConfig() !== null;
+  const open = certificate.status === "ACTIVE" && offer.open && getRazorpayConfig() !== null;
 
   return (
     <div className="w-full space-y-6">
       <Link href={`/candidate/training/${id}`} className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-3.5 w-3.5" /> Learning area
       </Link>
-      <header className="space-y-1">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 className="text-xl font-bold tracking-tight sm:text-2xl">Printed certificate</h2>
-        <p className="text-sm text-muted-foreground">
-          {enrollment.batch.program.title} · certificate {certificate.verificationCode}. A printed copy is optional; your digital certificate is
-          included and verifiable online. See the{" "}
-          <Link href="/shipping-policy" className="font-medium text-primary hover:underline underline-offset-4">
-            Shipping &amp; Delivery Policy
-          </Link>
-          .
-        </p>
+        <span className="rounded-lg bg-muted/60 px-2.5 py-1 font-mono text-xs text-muted-foreground">{certificate.verificationCode}</span>
       </header>
 
       <Card>
@@ -66,9 +60,9 @@ export default async function PrintCertificatePage({ params }: { params: Promise
         </CardHeader>
         <CardContent>
           {open ? (
-            <PrintOrderForm certificateId={certificate.id} options={options} defaultName={user.name} collegeName={profile?.college?.name ?? null} />
+            <PrintOrderForm certificateId={certificate.id} offer={offer} defaultName={user.name} collegeName={profile?.college?.name ?? null} />
           ) : (
-            <p className="text-sm text-muted-foreground">Printed copies are not open yet. They will be available here.</p>
+            <p className="text-sm text-muted-foreground">Printed copies cannot be ordered right now.</p>
           )}
         </CardContent>
       </Card>
@@ -84,10 +78,13 @@ export default async function PrintCertificatePage({ params }: { params: Promise
                 <li key={order.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <div>
                     <p className="font-medium">
-                      {DELIVERY_LABELS[order.deliveryType]} · {formatInr(order.amountPaise)} <Badge variant={order.status === "DELIVERED" ? "success" : "outline"}>{STATUS_LABELS[order.status] ?? order.status}</Badge>
+                      {DELIVERY_LABELS[order.deliveryType]}
+                      {order.deliveryZone ? ` (${ZONE_LABELS[order.deliveryZone].toLowerCase()})` : ""} · {formatInr(order.amountPaise)}{" "}
+                      <Badge variant={order.status === "DELIVERED" ? "success" : "outline"}>{STATUS_LABELS[order.status] ?? order.status}</Badge>
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {order.paidAt ? `Paid ${formatBatchDay(order.paidAt)}` : ""}
+                      {order.expectedDelivery && !order.deliveredAt && !order.trackingNo ? ` · expected in ${order.expectedDelivery}` : ""}
                       {order.trackingNo ? ` · ${order.courierName ?? "Courier"} tracking ${order.trackingNo}` : ""}
                       {order.deliveredAt ? ` · delivered ${formatBatchDay(order.deliveredAt)}` : ""}
                     </p>
