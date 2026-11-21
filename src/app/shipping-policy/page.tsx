@@ -1,25 +1,9 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { LegalList, LegalPage, LegalSection, buildLegalMetadata } from "@/components/legal/legal-page";
 import { COMPANY } from "@/config/site";
-import { formatInr } from "@/features/training/money";
-import type { PrintOffer, PrintPrice } from "@/features/print-orders/pricing";
-import { getPublicPrintOffer } from "@/features/print-orders/services/print-settings-service";
-
-/** "110, 201 or 122". */
-function joinOr(items: string[]): string {
-  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
-}
-
-/** Priced delivery options from the administrators' print settings. */
-function printOptionLines(offer: PrintOffer): Array<{ key: string; label: string; price: PrintPrice }> {
-  const lines: Array<{ key: string; label: string; price: PrintPrice }> = [];
-  if (offer.collegeBulk) lines.push({ key: "bulk", label: "Bulk through your college", price: offer.collegeBulk });
-  if (offer.courierNcr) {
-    lines.push({ key: "ncr", label: `Courier within NCR (PIN codes starting with ${joinOr(offer.ncrPinPrefixes)})`, price: offer.courierNcr });
-  }
-  if (offer.courierOutside) lines.push({ key: "outside", label: offer.courierNcr ? "Courier outside NCR" : "Courier", price: offer.courierOutside });
-  return lines;
-}
+import { Skeleton } from "@/components/ui/skeleton";
+import { PrintedCertificateOptions } from "./printed-certificate-options";
 
 export const metadata = buildLegalMetadata(
   "Shipping & Delivery Policy",
@@ -29,9 +13,7 @@ export const metadata = buildLegalMetadata(
 
 const linkClass = "font-medium text-primary hover:underline underline-offset-4";
 
-export default async function ShippingPolicyPage() {
-  const offer = await getPublicPrintOffer();
-  const options = offer.open ? printOptionLines(offer) : [];
+export default function ShippingPolicyPage() {
   return (
     <LegalPage
       title="Shipping & Delivery Policy"
@@ -62,27 +44,17 @@ export default async function ShippingPolicyPage() {
           <li>in bulk through your college, or</li>
           <li>by courier to an address you give us.</li>
         </LegalList>
-        {options.length > 0 ? (
-          <>
-            <LegalList>
-              {options.map((option) => (
-                <li key={option.key}>
-                  {option.label}: {formatInr(option.price.pricePaise)}
-                  {option.price.expectedDelivery ? `, usually ${option.price.expectedDelivery}` : ""}.
-                </li>
-              ))}
-            </LegalList>
-            <p>
-              You order and pay from your training page; tracking details appear there and in an email once the certificate is
-              sent{offer.courierPartner ? ` (courier partner: ${offer.courierPartner})` : ""}.
-            </p>
-          </>
-        ) : (
-          <p>
-            The price, the expected delivery time and the tracking details are shown before and after you order. Printed
-            orders are not open yet; this section will be completed before they open.
-          </p>
-        )}
+        {/* Prices come from the print settings: read per request, so the rest of the page stays static. */}
+        <Suspense
+          fallback={
+            <div role="status" aria-label="Loading prices" className="space-y-2">
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-4 w-2/3" />
+            </div>
+          }
+        >
+          <PrintedCertificateOptions />
+        </Suspense>
       </LegalSection>
 
       <LegalSection id="problems" title="4. Delivery problems">

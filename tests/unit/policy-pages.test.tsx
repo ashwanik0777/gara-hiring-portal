@@ -33,7 +33,13 @@ const { printOffer, closedOffer } = vi.hoisted(() => {
   return { closedOffer, printOffer: { current: closedOffer } };
 });
 vi.mock("@/features/print-orders/services/print-settings-service", () => ({
-  getPublicPrintOffer: async () => printOffer.current,
+  getPublicPrintOffer: vi.fn(async () => printOffer.current),
+}));
+vi.mock("next/server", () => ({ connection: async () => undefined }));
+// The page streams the print prices (an async server component); page-level tests use a stub
+// and the section itself is tested below.
+vi.mock("@/app/shipping-policy/printed-certificate-options", () => ({
+  PrintedCertificateOptions: () => <p>Printed certificate prices</p>,
 }));
 
 vi.mock("@/lib/auth/auth-client", () => ({
@@ -117,7 +123,16 @@ describe("Policy and contact pages", () => {
   });
 
   it("the shipping policy lists the print prices and delivery times from the print settings", async () => {
-    expect(await pageText(ShippingPolicyPage)).toContain("Printed orders are not open yet");
+    const { PrintedCertificateOptions } = await vi.importActual<typeof import("@/app/shipping-policy/printed-certificate-options")>(
+      "@/app/shipping-policy/printed-certificate-options"
+    );
+    const optionsText = async () => {
+      cleanup();
+      const { container } = render(await PrintedCertificateOptions());
+      return (container.textContent ?? "").replace(/\s+/g, " ");
+    };
+    expect(await pageText(ShippingPolicyPage)).toContain("Printed certificate prices");
+    expect(await optionsText()).toContain("Printed orders are not open yet");
     printOffer.current = {
       open: true,
       collegeBulk: { pricePaise: 9_900, expectedDelivery: "7–12 working days" },
@@ -126,12 +141,16 @@ describe("Policy and contact pages", () => {
       ncrPinPrefixes: ["110", "201", "122", "121"],
       courierPartner: null,
     };
-    cleanup();
-    const text = await pageText(ShippingPolicyPage);
+    const text = await optionsText();
     expect(text).toContain("Bulk through your college: ₹99, usually 7–12 working days.");
     expect(text).toContain("Courier within NCR (PIN codes starting with 110, 201, 122 or 121): ₹149, usually 5–8 working days.");
     expect(text).toContain("Courier outside NCR: ₹179, usually 7–12 working days.");
     expect(text).not.toContain("not open yet");
+
+    // No database (for example while building): a neutral line instead of a failed page.
+    const settings = await import("@/features/print-orders/services/print-settings-service");
+    vi.mocked(settings.getPublicPrintOffer).mockRejectedValueOnce(new Error("Can't reach database server"));
+    expect(await optionsText()).toContain("shown on your training page before you pay");
   });
 
   it("the refund policy states what happens to a printed certificate order", async () => {
