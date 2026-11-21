@@ -84,7 +84,20 @@ function useBrowserQuery(): URLSearchParams {
   return new URLSearchParams(query);
 }
 
-export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
+/**
+ * Sign-in, sign-up and password-reset screen. Next.js keeps pages already visited mounted but
+ * hidden (React Activity) and shows them again with their old state. When a used form is hidden
+ * (see `onLeave` below) it gets a new key, so the next visit (after signing out, or a redirect
+ * when the session ends) starts at email and password: never at an old code step, with a
+ * remembered password or with a spinning button.
+ */
+export function AuthSplitScreen(props: AuthSplitScreenProps) {
+  const [visit, setVisit] = useState(0);
+  const startOver = useCallback(() => setVisit((count) => count + 1), []);
+  return <AuthSplitScreenForm key={visit} {...props} onLeave={startOver} />;
+}
+
+function AuthSplitScreenForm({ initialMode, onLeave }: AuthSplitScreenProps & { onLeave: () => void }) {
   const router = useRouter();
   const query = useBrowserQuery();
   const rawCallbackUrl = query.get("callbackUrl");
@@ -174,6 +187,20 @@ export function AuthSplitScreen({ initialMode }: AuthSplitScreenProps) {
   const [regName, setRegName] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
+
+  // Hiding the page cleans up its effects. A form that holds a code step, a password or a sign-in
+  // in progress then starts over (onLeave). React's development-only extra effect run at mount
+  // finds an empty form, so it never resets what someone is typing.
+  const usedRef = useRef(false);
+  useEffect(() => {
+    usedRef.current = Boolean(otpChallenge || loginPassword || regPassword);
+  });
+  useEffect(
+    () => () => {
+      if (usedRef.current || isNavigatingRef.current) onLeave();
+    },
+    [onLeave]
+  );
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [regInterest, setRegInterest] = useState<CareerInterest | null>(null);

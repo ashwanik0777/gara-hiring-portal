@@ -32,6 +32,8 @@ vi.mock("next/navigation", () => ({
 
 // Mock better-auth client; tests set the session the hook reports.
 const mockSignOut = vi.fn().mockResolvedValue({ success: true });
+const mockHardNavigate = vi.fn();
+vi.mock("@/lib/navigation/hard-navigate", () => ({ hardNavigate: (path: string) => mockHardNavigate(path) }));
 const sessionMock = vi.hoisted(() => ({
   current: { data: null, isPending: false } as {
     data: null | { user: { id: string; name: string; email: string } };
@@ -109,12 +111,15 @@ describe("NavbarAuthActions UI and State", () => {
     expect(screen.getByText("Help & FAQ")).toBeDefined();
     expect(screen.getByText("Sign Out")).toBeDefined();
 
-    // Clicking Sign Out calls authClient.signOut and redirects to "/"
+    // Clicking Sign Out calls authClient.signOut, then a full page load of "/" (no page from the
+    // signed-in visit stays in memory).
     const signOutBtn = screen.getByText("Sign Out");
     await act(async () => {
       fireEvent.click(signOutBtn);
     });
     expect(mockSignOut).toHaveBeenCalled();
+    expect(mockHardNavigate).toHaveBeenCalledWith("/");
+    expect(mockReplace).not.toHaveBeenCalledWith("/");
   });
 
   it("properly resolves dashboard target link for Candidate users", async () => {

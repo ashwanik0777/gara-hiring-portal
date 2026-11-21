@@ -115,7 +115,7 @@ test.describe("Internship journey (requires E2E_DATABASE_URL)", () => {
       await hrPage.getByLabel("Signatory name *", { exact: true }).fill("E2E Director");
       await expect(hrPage.getByLabel("Tenure *", { exact: true })).toHaveValue("3 months");
       await hrPage.getByRole("button", { name: "Issue offer letter" }).click();
-      await expect(hrPage.getByRole("status").filter({ hasText: "Offer letter issued." })).toBeVisible();
+      await expect(hrPage.getByRole("region", { name: "Notifications" }).getByText("Offer letter issued.")).toBeVisible();
 
       await candidatePage.goto(`/candidate/applications/${applicationId}`);
       await expect(candidatePage.getByText("Your internship offer letter")).toBeVisible();
@@ -137,8 +137,9 @@ test.describe("Internship journey (requires E2E_DATABASE_URL)", () => {
       await dialog.getByLabel(/^Joining date/).fill(dateInputValue(0));
       await expect(dialog.getByLabel(/^Department/)).not.toHaveValue("");
       await expect(dialog.getByLabel(/^Designation/)).not.toHaveValue("");
-      await dialog.getByRole("radio", { name: /^Active/ }).check();
-      await dialog.getByRole("radio", { name: /^3 months/ }).check();
+      // Choice tiles: the radios sit visually hidden inside their labelled tiles.
+      await dialog.getByRole("radio", { name: /^Active/ }).check({ force: true });
+      await dialog.getByRole("radio", { name: /^3 months/ }).check({ force: true });
       await dialog.getByRole("button", { name: "Confirm: mark as joined" }).click();
       await expect(
         hrPage.getByRole("status").filter({ hasText: "is now marked as joined as an intern" })

@@ -38,13 +38,6 @@ export default async function CandidateDashboardPage() {
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1.5">
           <h2 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Welcome back, {firstName}</h2>
-          <p className="text-sm text-muted-foreground">
-            {lifecycle.stage === "EVALUATION"
-              ? "You are in the supervised internship evaluation. Your workspace and applications are below."
-              : lifecycle.stage === "ALUMNI"
-                ? "Good to see you again. You can apply for new openings with this account; your earlier employment is kept below."
-                : "Here is where your applications stand and what to do next."}
-          </p>
         </div>
         {interest && (
           <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-3 py-1 text-xs font-medium text-primary">

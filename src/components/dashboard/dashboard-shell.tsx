@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { authClient } from "@/lib/auth/auth-client";
 import {
   BookOpen,
@@ -50,6 +50,7 @@ import { Badge } from "@/components/ui/badge";
 import { DashboardNotifications } from "./dashboard-notifications";
 import { buildNavSections, navSectionHeadingId } from "./nav-sections";
 import { useCollapsedNavGroups } from "./use-collapsed-nav-groups";
+import { hardNavigate } from "@/lib/navigation/hard-navigate";
 
 export interface DashboardNavItem {
   label: string;
@@ -406,7 +407,6 @@ export function DashboardShell({
   children,
 }: DashboardShellProps) {
   const pathname = usePathname();
-  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -416,13 +416,11 @@ export function DashboardShell({
     setIsSigningOut(true);
     try {
       await authClient.signOut();
-      router.replace("/login");
-      router.refresh();
     } catch {
-      router.replace("/login");
-    } finally {
-      setIsSigningOut(false);
+      // The sign-in page still loads; a session that did not end sends the user back here.
     }
+    // A full load, so the sign-in screen opens at email and password (see hardNavigate).
+    hardNavigate("/login");
   };
 
   // Keyboard shortcut for Cmd/Ctrl+K search focus

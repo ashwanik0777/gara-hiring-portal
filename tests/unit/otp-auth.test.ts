@@ -711,6 +711,33 @@ describe("AuthSplitScreen sign-in branching", () => {
     expect(h.router.replace).toHaveBeenCalledWith("/admin");
   });
 
+  it("opens at email and password again when it is shown after being hidden (signing out)", async () => {
+    h.authClient.signIn.email.mockResolvedValue({ data: { twoFactorRedirect: true, twoFactorMethods: ["otp"] }, error: null });
+    h.authClient.twoFactor.sendOtp.mockResolvedValue({ data: { status: true }, error: null });
+    // Next.js keeps the sign-in page mounted but hidden while the signed-in pages are open and
+    // shows it again (with its old state) when the user comes back to it.
+    const page = (mode: "visible" | "hidden") =>
+      React.createElement(
+        React.Activity,
+        { mode } as React.ComponentProps<typeof React.Activity>,
+        React.createElement(AuthSplitScreen, { initialMode: "login" })
+      );
+    const { container, rerender } = render(page("visible"));
+    await submitLogin(container, "admin@example.test", "Strong-Pass-123!");
+    expect(screen.getAllByRole("heading", { name: "Enter the code we emailed you" })).toHaveLength(2);
+
+    await act(async () => {
+      rerender(page("hidden"));
+    });
+    await act(async () => {
+      rerender(page("visible"));
+    });
+
+    expect(screen.queryAllByRole("heading", { name: "Enter the code we emailed you" })).toHaveLength(0);
+    expect(byId<HTMLInputElement>(container, "auth-split-screen-login-email-address").value).toBe("");
+    expect(byId<HTMLInputElement>(container, "auth-split-screen-login-password").value).toBe("");
+  });
+
   it("still shows the code step, with a retry, when the first sign-in code could not be sent", async () => {
     h.authClient.signIn.email.mockResolvedValue({ data: { twoFactorRedirect: true }, error: null });
     h.authClient.twoFactor.sendOtp.mockResolvedValue({ data: null, error: { status: 500, message: "SMTP stack trace" } });

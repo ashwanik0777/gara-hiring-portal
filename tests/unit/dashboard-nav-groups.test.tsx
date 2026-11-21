@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ADMIN_NAV_ITEMS } from "@/config/dashboard-nav";
 import { buildNavSections, navSectionHeadingId } from "@/components/dashboard/nav-sections";
 import type { DashboardNavItem } from "@/components/dashboard/dashboard-shell";
@@ -16,7 +16,9 @@ vi.mock("next/navigation", () => ({
   usePathname: () => mockPathname(),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
-vi.mock("@/lib/auth/auth-client", () => ({ authClient: { signOut: vi.fn() } }));
+const { mockSignOut, mockHardNavigate } = vi.hoisted(() => ({ mockSignOut: vi.fn(), mockHardNavigate: vi.fn() }));
+vi.mock("@/lib/auth/auth-client", () => ({ authClient: { signOut: mockSignOut } }));
+vi.mock("@/lib/navigation/hard-navigate", () => ({ hardNavigate: mockHardNavigate }));
 vi.mock("@/components/dashboard/dashboard-notifications", () => ({ DashboardNotifications: () => null }));
 vi.mock("@/components/theme/theme-toggle", () => ({ ThemeToggle: () => null }));
 
@@ -119,6 +121,22 @@ describe("DashboardShell sidebar", () => {
     expect(document.querySelector("main")?.className.split(/\s+/)).toEqual(
       expect.arrayContaining(["relative", "overflow-y-auto"])
     );
+  });
+
+  it("signs out with a full page load of the sign-in page (it opens at email and password)", async () => {
+    mockSignOut.mockResolvedValue({ data: { success: true } });
+    renderShell();
+    fireEvent.click(screen.getByTitle("Sign out"));
+    await waitFor(() => expect(mockHardNavigate).toHaveBeenCalledWith("/login"));
+    expect(mockSignOut).toHaveBeenCalled();
+  });
+
+  it("still leaves for the sign-in page when signing out fails", async () => {
+    mockHardNavigate.mockClear();
+    mockSignOut.mockRejectedValue(new Error("network"));
+    renderShell();
+    fireEvent.click(screen.getByTitle("Sign out"));
+    await waitFor(() => expect(mockHardNavigate).toHaveBeenCalledWith("/login"));
   });
 
   it("marks only the current page's link as current", () => {

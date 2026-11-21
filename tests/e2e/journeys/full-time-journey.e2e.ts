@@ -94,7 +94,8 @@ test.describe("Full-time journey (requires E2E_DATABASE_URL)", () => {
       await dialog.getByLabel(/^Joining date/).fill(dateInputValue(0));
       await dialog.getByLabel(/^Department/).fill(opening.department);
       await dialog.getByLabel(/^Designation/).fill("Backend Engineer");
-      await dialog.getByRole("radio", { name: /^Active/ }).check();
+      // Choice tiles: the radio sits visually hidden inside its labelled tile.
+      await dialog.getByRole("radio", { name: /^Active/ }).check({ force: true });
       await dialog.getByRole("button", { name: "Confirm: mark as joined" }).click();
       await expect(dialog).toBeHidden();
       await hrPage.reload();

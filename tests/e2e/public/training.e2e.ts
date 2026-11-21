@@ -102,11 +102,13 @@ test.describe("Industrial Training", () => {
     await expect(page.getByText("Waiting for a decision (0)")).toBeVisible();
 
     // Printed certificate orders (Phase 3C) and ambassador payouts (Phase 4).
+    // These pages show their title in the portal header only.
     await page.goto("/admin/print-orders");
-    await expect(page.getByRole("heading", { level: 2, name: "Print Orders" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Print Orders" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Print order summary" })).toBeVisible();
     await page.goto("/admin/campus-ambassadors/payouts");
-    await expect(page.getByRole("heading", { level: 2, name: "Ambassador Payouts" })).toBeVisible();
-    await expect(page.getByText("Nothing is payable right now.")).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Ambassador Payouts" })).toBeVisible();
+    await expect(page.getByText("Nothing to review")).toBeVisible();
   });
 
   test("a student submits an assignment and the mentor grades it", async ({ browser }, testInfo) => {

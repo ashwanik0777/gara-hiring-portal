@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth/auth-client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +19,7 @@ import {
 } from "lucide-react";
 import { Role } from "@/types/enums";
 import { SUB_ADMIN_ROLES } from "@/lib/auth/roles";
+import { hardNavigate } from "@/lib/navigation/hard-navigate";
 
 interface UserProfileData {
   id: string;
@@ -33,7 +33,6 @@ export function NavbarAuthActions({
 }: {
   initialUser?: UserProfileData | null;
 }) {
-  const router = useRouter();
   const { data: session } = authClient.useSession();
   const sessionUserId = session?.user?.id ?? null;
   const sessionUserName = session?.user?.name ?? null;
@@ -112,13 +111,11 @@ export function NavbarAuthActions({
       await authClient.signOut();
       setSignedOutUserId(user?.id ?? null);
       setIsOpen(false);
-      router.replace("/");
-      router.refresh();
     } catch {
-      router.replace("/");
-    } finally {
-      setIsSigningOut(false);
+      // The home page still loads; a session that did not end keeps the account menu.
     }
+    // A full load drops every page kept in memory from the signed-in visit (see hardNavigate).
+    hardNavigate("/");
   };
 
   // Determine user dashboard href and badge label based on role
