@@ -38,6 +38,7 @@ import {
   EmployeeDirectoryFilters,
   EmployeeDirectoryPage,
   EmployeeDirectoryQuery,
+  EmployeeDirectorySummary,
   EmployeeDocumentItem,
   EmployeeHistory,
   EmergencyContact,
@@ -243,6 +244,9 @@ function buildDirectoryWhere(filters: EmployeeDirectoryFilters): Prisma.Employee
   }
   if (filters.status) {
     where.status = filters.status;
+  }
+  if (filters.employmentType) {
+    where.employmentType = filters.employmentType;
   }
 
   const term = filters.search?.trim().slice(0, MAX_SEARCH_LENGTH);
@@ -1257,6 +1261,24 @@ export class EmployeeService {
       pageCount: Math.max(1, Math.ceil(total / pageSize)),
       departments: departmentRows.map((row) => row.department),
     };
+  }
+
+  /** Directory totals per status and employment type (one grouped query, no personal data). */
+  async getEmployeeDirectorySummary(user: AuthenticatedUser): Promise<EmployeeDirectorySummary> {
+    await assertPermission(user, "canEmployees");
+    const rows = await prisma.employee.groupBy({ by: ["status", "employmentType"], _count: { _all: true } });
+    const summary: EmployeeDirectorySummary = {
+      total: 0,
+      byStatus: { PROBATION: 0, ACTIVE: 0, ON_LEAVE: 0, EXITED: 0 },
+      byType: { FULL_TIME: 0, INTERN: 0 },
+    };
+    for (const row of rows) {
+      const count = row._count._all;
+      summary.total += count;
+      summary.byStatus[row.status as EmployeeStatus] += count;
+      if (row.employmentType) summary.byType[row.employmentType as EmploymentType] += count;
+    }
+    return summary;
   }
 
   /**

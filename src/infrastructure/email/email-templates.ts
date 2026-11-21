@@ -92,7 +92,9 @@ export interface EmailShellOptions {
  */
 export function renderEmailShell(options: EmailShellOptions): string {
   const baseUrl = getAppBaseUrl();
-  const logoUrl = `${baseUrl}/brand/gara-logo.png`;
+  // A 126 px copy (3× the 42 px shown, ~8 KB): the full logo is over 1 MB and loads slowly in
+  // mail apps. PNG, not WebP, because classic Outlook for Windows cannot show WebP.
+  const logoUrl = `${baseUrl}/brand/gara-logo-email.png`;
   const year = new Date().getFullYear();
 
   const badgeHtml = options.categoryBadge

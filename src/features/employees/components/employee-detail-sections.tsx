@@ -3,13 +3,14 @@ import { AlertTriangle, FileText, FolderLock, History, Route } from "lucide-reac
 import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { toActionError } from "@/lib/errors";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ListCardSkeleton } from "@/components/feedback/page-skeletons";
+import { formatBatchDay } from "@/features/training/components/batch-dates";
 import { employeeService } from "../services/employee-service";
 import { EmployeeStatus, type EmployeeDetailCore, type EmployeeHistory } from "../types";
 import { EmployeeLifecycleCard } from "./employee-lifecycle-card";
 import { EmploymentPeriodTimeline, type TimelinePeriod } from "./employment-period-timeline";
 import { SectionUnavailable } from "./section-unavailable";
+import { EmployeeSectionCard } from "./employee-section-card";
 
 /*
  * Streamed sections of the employee record. The page renders the core (one query) first; each
@@ -33,31 +34,16 @@ export function SectionSkeleton({ label, rows = 4 }: { label: string; rows?: num
   );
 }
 
-function SectionCard({
-  title,
-  icon,
-  children,
-  contentClassName = "pt-4 text-xs",
-}: {
-  title: React.ReactNode;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-  contentClassName?: string;
-}) {
-  return (
-    <Card className="border-border shadow-xs">
-      <CardHeader className="border-b border-border/50 pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <span aria-hidden="true" className="text-primary">
-            {icon}
-          </span>
-          {title}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className={contentClassName}>{children}</CardContent>
-    </Card>
-  );
+const day = (value: Date | string) => formatBatchDay(new Date(value));
+
+/** "STATUS_CHANGE" → "Status change". */
+function humanize(value: string): string {
+  const text = value.replace(/_/g, " ").toLowerCase();
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
+
+/** History values: enum codes ("ON_LEAVE") read as words; names and other text stay as recorded. */
+const historyValue = (value: string) => (/^[A-Z][A-Z_]+$/.test(value) ? humanize(value) : value);
 
 /** Periods with the matching exit reason (staff view) or date only (self view). */
 function toTimelinePeriods(history: EmployeeHistory): TimelinePeriod[] {
@@ -74,114 +60,111 @@ interface SectionProps {
 
 /** Secure document metadata (bounded; confidential documents are staff-only in the service). */
 export async function EmployeeDocumentsSection({ user, employeeId }: SectionProps) {
-  const icon = <FolderLock className="h-4 w-4" />;
   let documents;
   try {
     documents = await employeeService.getEmployeeDocuments(user, employeeId);
   } catch (error) {
     return (
-      <SectionCard title="Secure Employee Documents" icon={icon}>
+      <EmployeeSectionCard title="Documents" icon={FolderLock}>
         <SectionUnavailable message={toActionError(error, UNAVAILABLE)} />
-      </SectionCard>
+      </EmployeeSectionCard>
     );
   }
 
   return (
-    <SectionCard title={`Secure Employee Documents (${documents.length})`} icon={icon}>
+    <EmployeeSectionCard title={`Documents (${documents.length})`} icon={FolderLock}>
       {documents.length === 0 ? (
-        <div className="py-6 text-center italic text-muted-foreground">
-          No documents attached to this employee record yet.
-        </div>
+        <p className="text-sm text-muted-foreground">No documents yet</p>
       ) : (
-        <ul className="divide-y divide-border/40">
+        <ul className="divide-y divide-border/50">
           {documents.map((doc) => (
-            <li key={doc.id} className="flex items-center justify-between gap-3 py-2.5">
-              <div className="flex min-w-0 items-center gap-2.5">
-                <FileText className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            <li key={doc.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+              <div className="flex min-w-0 items-center gap-3">
+                <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                  <FileText className="h-4 w-4" />
+                </span>
                 <div className="min-w-0">
-                  <div className="truncate font-medium text-foreground">{doc.title}</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    {doc.documentType} &bull; {(doc.fileSizeBytes / 1024).toFixed(0)} KB &bull; Uploaded{" "}
-                    {new Date(doc.uploadedAt).toLocaleDateString()}
-                  </div>
+                  <p className="truncate text-sm font-medium text-foreground">{doc.title}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {humanize(doc.documentType)} · {(doc.fileSizeBytes / 1024).toFixed(0)} KB · {day(doc.uploadedAt)}
+                  </p>
                 </div>
               </div>
               <Badge variant="outline" className="shrink-0 text-[10px]">
-                Private Storage
+                Private
               </Badge>
             </li>
           ))}
         </ul>
       )}
-    </SectionCard>
+    </EmployeeSectionCard>
   );
 }
 
-/** Employment periods and the history / audit timeline. */
-export async function EmployeeHistorySection({ user, employeeId }: SectionProps) {
+/** Employment periods (joining, re-joining, conversion), newest first. */
+export async function EmployeePeriodsSection({ user, employeeId }: SectionProps) {
   let history: EmployeeHistory;
   try {
     history = await loadHistory(user, employeeId);
   } catch (error) {
-    const message = toActionError(error, UNAVAILABLE);
     return (
-      <>
-        <SectionCard title="Employment Periods" icon={<Route className="h-4 w-4" />}>
-          <SectionUnavailable message={message} />
-        </SectionCard>
-        <SectionCard title="Employment History & Audit Log" icon={<History className="h-4 w-4" />}>
-          <SectionUnavailable message={message} />
-        </SectionCard>
-      </>
+      <EmployeeSectionCard title="Employment Periods" icon={Route}>
+        <SectionUnavailable message={toActionError(error, UNAVAILABLE)} />
+      </EmployeeSectionCard>
+    );
+  }
+  return (
+    <EmployeeSectionCard title="Employment Periods" icon={Route}>
+      <EmploymentPeriodTimeline periods={toTimelinePeriods(history)} emptyText="No employment periods yet" />
+    </EmployeeSectionCard>
+  );
+}
+
+/** Every recorded change to the employee record (status, manager, exit), newest first. */
+export async function EmployeeHistoryLogSection({ user, employeeId }: SectionProps) {
+  let history: EmployeeHistory;
+  try {
+    history = await loadHistory(user, employeeId);
+  } catch (error) {
+    return (
+      <EmployeeSectionCard title="History" icon={History}>
+        <SectionUnavailable message={toActionError(error, UNAVAILABLE)} />
+      </EmployeeSectionCard>
     );
   }
 
   return (
-    <>
-      <SectionCard title="Employment Periods" icon={<Route className="h-4 w-4" />} contentClassName="pt-5">
-        <EmploymentPeriodTimeline periods={toTimelinePeriods(history)} />
-      </SectionCard>
-
-      <SectionCard
-        title="Employment History & Audit Log"
-        icon={<History className="h-4 w-4" />}
-        contentClassName="pt-6"
-      >
-        {history.employmentHistories.length === 0 ? (
-          <p className="pb-2 text-center text-xs italic text-muted-foreground">No history recorded yet.</p>
-        ) : (
-          <ol className="relative ml-3 space-y-6 border-l-2 border-border py-2 pl-6 text-xs">
-            {history.employmentHistories.map((h) => (
-              <li key={h.id} className="relative space-y-1">
-                <span
-                  aria-hidden="true"
-                  className="absolute -left-[31px] top-1 h-4 w-4 rounded-full border-2 border-primary bg-card"
-                />
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-foreground">
-                    {h.changeType}
-                  </span>
-                  {h.previousValue ? (
-                    <span className="text-muted-foreground">
-                      ({h.previousValue} → <span className="font-medium text-foreground">{h.newValue}</span>)
-                    </span>
-                  ) : (
-                    <span className="font-medium text-foreground">{h.newValue}</span>
-                  )}
-                  <span className="ml-auto text-[10px] text-muted-foreground">
-                    {new Date(h.effectiveDate).toLocaleDateString()}
-                  </span>
+    <EmployeeSectionCard title="History" icon={History}>
+      {history.employmentHistories.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No changes recorded yet</p>
+      ) : (
+        <ol className="relative ml-2 space-y-5 border-l-2 border-border pl-6">
+          {history.employmentHistories.map((h) => (
+            <li key={h.id} className="relative">
+              <span aria-hidden="true" className="absolute -left-[31px] top-1 h-3.5 w-3.5 rounded-full border-2 border-primary bg-card" />
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-sm text-foreground">
+                    <span className="font-semibold">{humanize(h.changeType)}</span>
+                    {h.previousValue ? (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        {historyValue(h.previousValue)} → <span className="font-medium text-foreground">{historyValue(h.newValue)}</span>
+                      </span>
+                    ) : (
+                      <span className="font-medium"> {historyValue(h.newValue)}</span>
+                    )}
+                  </p>
+                  {h.remarks && <p className="text-xs text-muted-foreground">{h.remarks}</p>}
+                  {h.changedBy && <p className="text-xs text-muted-foreground">By {h.changedBy.name}</p>}
                 </div>
-                {h.remarks && <div className="mt-0.5 text-muted-foreground">{h.remarks}</div>}
-                {h.changedBy && (
-                  <div className="text-[10px] italic text-muted-foreground">Recorded by: {h.changedBy.name}</div>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
-      </SectionCard>
-    </>
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{day(h.effectiveDate)}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </EmployeeSectionCard>
   );
 }
 
@@ -204,43 +187,33 @@ export async function EmployeeExitSection({
   }
 
   return (
-    <Card className="border-destructive/30 bg-destructive/5 shadow-xs">
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-sm text-destructive">
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" /> Exit Record
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2 text-xs">
+    <section aria-label="Exit record" className="rounded-2xl border border-destructive/30 bg-destructive/5 p-5 shadow-sm">
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-destructive">
+        <AlertTriangle className="h-4 w-4" aria-hidden="true" /> Exit Record
+      </h2>
+      <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
         <div>
-          <span className="text-muted-foreground">Clearance Status:</span>{" "}
-          <span className="font-medium text-foreground">{latestExit.status}</span>
+          <dt className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Last working day</dt>
+          <dd className="mt-0.5 font-medium text-foreground">{day(latestExit.lastWorkingDate)}</dd>
         </div>
         <div>
-          <span className="text-muted-foreground">Last Working Date:</span>{" "}
-          <span className="font-medium text-foreground">
-            {new Date(latestExit.lastWorkingDate).toLocaleDateString()}
-          </span>
+          <dt className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Clearance</dt>
+          <dd className="mt-0.5 font-medium text-foreground">{humanize(latestExit.status)}</dd>
         </div>
         {latestExit.reason && (
           <div>
-            <span className="text-muted-foreground">Reason:</span>{" "}
-            <span className="text-foreground">{latestExit.reason}</span>
+            <dt className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Reason</dt>
+            <dd className="mt-0.5 text-foreground">{latestExit.reason}</dd>
           </div>
         )}
-        {isStaffAdmin && latestExit.exitInterviewNotes && (
-          <div className="mt-2 rounded border border-border/40 bg-muted/40 p-2 text-[11px]">
-            <span className="mb-0.5 block font-semibold">Exit Interview Notes:</span>
-            {latestExit.exitInterviewNotes}
-          </div>
-        )}
-        {isStaffAdmin && (
-          <p className="text-[11px] text-muted-foreground">
-            If this person is hired again with the same account, marking them as joined reuses this record and
-            employee code and starts a new employment period.
-          </p>
-        )}
-      </CardContent>
-    </Card>
+      </dl>
+      {isStaffAdmin && latestExit.exitInterviewNotes && (
+        <div className="mt-3 rounded-xl border border-border/60 bg-card/60 p-3 text-sm">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Exit interview notes</p>
+          <p className="mt-1 whitespace-pre-wrap text-foreground">{latestExit.exitInterviewNotes}</p>
+        </div>
+      )}
+    </section>
   );
 }
 

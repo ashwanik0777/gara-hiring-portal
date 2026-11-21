@@ -2,9 +2,10 @@ import React from "react";
 import type { AuthenticatedUser } from "@/lib/auth/guards";
 import { ForbiddenError, toActionError } from "@/lib/errors";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
-import { TableSkeleton, ToolbarSkeleton } from "@/components/feedback/page-skeletons";
+import { StatCardsSkeleton, TableSkeleton, ToolbarSkeleton } from "@/components/feedback/page-skeletons";
+import { logger } from "@/lib/logging/logger";
 import { employeeService } from "../services/employee-service";
-import type { EmployeeDirectoryPage } from "../types";
+import type { EmployeeDirectoryPage, EmployeeDirectorySummary } from "../types";
 import { EmployeeDirectoryTable } from "./employee-directory-table";
 import { SectionUnavailable } from "./section-unavailable";
 import { toDirectoryQuery, type EmployeeDirectoryParams } from "./employee-directory-params";
@@ -27,8 +28,17 @@ export async function EmployeeDirectorySection({
   detailHrefBase,
 }: EmployeeDirectorySectionProps) {
   let result: EmployeeDirectoryPage;
+  let summary: EmployeeDirectorySummary | null;
   try {
-    result = await employeeService.getEmployeeDirectory(user, toDirectoryQuery(params));
+    [result, summary] = await Promise.all([
+      employeeService.getEmployeeDirectory(user, toDirectoryQuery(params)),
+      // The cards and counts are extras: the directory still shows if they fail.
+      employeeService.getEmployeeDirectorySummary(user).catch((error: unknown) => {
+        if (error instanceof ForbiddenError) throw error;
+        logger.error("Employee directory summary failed", error instanceof Error ? error : undefined);
+        return null;
+      }),
+    ]);
   } catch (error) {
     if (error instanceof ForbiddenError) {
       return (
@@ -46,6 +56,7 @@ export async function EmployeeDirectorySection({
   return (
     <EmployeeDirectoryTable
       result={result}
+      summary={summary}
       params={params}
       basePath={basePath}
       detailHrefBase={detailHrefBase}
@@ -53,13 +64,14 @@ export async function EmployeeDirectorySection({
   );
 }
 
-/** Mirrors the directory: filter toolbar and a seven-column table. */
+/** Mirrors the directory: summary cards, filters and the employee list. */
 export function EmployeeDirectorySkeleton({ label = "Loading employees" }: { label?: string }) {
   return (
     <div role="status" aria-live="polite" aria-busy="true" className="space-y-6">
       <span className="sr-only">{label}</span>
+      <StatCardsSkeleton count={4} />
       <ToolbarSkeleton />
-      <TableSkeleton rows={8} columns={7} />
+      <TableSkeleton rows={8} columns={5} />
     </div>
   );
 }

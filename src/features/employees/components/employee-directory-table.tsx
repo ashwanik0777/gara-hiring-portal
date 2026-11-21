@@ -1,14 +1,20 @@
 import React from "react";
 import Link from "next/link";
-import { ArrowRight, Building, Filter, Search, Users } from "lucide-react";
-import { EmployeeStatus } from "@/types/enums";
+import { ArrowRight, Building2, GraduationCap, Hourglass, Search, UserCheck, Users } from "lucide-react";
+import { EmployeeStatus, EmploymentType } from "@/types/enums";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { EmployeeDirectoryPage } from "../types";
+import { EmptyState } from "@/components/feedback/empty-state";
+import { StatCard, StatGrid } from "@/components/ui/stat-card";
+import { fieldInputClass, fieldOkBorder } from "@/components/ui/form-field";
+import { formatBatchDay } from "@/features/training/components/batch-dates";
+import type { EmployeeDirectoryPage, EmployeeDirectorySummary, PublicEmployeeDirectoryItem } from "../types";
 import { EmploymentTypeBadge } from "./employment-type-badge";
+import { FilterChipLink } from "./filter-chip-link";
 import { ListPagination } from "./list-pagination";
+import { AutoSubmitSelect } from "./auto-submit-select";
 import {
+  EMPLOYMENT_TYPE_PARAM,
   employeeDirectoryHref,
   hasDirectoryFilters,
   type EmployeeDirectoryParams,
@@ -16,6 +22,8 @@ import {
 
 interface EmployeeDirectoryTableProps {
   result: EmployeeDirectoryPage;
+  /** Totals for the summary cards and chip counts; null when they could not be loaded. */
+  summary?: EmployeeDirectorySummary | null;
   params: EmployeeDirectoryParams;
   /** Directory route of this portal; the filter form submits to it and page links keep it. */
   basePath: string;
@@ -33,41 +41,114 @@ export const DIRECTORY_FIELD_IDS = {
   status: "employee-directory-status",
 } as const;
 
-const STATUS_OPTIONS: Array<{ value: EmployeeStatus; label: string }> = [
-  { value: EmployeeStatus.PROBATION, label: "Probation" },
-  { value: EmployeeStatus.ACTIVE, label: "Active" },
-  { value: EmployeeStatus.ON_LEAVE, label: "On Leave" },
-  { value: EmployeeStatus.EXITED, label: "Exited" },
+const STATUS_ORDER: EmployeeStatus[] = [EmployeeStatus.ACTIVE, EmployeeStatus.PROBATION, EmployeeStatus.ON_LEAVE, EmployeeStatus.EXITED];
+
+export const EMPLOYEE_STATUS_META: Record<EmployeeStatus, { label: string; variant: "success" | "warning" | "secondary" | "destructive" }> = {
+  ACTIVE: { label: "Active", variant: "success" },
+  PROBATION: { label: "Probation", variant: "warning" },
+  ON_LEAVE: { label: "On Leave", variant: "secondary" },
+  EXITED: { label: "Exited", variant: "destructive" },
+};
+
+const TYPE_OPTIONS: Array<{ type: EmploymentType | null; label: string }> = [
+  { type: null, label: "All types" },
+  { type: EmploymentType.FULL_TIME, label: "Full-time" },
+  { type: EmploymentType.INTERN, label: "Interns" },
 ];
 
-const selectClass =
-  "h-8 rounded-md border border-input bg-background px-3 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+/** Each row is its own grid, so every column is fr or fixed (never auto) to line up across rows. */
+const ROW_COLUMNS = "lg:grid-cols-[minmax(0,2.2fr)_minmax(0,1.7fr)_minmax(0,1.5fr)_minmax(0,1.2fr)_12rem]";
 
-function getStatusBadge(status: EmployeeStatus) {
-  switch (status) {
-    case EmployeeStatus.PROBATION:
-      return <Badge variant="warning">Probation</Badge>;
-    case EmployeeStatus.ACTIVE:
-      return <Badge variant="success">Active</Badge>;
-    case EmployeeStatus.ON_LEAVE:
-      return <Badge variant="secondary">On Leave</Badge>;
-    case EmployeeStatus.EXITED:
-      return <Badge variant="destructive">Exited</Badge>;
-    default:
-      return <Badge variant="outline">{status}</Badge>;
-  }
+/** "Test Engineering Lead" → "TL". */
+export function employeeInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function EmployeeRow({ employee, detailHref }: { employee: PublicEmployeeDirectoryItem; detailHref: string | null }) {
+  const status = EMPLOYEE_STATUS_META[employee.status];
+  return (
+    <li className={cn("grid grid-cols-1 gap-3 px-4 py-4 transition-colors hover:bg-muted/30 sm:px-5 lg:items-center lg:gap-4", ROW_COLUMNS)}>
+      <div className="flex min-w-0 items-center gap-3">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold",
+            employee.status === EmployeeStatus.EXITED ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"
+          )}
+        >
+          {employeeInitials(employee.name)}
+        </span>
+        <div className="min-w-0">
+          {detailHref ? (
+            <Link
+              href={detailHref}
+              className="block truncate rounded-sm text-sm font-semibold text-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              {employee.name}
+            </Link>
+          ) : (
+            <p className="truncate text-sm font-semibold text-foreground">{employee.name}</p>
+          )}
+          <p className="truncate text-xs text-muted-foreground">{employee.email}</p>
+        </div>
+      </div>
+
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-foreground">{employee.designation}</p>
+        <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <Building2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="truncate">{employee.department}</span>
+        </p>
+      </div>
+
+      <div className="min-w-0">
+        {employee.manager ? (
+          <>
+            <p className="truncate text-sm text-foreground">
+              <span className="text-muted-foreground lg:hidden">Reports to </span>
+              {employee.manager.name}
+            </p>
+            <p className="truncate text-xs text-muted-foreground">{employee.manager.designation}</p>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">No manager</p>
+        )}
+      </div>
+
+      <div className="min-w-0">
+        <p className="w-fit rounded-md bg-muted/70 px-2 py-0.5 font-mono text-[11px] font-medium text-foreground">{employee.employeeCode}</p>
+        <p className="mt-1 text-xs text-muted-foreground">Joined {formatBatchDay(new Date(employee.joiningDate))}</p>
+      </div>
+
+      <div className="flex items-center gap-2 lg:justify-end">
+        <Badge variant={status.variant} className="whitespace-nowrap text-[10px]">
+          {status.label}
+        </Badge>
+        <EmploymentTypeBadge employmentType={employee.employmentType} />
+        {detailHref && (
+          // The name is the link for keyboards and screen readers; this is a larger click target.
+          <Link
+            href={detailHref}
+            tabIndex={-1}
+            aria-hidden="true"
+            className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:ml-1"
+          >
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        )}
+      </div>
+    </li>
+  );
 }
 
 /**
- * Employee directory: a plain GET filter form plus one database page of rows, all rendered on
- * the server (no client state). Filters and the page live in the URL.
+ * Employee directory: summary cards, status and type filters, a GET search form and one
+ * database page of employees, all rendered on the server. Filters and the page live in the URL.
  */
-export function EmployeeDirectoryTable({
-  result,
-  params,
-  basePath,
-  detailHrefBase = "/admin/employees",
-}: EmployeeDirectoryTableProps) {
+export function EmployeeDirectoryTable({ result, summary = null, params, basePath, detailHrefBase = "/admin/employees" }: EmployeeDirectoryTableProps) {
   const filtersActive = hasDirectoryFilters(params);
   // A department from the URL that no longer exists still needs to be selectable, so the
   // control reflects the filter that produced the rows.
@@ -75,206 +156,129 @@ export function EmployeeDirectoryTable({
     params.department && !result.departments.includes(params.department)
       ? [...result.departments, params.department].sort()
       : result.departments;
+  const href = (overrides: Partial<EmployeeDirectoryParams>) => employeeDirectoryHref(basePath, params, { page: 1, ...overrides });
   const pageHref = (page: number) => employeeDirectoryHref(basePath, params, { page });
+  const only = (overrides: Partial<EmployeeDirectoryParams>) =>
+    employeeDirectoryHref(basePath, { q: "", department: "", status: null, type: null, page: 1 }, overrides);
 
   return (
     <div className="space-y-6">
-      <Card className="border-border shadow-xs">
-        <CardContent className="pt-6">
-          <form
-            method="get"
-            action={basePath}
-            role="search"
-            aria-label="Filter the employee directory"
-            className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between"
+      {summary && (
+        <StatGrid columns={4} label="Employee summary">
+          <StatCard label="All Employees" value={summary.total} icon={Users} tone="blue" href={basePath} />
+          <StatCard label="Active" value={summary.byStatus.ACTIVE} icon={UserCheck} tone="emerald" href={only({ status: EmployeeStatus.ACTIVE })} />
+          <StatCard label="On Probation" value={summary.byStatus.PROBATION} icon={Hourglass} tone="amber" href={only({ status: EmployeeStatus.PROBATION })} />
+          <StatCard label="Interns" value={summary.byType.INTERN} icon={GraduationCap} tone="violet" href={only({ type: EmploymentType.INTERN })} />
+        </StatGrid>
+      )}
+
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <nav aria-label="Filter by status" className="flex flex-wrap gap-2">
+          <FilterChipLink href={href({ status: null })} active={!params.status} label="All" count={summary?.total} />
+          {STATUS_ORDER.map((status) => (
+            <FilterChipLink
+              key={status}
+              href={href({ status })}
+              active={params.status === status}
+              label={EMPLOYEE_STATUS_META[status].label}
+              count={summary?.byStatus[status]}
+            />
+          ))}
+        </nav>
+        <nav aria-label="Filter by employment type" className="inline-flex w-fit gap-1 rounded-xl border border-border bg-muted/40 p-1">
+          {TYPE_OPTIONS.map((option) => {
+            const active = params.type === option.type;
+            return (
+              <Link
+                key={option.label}
+                href={href({ type: option.type })}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {option.label}
+                {summary && option.type && <span className="ml-1.5 tabular-nums text-muted-foreground">{summary.byType[option.type]}</span>}
+              </Link>
+            );
+          })}
+        </nav>
+      </div>
+
+      <form method="get" action={basePath} role="search" aria-label="Search the employee directory" className="flex flex-col gap-3 md:flex-row md:items-center">
+        {params.status && <input type="hidden" name="status" value={params.status} />}
+        {params.type && <input type="hidden" name="type" value={EMPLOYMENT_TYPE_PARAM[params.type]} />}
+        <div className="relative w-full md:max-w-md">
+          <label htmlFor={DIRECTORY_FIELD_IDS.search} className="sr-only">
+            Search employees
+          </label>
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <input
+            id={DIRECTORY_FIELD_IDS.search}
+            name="q"
+            type="search"
+            defaultValue={params.q}
+            maxLength={100}
+            placeholder="Search name, code, designation or email"
+            className={cn(fieldInputClass, fieldOkBorder, "pl-10")}
+          />
+        </div>
+        <div className="w-full md:w-60">
+          <label htmlFor={DIRECTORY_FIELD_IDS.department} className="sr-only">
+            Department
+          </label>
+          <AutoSubmitSelect id={DIRECTORY_FIELD_IDS.department} name="department" defaultValue={params.department} className={cn(fieldInputClass, fieldOkBorder, "cursor-pointer")}>
+            <option value="">All departments</option>
+            {departments.map((dept) => (
+              <option key={dept} value={dept}>
+                {dept}
+              </option>
+            ))}
+          </AutoSubmitSelect>
+        </div>
+        <button type="submit" className="sr-only">
+          Search
+        </button>
+        {filtersActive && (
+          <Link href={basePath} className="text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary md:ml-1">
+            Clear filters
+          </Link>
+        )}
+      </form>
+
+      {result.items.length === 0 ? (
+        <EmptyState
+          title={result.total === 0 && !filtersActive ? "No employees yet" : result.total === 0 ? "No employee matches these filters" : "No employees on this page"}
+          action={
+            result.total > 0 ? (
+              <Link href={pageHref(1)} className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-sm font-medium hover:bg-muted">
+                Go to the first page
+              </Link>
+            ) : filtersActive ? (
+              <Link href={basePath} className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-sm font-medium hover:bg-muted">
+                Clear filters
+              </Link>
+            ) : undefined
+          }
+        />
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+          <div
+            aria-hidden="true"
+            className={cn("hidden gap-4 border-b border-border/70 bg-muted/40 px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground lg:grid", ROW_COLUMNS)}
           >
-            <div className="relative w-full md:w-96">
-              <label htmlFor={DIRECTORY_FIELD_IDS.search} className="sr-only">
-                Search employees
-              </label>
-              <Search
-                className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <input
-                id={DIRECTORY_FIELD_IDS.search}
-                name="q"
-                type="search"
-                defaultValue={params.q}
-                maxLength={100}
-                placeholder="Search by name, code, designation, or email..."
-                className="w-full rounded-md border border-input bg-background py-2 pl-9 pr-4 text-sm focus:outline-hidden focus:ring-2 focus:ring-ring"
-              />
-            </div>
-
-            <div className="flex w-full flex-wrap items-end gap-3 md:w-auto">
-              <div className="flex flex-col gap-1">
-                <label
-                  htmlFor={DIRECTORY_FIELD_IDS.department}
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Filter className="h-3.5 w-3.5" aria-hidden="true" /> Department
-                </label>
-                <select
-                  id={DIRECTORY_FIELD_IDS.department}
-                  name="department"
-                  defaultValue={params.department}
-                  className={selectClass}
-                >
-                  <option value="">All Departments</option>
-                  {departments.map((dept) => (
-                    <option key={dept} value={dept}>
-                      {dept}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex flex-col gap-1">
-                <label htmlFor={DIRECTORY_FIELD_IDS.status} className="text-xs text-muted-foreground">
-                  Status
-                </label>
-                <select
-                  id={DIRECTORY_FIELD_IDS.status}
-                  name="status"
-                  defaultValue={params.status ?? ""}
-                  className={selectClass}
-                >
-                  <option value="">All Statuses</option>
-                  {STATUS_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Button type="submit" size="sm" variant="outline">
-                  Apply filters
-                </Button>
-                {filtersActive && (
-                  <Link
-                    href={basePath}
-                    className="rounded-sm text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    Clear
-                  </Link>
-                )}
-              </div>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card className="border-border shadow-xs">
-        <CardHeader className="border-b border-border/50 pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Users className="h-4 w-4 text-primary" aria-hidden="true" /> Employee Directory ({result.total})
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0 pt-0">
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-border/70 bg-muted/40 text-xs uppercase tracking-wider text-muted-foreground">
-                  <th scope="col" className="px-4 py-3 font-semibold">Employee</th>
-                  <th scope="col" className="px-4 py-3 font-semibold">Code</th>
-                  <th scope="col" className="px-4 py-3 font-semibold">Department</th>
-                  <th scope="col" className="px-4 py-3 font-semibold">Designation</th>
-                  <th scope="col" className="px-4 py-3 font-semibold">Manager</th>
-                  <th scope="col" className="px-4 py-3 font-semibold">Status</th>
-                  <th scope="col" className="px-4 py-3 text-right font-semibold">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/40 text-xs">
-                {result.items.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
-                      {result.total === 0 && !filtersActive ? (
-                        "No employee records yet. Records are created when HR marks a person as joined."
-                      ) : result.total === 0 ? (
-                        <>
-                          No employees match these filters.{" "}
-                          <Link href={basePath} className="font-medium text-primary underline-offset-4 hover:underline">
-                            Clear filters
-                          </Link>
-                        </>
-                      ) : (
-                        <>
-                          No employees on this page.{" "}
-                          <Link
-                            href={pageHref(1)}
-                            className="font-medium text-primary underline-offset-4 hover:underline"
-                          >
-                            Go to the first page
-                          </Link>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ) : (
-                  result.items.map((emp) => (
-                    <tr key={emp.id} className="transition-colors hover:bg-muted/30">
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-3">
-                          <div
-                            aria-hidden="true"
-                            className="flex h-8 w-8 items-center justify-center rounded-full border border-primary/20 bg-primary/10 text-xs font-semibold text-primary"
-                          >
-                            {emp.name.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="font-medium text-foreground">{emp.name}</div>
-                            <div className="text-[11px] text-muted-foreground">{emp.email}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5 font-mono font-medium text-foreground">{emp.employeeCode}</td>
-                      <td className="px-4 py-3.5 text-muted-foreground">
-                        <span className="flex items-center gap-1.5">
-                          <Building className="h-3 w-3 text-muted-foreground/70" aria-hidden="true" />
-                          {emp.department}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5 font-medium text-foreground">{emp.designation}</td>
-                      <td className="px-4 py-3.5 text-muted-foreground">
-                        {emp.manager ? (
-                          <div>
-                            <span className="font-medium text-foreground">{emp.manager.name}</span>
-                            <span className="block text-[10px] text-muted-foreground">
-                              {emp.manager.designation}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="italic text-muted-foreground/60">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {getStatusBadge(emp.status)}
-                          <EmploymentTypeBadge employmentType={emp.employmentType} />
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5 text-right">
-                        {detailHrefBase && (
-                          <Link
-                            href={`${detailHrefBase}/${emp.id}`}
-                            className="inline-flex h-7 items-center gap-1 rounded-xl border border-border bg-card px-3 text-xs font-medium text-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            View Cockpit <ArrowRight className="h-3 w-3" aria-hidden="true" />
-                            <span className="sr-only"> for {emp.name}</span>
-                          </Link>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+            <span>Employee</span>
+            <span>Role</span>
+            <span>Manager</span>
+            <span>Code</span>
+            <span className="text-right">Status</span>
           </div>
+          <ul aria-label="Employees" className="divide-y divide-border/60">
+            {result.items.map((employee) => (
+              <EmployeeRow key={employee.id} employee={employee} detailHref={detailHrefBase ? `${detailHrefBase}/${employee.id}` : null} />
+            ))}
+          </ul>
           <ListPagination
             page={result.page}
             pageCount={result.pageCount}
@@ -283,10 +287,10 @@ export function EmployeeDirectoryTable({
             hrefFor={pageHref}
             label="Employee directory pages"
             itemNoun="employees"
-            className="border-t border-border/50 px-4 py-3"
+            className="border-t border-border/60 px-5 py-3"
           />
-        </CardContent>
-      </Card>
+        </div>
+      )}
     </div>
   );
 }

@@ -210,7 +210,16 @@ export interface ReportingManagerOption {
 export interface EmployeeDirectoryFilters {
   department?: string;
   status?: EmployeeStatus;
+  /** Intern or full-time (records without a type match neither). */
+  employmentType?: EmploymentType;
   search?: string;
+}
+
+/** Directory totals for the summary cards and filter chips (independent of the filters). */
+export interface EmployeeDirectorySummary {
+  total: number;
+  byStatus: Record<EmployeeStatus, number>;
+  byType: Record<EmploymentType, number>;
 }
 
 /** Directory filters plus the requested page (1-based) and page size (bounded by the service). */
