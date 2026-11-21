@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
     <LegalPage
       title="Privacy Policy"
       path="/privacy"
-      summary={`This policy explains what personal data ${COMPANY.brandName} ("GARA", "we") collects on this careers portal, why we use it, who we share it with and the rights you have under India's Digital Personal Data Protection Act, 2023.`}
+      
     >
       <LegalSection id="who-we-are" title="1. Who we are">
         <p>

@@ -3,14 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import Image from "next/image";
-import {
-  Mail,
-  ArrowRight,
-  MapPin,
-  HelpCircle,
-  Heart,
-  Briefcase,
-} from "lucide-react";
+import { Mail, ArrowRight, MapPin, Heart, Briefcase } from "lucide-react";
 import { VisitorBeacon } from "@/components/analytics/visitor-beacon";
 import { ReferralCapture } from "@/components/analytics/referral-capture";
 import { COMPANY, confirmedCompanyFacts } from "@/config/site";
@@ -117,7 +110,7 @@ export function Footer() {
     <footer className="border-t border-border/80 bg-card/60">
       {/* ──────────────── TOP HIRING & COHORT ALERTS BANNER ──────────────── */}
       <div className="border-b border-border/60 bg-muted/20 dark:bg-muted/10">
-        <div className={`${PAGE_GUTTER} py-10 lg:py-12`}>
+        <div className={`${PAGE_GUTTER} py-6 lg:py-8`}>
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
             {/* Left: Heading & Pill */}
             <div className="lg:col-span-6 space-y-2.5">
@@ -149,10 +142,10 @@ export function Footer() {
       </div>
 
       {/* ──────────────── MAIN MULTI-COLUMN FOOTER ──────────────── */}
-      <div className={`${PAGE_GUTTER} py-14 lg:py-16`}>
+      <div className={`${PAGE_GUTTER} py-8 lg:py-10`}>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-10 lg:gap-8">
-          {/* Column 1: Brand Info & Socials (Span 4) */}
-          <div className="sm:col-span-2 lg:col-span-4 space-y-5">
+          {/* Column 1: Brand Info & Socials (Span 3) */}
+          <div className="sm:col-span-2 lg:col-span-3 space-y-5">
             <Link href="/" className="inline-flex items-center gap-3 group">
               <div className="relative h-11 w-11 overflow-hidden rounded-xl border border-border/60 bg-white p-1 shadow-2xs">
                 <Image
@@ -308,80 +301,58 @@ export function Footer() {
             </ul>
           </nav>
 
-          {/* Column 5: GET IN TOUCH (Span 2) */}
-          <div className="lg:col-span-2 space-y-4">
+          {/* Column 5: SUPPORT & STATUS with the confirmed company details (Span 3) */}
+          <div className="sm:col-span-2 lg:col-span-3 space-y-4">
             <p className="font-[family-name:var(--font-display)] text-xs font-bold tracking-wider uppercase text-foreground">
               Support & Status
             </p>
 
-            <div className="space-y-3 text-xs">
-              {/* General info */}
-              <div className="flex items-start gap-2.5">
-                <div className="h-7 w-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
+            <ul className="space-y-3 text-xs">
+              <li className="flex items-start gap-2.5">
+                <span aria-hidden="true" className="h-7 w-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
                   <Mail className="h-3.5 w-3.5" />
-                </div>
-                <div>
-                  <span className="font-semibold text-foreground block">Hiring & Enquiries</span>
+                </span>
+                <span className="min-w-0">
+                  <span className="font-semibold text-foreground block">Hiring & Support</span>
                   <a
                     href={`mailto:${COMPANY.contactEmail}`}
-                    className="text-muted-foreground hover:text-foreground transition-colors text-[11px]"
+                    className="text-muted-foreground hover:text-foreground transition-colors text-[11px] break-all"
                   >
                     {COMPANY.contactEmail}
                   </a>
-                </div>
-              </div>
-
-              {/* Support help */}
-              <div className="flex items-start gap-2.5">
-                <div className="h-7 w-7 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0 mt-0.5">
-                  <HelpCircle className="h-3.5 w-3.5" />
-                </div>
-                <div>
-                  <span className="font-semibold text-foreground block">Candidate Support</span>
-                  <a
-                    href={`mailto:${COMPANY.contactEmail}`}
-                    className="text-muted-foreground hover:text-foreground transition-colors text-[11px]"
-                  >
-                    {COMPANY.contactEmail}
-                  </a>
-                </div>
-              </div>
-
-              {/* Location */}
-              <div className="flex items-start gap-2.5">
-                <div className="h-7 w-7 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center shrink-0 mt-0.5">
+                </span>
+              </li>
+              <li className="flex items-start gap-2.5">
+                <span aria-hidden="true" className="h-7 w-7 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center shrink-0 mt-0.5">
                   <MapPin className="h-3.5 w-3.5" />
-                </div>
-                <div>
+                </span>
+                <span>
                   <span className="font-semibold text-foreground block">Operations</span>
                   <span className="text-muted-foreground text-[11px]">Remote-First & Hybrid Cohorts</span>
-                </div>
-              </div>
-            </div>
+                </span>
+              </li>
+            </ul>
 
+            {/* Company details: only the values the product owner has confirmed. */}
+            {COMPANY_FACTS.length > 0 && (
+              <address className="not-italic space-y-1 border-t border-border/60 pt-3 text-[10.5px] leading-snug text-muted-foreground">
+                {COMPANY_FACTS.map((fact) => (
+                  <p key={fact.label}>
+                    <span className="font-semibold text-foreground">{fact.label}:</span> {fact.value}
+                  </p>
+                ))}
+              </address>
+            )}
           </div>
         </div>
       </div>
-
-      {/* ──────────────── COMPANY DETAILS (only the confirmed values) ──────────────── */}
-      {COMPANY_FACTS.length > 0 && (
-        <div className="border-t border-border/60">
-          <address className={`${PAGE_GUTTER} py-5 not-italic flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-muted-foreground`}>
-            {COMPANY_FACTS.map((fact) => (
-              <span key={fact.label}>
-                <span className="font-semibold text-foreground">{fact.label}:</span> {fact.value}
-              </span>
-            ))}
-          </address>
-        </div>
-      )}
 
       {/* Records the visit for the admin visitor report; renders nothing. */}
       <VisitorBeacon />
       <ReferralCapture />
 
       {/* ──────────────── BOTTOM ATTRIBUTION & LEGAL BAR ──────────────── */}
-      <div className="border-t border-border/80 bg-background/80 py-6">
+      <div className="border-t border-border/80 bg-background/80 py-4">
         {/* Same edges as PAGE_GUTTER, plus room on the right for the floating help buttons. */}
         <div className="w-full px-4 sm:px-6 md:px-14 lg:pl-16 lg:pr-24 xl:pl-20 2xl:px-32">
           <div className="grid grid-cols-1 lg:grid-cols-3 items-center gap-4 text-xs text-muted-foreground">

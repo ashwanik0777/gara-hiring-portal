@@ -1,6 +1,6 @@
 import { FaqKnowledgeEntry } from "./ai-provider.interface";
 
-export const FAQ_KNOWLEDGE_VERSION = "v1.1.1";
+export const FAQ_KNOWLEDGE_VERSION = "v1.1.2";
 
 export const APPROVED_FAQ_KNOWLEDGE_BASE: FaqKnowledgeEntry[] = [
   {
@@ -147,9 +147,9 @@ export const APPROVED_FAQ_KNOWLEDGE_BASE: FaqKnowledgeEntry[] = [
     id: "FAQ-HRMS-001",
     version: FAQ_KNOWLEDGE_VERSION,
     category: "FULL_TIME_AND_HRMS",
-    question: "How do full-time job offers, employee onboarding, and HRMS modules work?",
+    question: "How do full-time job offers and employee onboarding work?",
     answer:
-      "Full-time candidates progress through interviews to receive a formal Job Offer. Only after a candidate accepts their offer (OFFER_ACCEPTED) can HR convert the application into an official Employee record. HRMS modules for Attendance (OD-006), Leave (OD-007), and Payroll (OD-008) record structural entries while policy-gating automated calculations until statutory and company policies are formally approved.",
+      "Full-time candidates go through interviews and receive a formal job offer. Once you accept the offer, HR creates your employee record and your onboarding begins. Attendance, leave and payroll are handled in the employee portal as GARA's company policies for them are approved.",
     keywords: [
       "full-time",
       "full time",

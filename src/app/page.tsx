@@ -64,7 +64,7 @@ export default function Home() {
 
       <main className="flex-1 flex flex-col">
         {/* ──────────────── HERO SECTION ──────────────── */}
-        <section className="relative overflow-hidden pt-16 pb-24 lg:pt-24 lg:pb-32">
+        <section className="relative overflow-hidden pt-14 pb-16 lg:pt-20 lg:pb-20">
           {/* Ambient background decorations */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
             {/* Large gradient orb - top right */}
@@ -207,7 +207,7 @@ export default function Home() {
 
         {/* ──────────────── HIGHLIGHTS BAR ──────────────── */}
         <section className="relative border-y border-border/60 bg-muted/30 dark:bg-muted/10">
-          <div className={`${PAGE_GUTTER} py-10`}>
+          <div className={`${PAGE_GUTTER} py-5 lg:py-6`}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
               {[
                 { icon: Briefcase, value: "Internships & Jobs", label: "Apply online", color: "text-primary" },
@@ -234,11 +234,11 @@ export default function Home() {
         </section>
 
         {/* ──────────────── WHAT YOU GET ──────────────── */}
-        <section className="py-20 lg:py-28">
+        <section className="py-8 lg:py-10">
           <div className={PAGE_GUTTER}>
             {/* Section header */}
-            <div className="text-center mb-16 animate-fade-in-up">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3.5 py-1 text-xs font-semibold text-foreground mb-4">
+            <div className="text-center mb-6 animate-fade-in-up">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3.5 py-1 text-xs font-semibold text-foreground mb-3">
                 <Zap className="h-3.5 w-3.5 text-primary" />
                 Why GARA
               </span>
@@ -329,15 +329,15 @@ export default function Home() {
         </section>
 
         {/* ──────────────── HOW IT WORKS / LIFECYCLE ROADMAP ──────────────── */}
-        <section className="py-24 lg:py-28 border-t border-border/60 bg-muted/20 dark:bg-muted/5 relative overflow-hidden">
+        <section className="py-8 lg:py-10 border-t border-border/60 bg-muted/20 dark:bg-muted/5 relative overflow-hidden">
           {/* Subtle background ambient glow */}
           <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[350px] bg-primary/[0.04] dark:bg-primary/[0.07] blur-[120px] rounded-full" />
           </div>
 
           <div className={PAGE_GUTTER}>
-            <div className="text-center mb-16 sm:mb-20">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3.5 py-1 text-xs font-semibold text-foreground mb-4">
+            <div className="text-center mb-6 sm:mb-8">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3.5 py-1 text-xs font-semibold text-foreground mb-3">
                 <TrendingUp className="h-3.5 w-3.5 text-primary" />
                 Internship Lifecycle
               </span>

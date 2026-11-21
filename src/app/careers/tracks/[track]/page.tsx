@@ -2,11 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import type { Metadata } from "next";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Briefcase } from "lucide-react";
 import { Navbar } from "@/components/navigation/navbar";
 import { Footer } from "@/components/navigation/footer";
 import { PAGE_GUTTER } from "@/components/layout/page-gutter";
 import { JsonLd } from "@/components/seo/json-ld";
+import { Eyebrow } from "@/components/marketing/page-sections";
 import { getActiveTrackBySlug } from "@/features/openings/services/track-service";
 import { getPublicOpenings } from "@/features/openings/services/opening-service";
 import { isApplicationWindowClosed } from "@/features/openings/listing";
@@ -56,7 +57,7 @@ async function TrackHeader({ params }: { params: TrackParams }) {
   } catch {
     // Database unavailable: keep the page; the listing below explains that openings did not load.
     return (
-      <div className="text-center mb-10">
+      <div className="text-center mb-6">
         <h1 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-foreground">
           Career Track
         </h1>
@@ -74,8 +75,9 @@ async function TrackHeader({ params }: { params: TrackParams }) {
           { name: track.name, path: `/careers/tracks/${track.slug}` },
         ])}
       />
-      <div className="text-center mb-10 space-y-3">
-        <h1 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-foreground">
+      <div className="text-center mb-6 space-y-3">
+        <Eyebrow icon={Briefcase}>Career track</Eyebrow>
+        <h1 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-foreground">
           {track.name} Internships & Jobs
         </h1>
         <p className="text-sm sm:text-base text-muted-foreground">{trackDescription(track)}</p>
@@ -91,11 +93,11 @@ export default async function TrackPage({ params, searchParams }: { params: Trac
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <Navbar />
 
-      <main className="flex-1 py-12 md:py-16">
+      <main className="flex-1 py-8 md:py-10">
         <div className={PAGE_GUTTER}>
           <Link
             href="/careers"
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground mb-6 transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground mb-4 transition-colors"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             All openings

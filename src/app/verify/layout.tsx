@@ -10,7 +10,8 @@ export default function VerifyLayout({
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <Navbar />
-      <main className="flex-1 py-10 md:py-16">
+      {/* Pages set their own spacing (the registry page has a full-width hero). */}
+      <main className="flex flex-1 flex-col">
         {children}
       </main>
       <Footer />

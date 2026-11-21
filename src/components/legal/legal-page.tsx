@@ -43,13 +43,13 @@ const sideLinkClass = "text-muted-foreground hover:text-foreground transition-co
  */
 export function LegalPage({
   title,
-  summary,
+  // summary,
   path,
   showLastUpdated = true,
   children,
 }: {
   title: string;
-  summary: string;
+  // summary: string;
   path: PolicyPagePath;
   showLastUpdated?: boolean;
   children: React.ReactNode;
@@ -76,21 +76,20 @@ export function LegalPage({
             ])}
           />
 
-          {isLegalDraftNoticeShown() && (
+          {/* {isLegalDraftNoticeShown() && (
             <p
               role="note"
               className="mb-6 rounded-md border border-amber-500/40 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900 dark:bg-amber-500/10 dark:text-amber-100"
             >
               Draft — pending legal review. This text may change before it is final.
             </p>
-          )}
+          )} */}
 
-          <header className="mb-8 space-y-2 border-b border-border/70 pb-6">
+          <header className="mb-8 space-y-2 pb-6">
             <h1 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl font-extrabold tracking-tight">
               {title}
             </h1>
-            <p className="text-sm leading-relaxed text-muted-foreground">{summary}</p>
-            {showLastUpdated && <p className="text-xs text-muted-foreground">Last updated: {LEGAL.lastUpdated}</p>}
+            {/* <p className="text-sm leading-relaxed text-muted-foreground">{summary}</p> */}
           </header>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 xl:gap-12">

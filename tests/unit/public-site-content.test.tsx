@@ -66,9 +66,13 @@ describe("Public footer", () => {
       ["Udyam Registration No.:", COMPANY.udyamNumber],
       ["Registered office:", COMPANY.registeredAddress],
     ];
+    // "Label: value" lines in the Support & Status column.
+    const details = document.querySelector("address");
     for (const [label, value] of facts) {
       if (value) {
-        expect(screen.getByText(label)).toBeTruthy();
+        const key = screen.getByText(label);
+        expect(key.closest("address")).toBe(details);
+        expect(key.parentElement?.textContent).toBe(`${label} ${value}`);
       } else {
         expect(screen.queryByText(label)).toBeNull();
       }

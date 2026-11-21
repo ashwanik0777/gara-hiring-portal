@@ -52,13 +52,15 @@ test.describe("Campus Ambassador", () => {
       const adminPage = await adminContext.newPage();
       await signIn(adminPage, E2E_USERS.admin.email, E2E_STAFF_PASSWORD);
       await adminPage.goto("/admin/campus-ambassadors?status=pending");
-      const row = adminPage.locator("li", { hasText: student.email });
+      // One card per ambassador (cards hold their own detail lists, so only direct items count).
+      const card = () => adminPage.getByRole("list", { name: "Ambassadors" }).locator(":scope > li", { hasText: student.email });
+      const row = card();
       await expect(row).toBeVisible();
       await row.getByRole("button", { name: "Approve" }).click();
       // Once approved the application leaves the "pending" list.
-      await expect(adminPage.locator("li", { hasText: student.email })).toHaveCount(0);
+      await expect(card()).toHaveCount(0);
       await adminPage.goto("/admin/campus-ambassadors?status=approved");
-      await expect(adminPage.locator("li", { hasText: student.email }).getByText(/^GARA-[A-Z2-9]{7}$/)).toBeVisible();
+      await expect(card().getByText(/^GARA-[A-Z2-9]{7}$/)).toBeVisible();
 
       await studentPage.reload();
       await expect(studentPage.getByText("Your referral link")).toBeVisible();

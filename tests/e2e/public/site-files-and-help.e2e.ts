@@ -11,11 +11,11 @@ test.describe("Help centre", () => {
 
     await expect(page.getByRole("heading", { level: 1, name: /Help Center/ })).toBeVisible();
     await expect(page.getByRole("region", { name: "Interactive Portal Assistant" })).toBeVisible();
-    await expect(
-      page.getByRole("heading", { level: 2, name: /Approved Programme & Portal FAQs/ })
-    ).toBeVisible();
-    // The FAQ catalogue is static content: at least one entry is on the page.
-    await expect(page.getByText(/^FAQ-/).first()).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Frequently Asked Questions" })).toBeVisible();
+    // The FAQ catalogue is static content: questions open to show their answer.
+    const first = page.locator("details").first();
+    await first.locator("summary").click();
+    await expect(first).toHaveAttribute("open", "");
   });
 });
 

@@ -19,8 +19,13 @@ import {
   RefreshCw,
   FileCheck,
   CheckCircle2,
+  EyeOff,
+  QrCode,
+  Route,
+  Zap,
 } from "lucide-react";
 import { PAGE_GUTTER } from "@/components/layout/page-gutter";
+import { PageHero, SectionHeading, StepCards } from "@/components/marketing/page-sections";
 
 interface VerificationResult {
   valid: boolean;
@@ -133,59 +138,53 @@ export function VerificationPortal() {
   }
 
   return (
-    <div className={PAGE_GUTTER}>
-      {/* ─── Page Title Header (Clean, No Subtitle, Standard Website Style) ─── */}
-      <div className="text-center mb-10">
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-semibold mb-3">
-          <ShieldCheck className="h-3.5 w-3.5" />
-          <span>Official Public Registry</span>
-        </div>
-        <h1 className="font-[family-name:var(--font-display)] text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-foreground">
-          Verify Certificate
-        </h1>
-      </div>
-
-      {/* ─── Search Console Card with the how-it-works steps beside it on large screens ─── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-12">
-        <div className="lg:col-span-8 rounded-2xl bg-card border border-border/80 shadow-sm p-6 sm:p-8">
+    <>
+      <PageHero
+        eyebrow={{ icon: ShieldCheck, label: "Official Public Registry" }}
+        title={
+          <>
+            Verify <span className="text-primary">Certificate</span>
+          </>
+        }
+      >
+        <div className="mx-auto max-w-2xl text-left">
           <form
             onSubmit={(e) => {
               e.preventDefault();
               handleVerify();
             }}
-            className="space-y-4"
+            className="space-y-3 rounded-2xl border border-border/80 bg-card p-5 shadow-lg shadow-primary/5 sm:p-6"
           >
             <div className="flex items-center justify-between">
               <label
                 htmlFor="verificationCode"
-                className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5"
+                className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-muted-foreground"
               >
-                <Lock className="h-3.5 w-3.5 text-primary" />
+                <Lock className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
                 <span>Certificate Verification Code</span>
               </label>
               {inputCode && (
                 <button
                   type="button"
                   onClick={handleReset}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                  className="cursor-pointer text-xs text-muted-foreground transition-colors hover:text-foreground"
                 >
                   Clear
                 </button>
               )}
             </div>
 
-            {/* Input Bar + Action Button */}
-            <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row">
               <div className="relative flex-1">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
                 <input
                   id="verificationCode"
                   type="text"
                   value={inputCode}
                   onChange={(e) => setInputCode(e.target.value.toUpperCase())}
                   maxLength={MAX_CODE_LENGTH}
-                  placeholder="Code printed on the certificate"
-                  className="w-full pl-11 pr-4 py-3 bg-background border border-border rounded-xl text-sm sm:text-base font-mono tracking-wider text-foreground placeholder:text-muted-foreground/50 placeholder:font-sans placeholder:tracking-normal focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary uppercase shadow-2xs"
+                  placeholder="GARA-IC-2026-7K2QXM"
+                  className="h-12 w-full rounded-xl border border-border bg-background pl-11 pr-4 font-mono text-sm uppercase tracking-wider text-foreground shadow-2xs placeholder:font-sans placeholder:tracking-normal placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/15 sm:text-base"
                   disabled={loading}
                   autoComplete="off"
                   spellCheck="false"
@@ -194,41 +193,40 @@ export function VerificationPortal() {
               <button
                 type="submit"
                 disabled={loading || !inputCode.trim()}
-                className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 font-semibold text-sm shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer"
+                className="inline-flex h-12 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-6 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {loading ? (
                   <>
-                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
                     <span>Verifying...</span>
                   </>
                 ) : (
                   <>
-                    <ShieldCheck className="h-4 w-4" />
+                    <ShieldCheck className="h-4 w-4" aria-hidden="true" />
                     <span>Verify Now</span>
                   </>
                 )}
               </button>
             </div>
-
           </form>
-        </div>
-
-        <aside className="lg:col-span-4 rounded-2xl bg-card border border-border/80 shadow-sm p-6 sm:p-8">
-          <h2 className="text-sm font-bold text-foreground">How verification works</h2>
-          <ol className="mt-4 list-decimal space-y-3 pl-5 text-sm leading-relaxed text-muted-foreground">
-            <li>Scan the QR code on the certificate, or type the certificate ID printed on it.</li>
-            <li>We look the ID up in GARA&apos;s certificate registry.</li>
-            <li>
-              The result shows whether the certificate is valid or revoked, with the holder&apos;s name, programme and
-              dates. Email addresses and phone numbers are never shown.
+          <ul className="mt-4 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
+            <li className="inline-flex items-center gap-1.5">
+              <QrCode className="h-3.5 w-3.5 text-primary" aria-hidden="true" /> Scan the QR or type the ID
             </li>
-          </ol>
-        </aside>
-      </div>
+            <li className="inline-flex items-center gap-1.5">
+              <EyeOff className="h-3.5 w-3.5 text-primary" aria-hidden="true" /> No contact details shown
+            </li>
+            <li className="inline-flex items-center gap-1.5">
+              <Zap className="h-3.5 w-3.5 text-primary" aria-hidden="true" /> Instant result
+            </li>
+          </ul>
+        </div>
+      </PageHero>
 
+      <div className={PAGE_GUTTER}>
       {/* ─── Verification Results (When active) ─── */}
       {result && (
-        <div className="w-full mb-16 animate-in fade-in-50 duration-200">
+        <div className="w-full pb-8 pt-8 animate-in fade-in-50 duration-200">
           {result.valid ? (
             /* Verified Credential Document Presentation */
             <div className="rounded-2xl bg-card border-2 border-emerald-500/40 shadow-md overflow-hidden">
@@ -457,63 +455,73 @@ export function VerificationPortal() {
         </div>
       )}
 
-      {/* ─── Trust Pillars (Spanning Full 7xl Width) ─── */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 my-12">
-        <div className="p-6 rounded-2xl bg-card border border-border/80 shadow-2xs">
-          <div className="h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center mb-4">
-            <ShieldCheck className="h-5 w-5" />
-          </div>
-          <h3 className="font-bold text-foreground text-sm mb-1.5">
-            Registry Lookup
-          </h3>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Every certificate carries a randomly generated verification code that is checked against GARA Innovation&apos;s certificate records.
-          </p>
-        </div>
-
-        <div className="p-6 rounded-2xl bg-card border border-border/80 shadow-2xs">
-          <div className="h-10 w-10 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-4">
-            <CheckCircle2 className="h-5 w-5" />
-          </div>
-          <h3 className="font-bold text-foreground text-sm mb-1.5">
-            Supervised Evaluation
-          </h3>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Certificates are issued only after the supervised evaluation is recorded as passed and authorized staff approve completion.
-          </p>
-        </div>
-
-        <div className="p-6 rounded-2xl bg-card border border-border/80 shadow-2xs">
-          <div className="h-10 w-10 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center mb-4">
-            <FileCheck className="h-5 w-5" />
-          </div>
-          <h3 className="font-bold text-foreground text-sm mb-1.5">
-            Public Verification
-          </h3>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Employers, universities, and background verifiers can confirm a certificate without seeing contact details or internal evaluation notes.
-          </p>
-        </div>
       </div>
 
-      {/* ─── Bottom Info Strip ─── */}
-      <div className="p-6 rounded-2xl bg-card border border-border/80 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div>
-          <p className="text-xs font-bold text-foreground">
-            Looking for internship opportunities or full-time roles?
-          </p>
-          <p className="text-[11px] text-muted-foreground mt-0.5">
-            Complete our supervised evaluation to earn your verified GARA Innovation credential.
-          </p>
+      <section aria-labelledby="verify-how" className="border-t border-border/60 bg-muted/20 py-8 dark:bg-muted/5 lg:py-10">
+        <div className={PAGE_GUTTER}>
+          <SectionHeading id="verify-how" eyebrow={{ icon: Route, label: "How it works" }} title="Verification in three steps" />
+          <StepCards
+            columns={3}
+            label="How certificate verification works"
+            steps={[
+              { icon: QrCode, title: "Scan or type", text: "Scan the QR code on the certificate, or type the certificate ID printed on it." },
+              { icon: Search, title: "Registry lookup", text: "We look the ID up in GARA's certificate registry." },
+              {
+                icon: FileCheck,
+                title: "See the result",
+                text: "Valid or revoked, with the holder's name, programme and dates. Email addresses and phone numbers are never shown.",
+              },
+            ]}
+          />
         </div>
-        <Link
-          href="/careers"
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors shadow-2xs shrink-0"
-        >
-          <span>Explore Openings</span>
-          <ArrowRight className="h-3 w-3" />
-        </Link>
-      </div>
-    </div>
+      </section>
+
+      <section aria-label="Why it can be trusted" className="py-8 lg:py-10">
+        <div className={`${PAGE_GUTTER} space-y-6`}>
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+            {[
+              {
+                icon: ShieldCheck,
+                tone: "bg-primary/10 text-primary",
+                title: "Unique Codes",
+                text: "Every certificate carries a randomly generated verification code that is checked against GARA Innovation's certificate records.",
+              },
+              {
+                icon: CheckCircle2,
+                tone: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+                title: "Issued by GARA",
+                text: "Certificates are issued by authorised GARA staff once the programme's requirements are recorded as met.",
+              },
+              {
+                icon: FileCheck,
+                tone: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+                title: "Public Verification",
+                text: "Employers, universities, and background verifiers can confirm a certificate without seeing contact details or internal evaluation notes.",
+              },
+            ].map((pillar) => (
+              <div key={pillar.title} className="rounded-2xl border border-border/70 bg-card p-6 shadow-xs">
+                <span aria-hidden="true" className={`mb-4 flex h-11 w-11 items-center justify-center rounded-xl ${pillar.tone}`}>
+                  <pillar.icon className="h-5 w-5" />
+                </span>
+                <h3 className="font-[family-name:var(--font-display)] text-base font-bold text-foreground">{pillar.title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{pillar.text}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-col items-start gap-5 rounded-3xl border border-primary/20 bg-primary/5 p-7 sm:flex-row sm:items-center sm:justify-between sm:p-8">
+            <p className="font-[family-name:var(--font-display)] text-xl font-bold tracking-tight text-foreground">
+              Looking for internship opportunities or full-time roles?
+            </p>
+            <Link
+              href="/careers"
+              className="inline-flex h-11 shrink-0 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover"
+            >
+              Explore Openings <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </Link>
+          </div>
+        </div>
+      </section>
+    </>
   );
 }

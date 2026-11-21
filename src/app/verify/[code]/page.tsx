@@ -29,7 +29,7 @@ interface VerifyPageProps {
 
 function RateLimitedState() {
   return (
-    <div className={PAGE_GUTTER}>
+    <div className={`${PAGE_GUTTER} py-8 md:py-10`}>
       <div role="status" className="mx-auto max-w-2xl rounded-2xl bg-card border-2 border-warning/30 shadow-sm p-6 sm:p-8 text-center space-y-3">
         <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-warning/10 text-warning border border-warning/20">
           <AlertTriangle className="h-7 w-7" />
@@ -73,9 +73,9 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
       : await certificateService.verifyCertificatePublic(code, ipHash, userAgent);
 
   return (
-    <div className={PAGE_GUTTER}>
+    <div className={`${PAGE_GUTTER} py-8 md:py-10`}>
       {/* Page Header */}
-      <div className="text-center mb-8">
+      <div className="text-center mb-6">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-semibold mb-3">
           <Lock className="h-3.5 w-3.5" />
           <span>Official Public Registry</span>
@@ -240,7 +240,7 @@ export default async function VerifyCodePage({ params }: VerifyPageProps) {
       )}
 
       {/* Action Navigation Buttons */}
-      <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
         <Link
           href="/verify"
           className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors shadow-2xs"
