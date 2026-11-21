@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useId, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertCircle, ArrowRight, CheckCircle2, ClipboardCheck, LogOut } from "lucide-react";
+import { AlertCircle, BadgeCheck, CalendarPlus, ClipboardCheck, LogOut, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { FieldLabelRow, fieldErrorBorder, fieldInputClass, fieldOkBorder, fieldTextareaClass } from "@/components/ui/form-field";
 import { recordInternReviewOutcomeAction } from "../actions";
 import {
   REVIEW_OUTCOME_LABELS,
@@ -14,18 +15,12 @@ import {
   type ReviewPeriodMonths,
 } from "../conversion-rules";
 import { AccessibleDialog } from "./accessible-dialog";
-import {
-  FieldError,
-  InitialStatusField,
-  joiningInputClass,
-  ReviewPeriodField,
-  type JoiningInitialStatus,
-} from "./joining-fields";
+import { FieldError, InitialStatusField, ReviewPeriodField, type JoiningInitialStatus } from "./joining-fields";
 
-const OUTCOME_HINTS: Record<ReviewOutcome, string> = {
-  CONVERT: "Creates a full-time offer the intern accepts or declines in their portal.",
-  EXTEND: "The internship continues and the next review is scheduled.",
-  END_INTERNSHIP: "Records the decision. The exit itself is processed on the employee record.",
+const OUTCOME_ICONS: Record<ReviewOutcome, LucideIcon> = {
+  CONVERT: BadgeCheck,
+  EXTEND: CalendarPlus,
+  END_INTERNSHIP: LogOut,
 };
 
 export interface RecordReviewOutcomePanelProps {
@@ -38,12 +33,10 @@ export interface RecordReviewOutcomePanelProps {
   defaultDepartment: string;
   /** Business-calendar date (YYYY-MM-DD) used as the earliest effective date. */
   todayKey: string;
-  /** Employee record link where the exit is processed, or null when not available. */
-  exitHref: string | null;
 }
 
 function formatDay(key: string): string {
-  return new Date(`${key}T00:00:00.000Z`).toLocaleDateString("en-GB", {
+  return new Date(`${key}T00:00:00.000Z`).toLocaleDateString("en-IN", {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -64,7 +57,6 @@ export function RecordReviewOutcomePanel({
   defaultDesignation,
   defaultDepartment,
   todayKey,
-  exitHref,
 }: RecordReviewOutcomePanelProps) {
   const router = useRouter();
   const baseId = useId();
@@ -82,17 +74,11 @@ export function RecordReviewOutcomePanel({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [recorded, setRecorded] = useState<{ outcome: ReviewOutcome; nextReviewDate: string | null } | null>(null);
-
   const close = () => {
     if (isSubmitting) return;
     onClose();
     setError(null);
     setFieldErrors({});
-    if (recorded) {
-      // The review has moved to "Recent decisions".
-      router.refresh();
-    }
   };
 
   const validate = (): Record<string, string> => {
@@ -141,10 +127,18 @@ export function RecordReviewOutcomePanel({
         setFieldErrors(res.fieldErrors ?? {});
         return;
       }
-      setRecorded({
-        outcome,
-        nextReviewDate: res.data.nextReviewDate ? new Date(res.data.nextReviewDate).toISOString().slice(0, 10) : null,
-      });
+      // The action refreshes the board, which moves this review to Decisions and removes this
+      // dialog with its card, so the confirmation is a toast (it outlives the dialog).
+      const nextReviewDate = res.data.nextReviewDate ? new Date(res.data.nextReviewDate).toISOString().slice(0, 10) : null;
+      toast.success(
+        outcome === "CONVERT"
+          ? `Full-time offer sent to ${internName}.`
+          : outcome === "EXTEND"
+            ? `Internship extended. Next review on ${nextReviewDate ? formatDay(nextReviewDate) : "the scheduled date"}.`
+            : `Decision recorded. Process ${internName}'s exit from the employee record.`
+      );
+      onClose();
+      router.refresh();
     } catch {
       setError("We couldn't save the review outcome. Please check your connection and try again.");
     } finally {
@@ -152,108 +146,67 @@ export function RecordReviewOutcomePanel({
     }
   };
 
-  const describedBy = (field: string, hint?: string) =>
-    [hint, fieldErrors[field] ? id(`${field}-error`) : null].filter(Boolean).join(" ") || undefined;
+  const describedBy = (field: string) => (fieldErrors[field] ? id(`${field}-error`) : undefined);
 
   return (
     <>
-      <AccessibleDialog open={open} onClose={close} labelledBy={id("title")} describedBy={id("description")} busy={isSubmitting}>
-        {recorded ? (
-          <div className="space-y-4 px-5 py-5 text-xs">
-            <h2 id={id("title")} className="flex items-center gap-2 text-base font-semibold text-foreground">
-              <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" /> Review outcome recorded
-            </h2>
-            <p id={id("description")} role="status" className="text-muted-foreground">
-              {recorded.outcome === "CONVERT" &&
-                `${internName} has been emailed the full-time offer and can accept or decline it in their portal.`}
-              {recorded.outcome === "EXTEND" &&
-                `The internship is extended. The next review is on ${recorded.nextReviewDate ? formatDay(recorded.nextReviewDate) : "the scheduled date"}.`}
-              {recorded.outcome === "END_INTERNSHIP" &&
-                `The decision is recorded and ${internName} has been emailed. The internship does not end automatically.`}
-            </p>
-            {recorded.outcome === "END_INTERNSHIP" && (
-              <div className="flex flex-col gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-foreground sm:flex-row sm:items-center sm:justify-between">
-                <span className="flex items-start gap-2">
-                  <LogOut className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
-                  Next step: process the exit with the last working date on the employee record.
-                </span>
-                {exitHref && (
-                  <Link
-                    href={exitHref}
-                    className="inline-flex items-center gap-1 font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
-                  >
-                    Process exit <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-                  </Link>
-                )}
-              </div>
-            )}
-            <div className="flex justify-end">
-              <Button size="sm" onClick={close}>
-                Done
-              </Button>
-            </div>
-          </div>
-        ) : (
+      <AccessibleDialog open={open} onClose={close} labelledBy={id("title")} busy={isSubmitting} className="max-w-2xl">
           <form onSubmit={handleSubmit} noValidate>
-            <div className="border-b border-border/50 px-5 py-4">
-              <h2 id={id("title")} className="flex items-center gap-2 text-base font-semibold text-foreground">
-                <ClipboardCheck className="h-4 w-4 text-primary" aria-hidden="true" /> Review outcome: {internName}
+            <div className="border-b border-border/60 px-5 py-4">
+              <h2 id={id("title")} className="flex items-center gap-2.5 text-base font-semibold text-foreground">
+                <span aria-hidden="true" className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <ClipboardCheck className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 wrap-break-word">Review outcome: {internName}</span>
               </h2>
-              <p id={id("description")} className="mt-1 text-xs text-muted-foreground">
-                Record the decision taken in the progress review meeting.
-              </p>
             </div>
 
-            <div className="space-y-4 px-5 py-4 text-xs">
+            <div className="space-y-5 px-5 py-5">
               {error && (
-                <div
-                  role="alert"
-                  className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-destructive"
-                >
+                <div role="alert" className="flex items-start gap-2 rounded-xl border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>{error}</span>
                 </div>
               )}
 
               <fieldset aria-describedby={fieldErrors.outcome ? id("outcome-error") : undefined} disabled={isSubmitting}>
-                <legend className="mb-1.5 block font-medium text-foreground">
+                <legend className="mb-2 block text-[13px] font-medium text-foreground">
                   Outcome <span className="text-destructive">*</span>
                 </legend>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  {REVIEW_OUTCOMES.map((choice) => (
-                    <label
-                      key={choice}
-                      className={cn(
-                        "flex cursor-pointer items-start gap-2 rounded-lg border p-3 transition-colors focus-within:ring-2 focus-within:ring-ring",
-                        outcome === choice ? "border-primary bg-primary/5" : "border-border bg-background"
-                      )}
-                    >
-                      <input
-                        type="radio"
-                        name={id("outcome")}
-                        value={choice}
-                        checked={outcome === choice}
-                        onChange={() => setOutcome(choice)}
-                        required
-                        className="mt-0.5 h-4 w-4 accent-primary"
-                      />
-                      <span>
-                        <span className="block font-semibold text-foreground">{REVIEW_OUTCOME_LABELS[choice]}</span>
-                        <span className="block text-muted-foreground">{OUTCOME_HINTS[choice]}</span>
-                      </span>
-                    </label>
-                  ))}
+                  {REVIEW_OUTCOMES.map((choice) => {
+                    const Icon = OUTCOME_ICONS[choice];
+                    return (
+                      <label
+                        key={choice}
+                        className={cn(
+                          "flex cursor-pointer items-center gap-2.5 rounded-xl border border-border bg-background px-3 py-3 text-sm font-medium text-muted-foreground shadow-xs transition-[border-color,background-color,color,box-shadow] hover:border-foreground/25 hover:text-foreground has-checked:border-primary has-checked:bg-primary/5 has-checked:text-primary has-focus-visible:ring-4 has-focus-visible:ring-primary/15",
+                          choice === "END_INTERNSHIP" && "has-checked:border-destructive has-checked:bg-destructive/5 has-checked:text-destructive"
+                        )}
+                      >
+                        <input
+                          type="radio"
+                          name={id("outcome")}
+                          value={choice}
+                          checked={outcome === choice}
+                          onChange={() => setOutcome(choice)}
+                          required
+                          className="sr-only"
+                        />
+                        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        {REVIEW_OUTCOME_LABELS[choice]}
+                      </label>
+                    );
+                  })}
                 </div>
                 <FieldError id={id("outcome-error")} message={fieldErrors.outcome} />
               </fieldset>
 
               {outcome === "CONVERT" && (
-                <div className="space-y-4 rounded-lg border border-border/60 bg-muted/20 p-3">
+                <div className="space-y-5 rounded-xl border border-border/60 bg-muted/20 p-4">
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor={id("designation")} className="mb-1 block font-medium text-foreground">
-                        Full-time designation <span className="text-destructive">*</span>
-                      </label>
+                    <div className="space-y-2">
+                      <FieldLabelRow htmlFor={id("designation")} label="Full-time designation" />
                       <input
                         id={id("designation")}
                         type="text"
@@ -263,14 +216,12 @@ export function RecordReviewOutcomePanel({
                         aria-invalid={Boolean(fieldErrors.proposedDesignation)}
                         aria-describedby={describedBy("proposedDesignation")}
                         disabled={isSubmitting}
-                        className={joiningInputClass}
+                        className={cn(fieldInputClass, fieldErrors.proposedDesignation ? fieldErrorBorder : fieldOkBorder)}
                       />
                       <FieldError id={id("proposedDesignation-error")} message={fieldErrors.proposedDesignation} />
                     </div>
-                    <div>
-                      <label htmlFor={id("department")} className="mb-1 block font-medium text-foreground">
-                        Department <span className="text-destructive">*</span>
-                      </label>
+                    <div className="space-y-2">
+                      <FieldLabelRow htmlFor={id("department")} label="Department" />
                       <input
                         id={id("department")}
                         type="text"
@@ -280,14 +231,12 @@ export function RecordReviewOutcomePanel({
                         aria-invalid={Boolean(fieldErrors.proposedDepartment)}
                         aria-describedby={describedBy("proposedDepartment")}
                         disabled={isSubmitting}
-                        className={joiningInputClass}
+                        className={cn(fieldInputClass, fieldErrors.proposedDepartment ? fieldErrorBorder : fieldOkBorder)}
                       />
                       <FieldError id={id("proposedDepartment-error")} message={fieldErrors.proposedDepartment} />
                     </div>
-                    <div className="sm:col-span-2">
-                      <label htmlFor={id("effectiveDate")} className="mb-1 block font-medium text-foreground">
-                        Effective date <span className="text-destructive">*</span>
-                      </label>
+                    <div className="space-y-2 sm:col-span-2">
+                      <FieldLabelRow htmlFor={id("effectiveDate")} label="Effective date" />
                       <input
                         id={id("effectiveDate")}
                         type="date"
@@ -296,29 +245,20 @@ export function RecordReviewOutcomePanel({
                         value={effectiveDate}
                         onChange={(e) => setEffectiveDate(e.target.value)}
                         aria-invalid={Boolean(fieldErrors.effectiveDate)}
-                        aria-describedby={describedBy("effectiveDate", id("effectiveDate-hint"))}
+                        aria-describedby={describedBy("effectiveDate")}
                         disabled={isSubmitting}
-                        className={joiningInputClass}
+                        className={cn(fieldInputClass, fieldErrors.effectiveDate ? fieldErrorBorder : fieldOkBorder)}
                       />
-                      <p id={id("effectiveDate-hint")} className="mt-1 text-[11px] text-muted-foreground">
-                        Today or later. Once the intern accepts, the change takes effect automatically on this date.
-                      </p>
                       <FieldError id={id("effectiveDate-error")} message={fieldErrors.effectiveDate} />
                     </div>
                   </div>
-                  <InitialStatusField
-                    value={initialStatus}
-                    onChange={setInitialStatus}
-                    error={fieldErrors.initialStatus}
-                    disabled={isSubmitting}
-                  />
+                  <InitialStatusField value={initialStatus} onChange={setInitialStatus} error={fieldErrors.initialStatus} disabled={isSubmitting} />
                 </div>
               )}
 
               {outcome === "EXTEND" && (
                 <ReviewPeriodField
                   legend="Next review after"
-                  hint="Counted from today."
                   value={nextReviewAfterMonths}
                   onChange={setNextReviewAfterMonths}
                   error={fieldErrors.nextReviewAfterMonths}
@@ -326,57 +266,46 @@ export function RecordReviewOutcomePanel({
                 />
               )}
 
-              <div>
-                <label htmlFor={id("sharedSummary")} className="mb-1 block font-medium text-foreground">
-                  Summary for the intern (optional)
-                </label>
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={id("sharedSummary")} label="Summary shared with the intern" optional count={sharedSummary.length} max={2000} />
                 <textarea
                   id={id("sharedSummary")}
                   rows={3}
                   maxLength={2000}
                   value={sharedSummary}
                   onChange={(e) => setSharedSummary(e.target.value)}
-                  aria-describedby={describedBy("sharedSummary", id("sharedSummary-hint"))}
+                  aria-describedby={describedBy("sharedSummary")}
                   disabled={isSubmitting}
-                  className={`${joiningInputClass} resize-y`}
+                  className={cn(fieldTextareaClass, fieldOkBorder)}
                 />
-                <p id={id("sharedSummary-hint")} className="mt-1 text-[11px] text-muted-foreground">
-                  Shown to the intern in their workspace and email.
-                </p>
                 <FieldError id={id("sharedSummary-error")} message={fieldErrors.sharedSummary} />
               </div>
 
-              <div>
-                <label htmlFor={id("internalNotes")} className="mb-1 block font-medium text-foreground">
-                  Internal notes (optional)
-                </label>
+              <div className="space-y-2">
+                <FieldLabelRow htmlFor={id("internalNotes")} label="Internal notes (staff only)" optional count={internalNotes.length} max={5000} />
                 <textarea
                   id={id("internalNotes")}
                   rows={3}
                   maxLength={5000}
                   value={internalNotes}
                   onChange={(e) => setInternalNotes(e.target.value)}
-                  aria-describedby={describedBy("internalNotes", id("internalNotes-hint"))}
+                  aria-describedby={describedBy("internalNotes")}
                   disabled={isSubmitting}
-                  className={`${joiningInputClass} resize-y`}
+                  className={cn(fieldTextareaClass, fieldOkBorder)}
                 />
-                <p id={id("internalNotes-hint")} className="mt-1 text-[11px] text-muted-foreground">
-                  Staff only. Never shown to the intern.
-                </p>
                 <FieldError id={id("internalNotes-error")} message={fieldErrors.internalNotes} />
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-border/50 px-5 py-3">
-              <Button variant="outline" size="sm" type="button" onClick={close} disabled={isSubmitting}>
+            <div className="flex justify-end gap-2 border-t border-border/60 px-5 py-4">
+              <Button variant="outline" type="button" onClick={close} disabled={isSubmitting} className="h-10 rounded-xl px-4">
                 Cancel
               </Button>
-              <Button size="sm" type="submit" isLoading={isSubmitting}>
-                {isSubmitting ? "Saving…" : "Record outcome"}
+              <Button type="submit" isLoading={isSubmitting} className="h-10 rounded-xl px-5">
+                Record outcome
               </Button>
             </div>
           </form>
-        )}
       </AccessibleDialog>
     </>
   );

@@ -167,6 +167,8 @@ const ROUTE_CONFIG: Record<string, TabMeta> = {
     action: { label: "Back to Print Orders", href: "/admin/print-orders", iconName: "ArrowLeft" },
   },
   "/admin/certificates": { label: "Certificates", iconName: "Award" },
+  "/admin/intern-reviews": { label: "Intern Reviews", iconName: "CheckCircle2" },
+  "/subadmin/intern-reviews": { label: "Intern Reviews", iconName: "CheckCircle2" },
   "/admin/campus-ambassadors/payouts": {
     label: "Ambassador Payouts",
     iconName: "CreditCard",

@@ -1,29 +1,24 @@
 import React, { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import {
-  AlertTriangle,
-  ArrowRight,
-  CalendarClock,
-  CalendarDays,
-  ClipboardCheck,
-  History,
-  LogOut,
-} from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarClock, CalendarDays, Clock, Hash, History, LogOut, UserCheck } from "lucide-react";
 import { Role } from "@prisma/client";
 import { getCurrentUser, hasPermission, type AuthenticatedUser } from "@/lib/auth/guards";
 import { STAFF_ROLES } from "@/lib/auth/permissions";
 import { ForbiddenError, toActionError } from "@/lib/errors";
 import { BUSINESS_TIME_ZONE, businessDateKey } from "@/lib/time/business-time";
 import { UnauthorizedState } from "@/components/feedback/unauthorized-state";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/feedback/empty-state";
+import { StatCard, StatGrid } from "@/components/ui/stat-card";
 import { conversionService } from "../services/conversion-service";
 import {
   CONVERSION_OFFER_LABELS,
   REVIEW_DUE_LABELS,
   REVIEW_OUTCOME_LABELS,
   type ReviewDueState,
+  type ReviewOutcome,
 } from "../conversion-rules";
 import {
   isInternReviewView,
@@ -37,6 +32,7 @@ import { buildListHref, firstParam, parsePositivePage, type RawSearchParams } fr
 import { ReviewBoardSkeleton } from "./intern-reviews-skeleton";
 import { RecordReviewOutcomeDialog } from "./record-review-outcome-dialog";
 import { SectionUnavailable } from "./section-unavailable";
+import { employeeInitials } from "./employee-directory-table";
 
 export type InternReviewsPortal = "admin" | "subadmin";
 
@@ -51,46 +47,51 @@ const DUE_BADGE: Record<ReviewDueState, "destructive" | "warning" | "outline"> =
   UPCOMING: "outline",
 };
 
-const VIEW_META: Record<InternReviewView, { label: string; icon: React.ReactNode; empty: string }> = {
-  due: {
-    label: "Due now",
-    icon: <CalendarClock className="h-3.5 w-3.5" />,
-    empty: "No reviews are overdue or due in the next seven days.",
-  },
-  overdue: {
-    label: "Overdue",
-    icon: <AlertTriangle className="h-3.5 w-3.5" />,
-    empty: "No overdue reviews.",
-  },
-  upcoming: {
-    label: "Upcoming",
-    icon: <CalendarDays className="h-3.5 w-3.5" />,
-    empty: "No later reviews are scheduled. Reviews are scheduled when an intern is marked as joined.",
-  },
-  decided: {
-    label: "Decisions",
-    icon: <History className="h-3.5 w-3.5" />,
-    empty: "No review outcomes have been recorded yet.",
-  },
+const DUE_AVATAR: Record<ReviewDueState, string> = {
+  OVERDUE: "bg-destructive/10 text-destructive",
+  DUE_THIS_WEEK: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  UPCOMING: "bg-primary/10 text-primary",
 };
+
+const OUTCOME_BADGE: Record<ReviewOutcome, "success" | "default" | "destructive"> = {
+  CONVERT: "success",
+  EXTEND: "default",
+  END_INTERNSHIP: "destructive",
+};
+
+const VIEW_META: Record<InternReviewView, { label: string; icon: React.ReactNode; empty: string }> = {
+  due: { label: "Due now", icon: <CalendarClock className="h-3.5 w-3.5" />, empty: "No reviews due now" },
+  overdue: { label: "Overdue", icon: <AlertTriangle className="h-3.5 w-3.5" />, empty: "No overdue reviews" },
+  upcoming: { label: "Upcoming", icon: <CalendarDays className="h-3.5 w-3.5" />, empty: "No upcoming reviews" },
+  decided: { label: "Decisions", icon: <History className="h-3.5 w-3.5" />, empty: "No decisions yet" },
+};
+
+const DAY = new Intl.DateTimeFormat("en-IN", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
+const DAY_IN_BUSINESS_ZONE = new Intl.DateTimeFormat("en-IN", { year: "numeric", month: "short", day: "numeric", timeZone: BUSINESS_TIME_ZONE });
 
 /** Review and effective dates are calendar days stored at UTC midnight. */
 function formatDay(value: Date | null): string {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("en-GB", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }).format(
-    new Date(value)
-  );
+  return value ? DAY.format(new Date(value)) : "—";
 }
 
 /** Decision timestamps are instants, shown in the business time zone. */
 function formatInstant(value: Date | null): string {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("en-GB", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    timeZone: BUSINESS_TIME_ZONE,
-  }).format(new Date(value));
+  return value ? DAY_IN_BUSINESS_ZONE.format(new Date(value)) : "—";
+}
+
+/** "in 4 days", "today", "3 days overdue" for a review day (UTC midnight) against today's business day. */
+export function reviewCountdown(scheduledFor: Date, todayKey: string): string {
+  const days = Math.round((new Date(scheduledFor).getTime() - Date.parse(`${todayKey}T00:00:00.000Z`)) / 86_400_000);
+  if (days === 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days > 1) return `in ${days} days`;
+  return days === -1 ? "1 day overdue" : `${-days} days overdue`;
+}
+
+/** "ON_LEAVE" → "On leave". */
+function humanize(value: string): string {
+  const text = value.replace(/_/g, " ").toLowerCase();
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** `?view=…&page=…`; the default view and page 1 are left out so the base URL stays canonical. */
@@ -98,26 +99,30 @@ function boardHref(basePath: string, view: InternReviewView, page = 1): string {
   return buildListHref(basePath, { view: view === "due" ? null : view, page: page > 1 ? page : null });
 }
 
-function InternHeading({ item, employeeHref }: { item: InternReviewItem; employeeHref: string | null }) {
+function InternHeading({ item, employeeHref, avatarClass, badges }: { item: InternReviewItem; employeeHref: string | null; avatarClass: string; badges?: React.ReactNode }) {
   return (
-    <div className="min-w-0 space-y-0.5">
-      <p className="flex flex-wrap items-center gap-2">
-        {employeeHref ? (
-          <Link
-            href={employeeHref}
-            className="text-sm font-semibold text-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
-          >
-            {item.internName}
-          </Link>
-        ) : (
-          <span className="text-sm font-semibold text-foreground">{item.internName}</span>
-        )}
-        <span className="font-mono text-[11px] text-muted-foreground">{item.employeeCode}</span>
-      </p>
-      <p className="text-xs text-muted-foreground">
-        {item.designation} · {item.department}
-        {item.periodStartDate ? ` · joined ${formatDay(item.periodStartDate)}` : ""}
-      </p>
+    <div className="flex min-w-0 gap-3">
+      <span aria-hidden="true" className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold", avatarClass)}>
+        {employeeInitials(item.internName)}
+      </span>
+      <div className="min-w-0 space-y-1">
+        <p className="flex flex-wrap items-center gap-2">
+          {employeeHref ? (
+            <Link
+              href={employeeHref}
+              className="rounded-sm text-sm font-semibold text-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              {item.internName}
+            </Link>
+          ) : (
+            <span className="text-sm font-semibold text-foreground">{item.internName}</span>
+          )}
+          {badges}
+        </p>
+        <p className="text-xs text-foreground/80">
+          {item.designation} <span className="text-muted-foreground">· {item.department}</span>
+        </p>
+      </div>
     </div>
   );
 }
@@ -134,32 +139,67 @@ function ScheduledReviewCard({
   todayKey: string;
 }) {
   const employeeHref = canRecord ? `${employeesBase}/${item.employeeId}` : null;
+  const due = item.dueState ?? "UPCOMING";
   return (
-    <li>
-      <Card className="border-border shadow-xs">
-        <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-2">
-            <InternHeading item={item} employeeHref={employeeHref} />
-            <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <CalendarDays className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
-              Review on <span className="font-medium text-foreground">{formatDay(item.scheduledFor)}</span>
-              <span>(after {item.reviewPeriodMonths} months)</span>
-              {item.dueState && <Badge variant={DUE_BADGE[item.dueState]}>{REVIEW_DUE_LABELS[item.dueState]}</Badge>}
-            </p>
-          </div>
-          {canRecord && (
+    <li className="rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0 space-y-3">
+          <InternHeading
+            item={item}
+            employeeHref={employeeHref}
+            avatarClass={DUE_AVATAR[due]}
+            badges={
+              item.dueState && (
+                <Badge variant={DUE_BADGE[item.dueState]} className="text-[10px]">
+                  {REVIEW_DUE_LABELS[item.dueState]}
+                </Badge>
+              )
+            }
+          />
+          <ul className="flex flex-wrap gap-x-4 gap-y-1 pl-13 text-xs text-muted-foreground">
+            <li className="inline-flex items-center gap-1.5">
+              <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+              Review <span className="font-medium text-foreground">{formatDay(item.scheduledFor)}</span>
+              <span className={cn(due === "OVERDUE" && "font-medium text-destructive")}>· {reviewCountdown(item.scheduledFor, todayKey)}</span>
+            </li>
+            <li className="inline-flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+              {item.reviewPeriodMonths}-month review
+            </li>
+            {item.periodStartDate && (
+              <li className="inline-flex items-center gap-1.5">
+                <UserCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                Joined {formatDay(item.periodStartDate)}
+              </li>
+            )}
+            <li className="inline-flex items-center gap-1.5 font-mono">
+              <Hash className="h-3.5 w-3.5" aria-hidden="true" />
+              {item.employeeCode}
+            </li>
+          </ul>
+        </div>
+        {canRecord && (
+          <div className="shrink-0 lg:pl-4">
             <RecordReviewOutcomeDialog
               reviewId={item.id}
               internName={item.internName}
               defaultDesignation={item.designation}
               defaultDepartment={item.department}
               todayKey={todayKey}
-              exitHref={employeeHref ? `${employeeHref}?tab=exit#employee-administration` : null}
             />
-          )}
-        </CardContent>
-      </Card>
+          </div>
+        )}
+      </div>
     </li>
+  );
+}
+
+function NoteTile({ label, tone, children }: { label: string; tone: "muted" | "warning"; children: React.ReactNode }) {
+  return (
+    <div className={cn("rounded-xl border p-3", tone === "warning" ? "border-warning/30 bg-warning/5" : "border-border/60 bg-muted/30")}>
+      <p className={cn("text-[11px] font-medium uppercase tracking-wider", tone === "warning" ? "text-warning" : "text-muted-foreground")}>{label}</p>
+      <div className="mt-1 whitespace-pre-wrap text-sm text-foreground">{children}</div>
+    </div>
   );
 }
 
@@ -175,65 +215,94 @@ function DecisionCard({
   const employeeHref = canRecord ? `${employeesBase}/${item.employeeId}` : null;
   const awaitingExit = item.outcome === "END_INTERNSHIP" && item.employeeStatus !== "EXITED";
   return (
-    <li>
-      <Card className="border-border shadow-xs">
-        <CardContent className="space-y-3 p-4 text-xs">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <InternHeading item={item} employeeHref={employeeHref} />
-            <div className="flex flex-wrap items-center gap-2">
-              {item.outcome && <Badge variant="default">{REVIEW_OUTCOME_LABELS[item.outcome]}</Badge>}
+    <li className="space-y-4 rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <InternHeading
+          item={item}
+          employeeHref={employeeHref}
+          avatarClass="bg-primary/10 text-primary"
+          badges={
+            <>
+              {item.outcome && (
+                <Badge variant={OUTCOME_BADGE[item.outcome]} className="text-[10px]">
+                  {REVIEW_OUTCOME_LABELS[item.outcome]}
+                </Badge>
+              )}
               {item.offerStatus && (
-                <Badge variant={item.offerStatus === "ACCEPTED" ? "success" : "outline"}>
+                <Badge variant={item.offerStatus === "ACCEPTED" ? "success" : "outline"} className="text-[10px]">
                   {item.convertedAt ? "Converted" : CONVERSION_OFFER_LABELS[item.offerStatus]}
                 </Badge>
               )}
-            </div>
-          </div>
-
-          <p className="text-muted-foreground">
+            </>
+          }
+        />
+        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground lg:justify-end lg:text-right">
+          <li className="inline-flex items-center gap-1.5">
+            <History className="h-3.5 w-3.5" aria-hidden="true" />
             Decided {formatInstant(item.decidedAt)}
-            {item.reviewerName ? ` by ${item.reviewerName}` : ""} · review of {formatDay(item.scheduledFor)}
-          </p>
+            {item.reviewerName ? ` by ${item.reviewerName}` : ""}
+          </li>
+          <li className="inline-flex items-center gap-1.5">
+            <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+            {item.reviewPeriodMonths}-month review, {formatDay(item.scheduledFor)}
+          </li>
+        </ul>
+      </div>
 
-          {item.outcome === "CONVERT" && (
-            <p className="text-foreground">
-              Full-time offer: <span className="font-medium">{item.proposedDesignation}</span> ({item.proposedDepartment}),
-              effective {formatDay(item.proposedEffectiveDate)}
-              {item.proposedInitialStatus ? `, starting as ${item.proposedInitialStatus}` : ""}.
-            </p>
-          )}
-
-          {item.sharedSummary && (
-            <div className="rounded-lg border border-border/60 bg-muted/30 p-2.5">
-              <p className="mb-0.5 text-[11px] font-semibold text-muted-foreground">Shared with the intern</p>
-              <p className="whitespace-pre-wrap text-foreground">{item.sharedSummary}</p>
+      {item.outcome === "CONVERT" && (
+        <dl className="grid grid-cols-2 gap-3 rounded-xl border border-success/25 bg-success/5 p-3 text-sm sm:grid-cols-4">
+          <div>
+            <dt className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Full-time role</dt>
+            <dd className="mt-0.5 font-medium text-foreground">{item.proposedDesignation}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Department</dt>
+            <dd className="mt-0.5 text-foreground">{item.proposedDepartment}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Effective</dt>
+            <dd className="mt-0.5 text-foreground">{formatDay(item.proposedEffectiveDate)}</dd>
+          </div>
+          {item.proposedInitialStatus && (
+            <div>
+              <dt className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Starts as</dt>
+              <dd className="mt-0.5 text-foreground">{humanize(item.proposedInitialStatus)}</dd>
             </div>
+          )}
+        </dl>
+      )}
+
+      {(item.sharedSummary || item.internalNotes) && (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {item.sharedSummary && (
+            <NoteTile label="Shared with the intern" tone="muted">
+              {item.sharedSummary}
+            </NoteTile>
           )}
           {item.internalNotes && (
-            <div className="rounded-lg border border-warning/30 bg-warning/5 p-2.5">
-              <p className="mb-0.5 text-[11px] font-semibold text-warning">Internal notes (staff only)</p>
-              <p className="whitespace-pre-wrap text-foreground">{item.internalNotes}</p>
-            </div>
+            <NoteTile label="Internal notes (staff only)" tone="warning">
+              {item.internalNotes}
+            </NoteTile>
           )}
+        </div>
+      )}
 
-          {awaitingExit && (
-            <div className="flex flex-col gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 sm:flex-row sm:items-center sm:justify-between">
-              <span className="flex items-start gap-2 text-foreground">
-                <LogOut className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
-                The internship is to end. The exit is not processed automatically.
-              </span>
-              {employeeHref && (
-                <Link
-                  href={`${employeeHref}?tab=exit#employee-administration`}
-                  className="inline-flex items-center gap-1 font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
-                >
-                  Process exit <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-                </Link>
-              )}
-            </div>
+      {awaitingExit && (
+        <div className="flex flex-col gap-3 rounded-xl border border-warning/30 bg-warning/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <span className="flex items-start gap-2 text-sm text-foreground">
+            <LogOut className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+            Exit not processed yet
+          </span>
+          {employeeHref && (
+            <Link
+              href={`${employeeHref}?tab=exit#employee-administration`}
+              className="inline-flex h-8 w-fit items-center gap-1.5 rounded-lg border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              Process exit <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </Link>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      )}
     </li>
   );
 }
@@ -246,7 +315,7 @@ interface BoardSectionProps {
   todayKey: string;
 }
 
-/** Streamed board body: one database page of the selected view plus the per-view counts. */
+/** Streamed board body: summary cards, view chips and one database page of the selected view. */
 async function InternReviewBoardSection({ user, paths, view, page, todayKey }: BoardSectionProps) {
   let board: InternReviewBoard;
   try {
@@ -263,6 +332,11 @@ async function InternReviewBoardSection({ user, paths, view, page, todayKey }: B
     );
   }
 
+  return <ReviewBoardBody board={board} paths={paths} todayKey={todayKey} />;
+}
+
+/** The board for loaded data: summary cards, view chips and the cards of the selected view. */
+export function ReviewBoardBody({ board, paths, todayKey }: { board: InternReviewBoard; paths: { self: string; employees: string }; todayKey: string }) {
   const tabCounts: Record<InternReviewView, number> = {
     due: board.counts.overdue + board.counts.dueThisWeek,
     overdue: board.counts.overdue,
@@ -273,12 +347,13 @@ async function InternReviewBoardSection({ user, paths, view, page, todayKey }: B
   const scheduledProps = { canRecord: board.canRecord, employeesBase: paths.employees, todayKey };
 
   return (
-    <div className="space-y-4">
-      {!board.canRecord && (
-        <p className="text-xs text-muted-foreground">
-          Outcomes are recorded by HR and administrators with the employees permission.
-        </p>
-      )}
+    <div className="space-y-6">
+      <StatGrid columns={4} label="Review summary">
+        <StatCard label="Overdue" value={board.counts.overdue} icon={AlertTriangle} tone="rose" href={boardHref(paths.self, "overdue")} />
+        <StatCard label="Due This Week" value={board.counts.dueThisWeek} icon={CalendarClock} tone="amber" href={boardHref(paths.self, "due")} />
+        <StatCard label="Upcoming" value={board.counts.upcoming} icon={CalendarDays} tone="blue" href={boardHref(paths.self, "upcoming")} />
+        <StatCard label="Decisions" value={board.counts.decided} icon={History} tone="emerald" href={boardHref(paths.self, "decided")} />
+      </StatGrid>
 
       <nav aria-label="Review views" className="flex flex-wrap gap-2">
         {(Object.keys(VIEW_META) as InternReviewView[]).map((key) => (
@@ -294,35 +369,20 @@ async function InternReviewBoardSection({ user, paths, view, page, todayKey }: B
         ))}
       </nav>
 
-      <section aria-labelledby="review-list-heading" className="space-y-3">
-        <h2 id="review-list-heading" className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <span aria-hidden="true" className="text-primary">
-            {active.icon}
-          </span>
-          {active.label}
-          <Badge variant="secondary" className="text-[10px]">
-            {board.total}
-          </Badge>
-        </h2>
-
+      <section aria-label={active.label} className="space-y-4">
         {board.items.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">
-            {board.total === 0 ? (
-              active.empty
-            ) : (
-              <>
-                No reviews on this page.{" "}
-                <Link
-                  href={boardHref(paths.self, board.view)}
-                  className="font-medium text-primary underline-offset-4 hover:underline"
-                >
+          <EmptyState
+            title={board.total === 0 ? active.empty : "No reviews on this page"}
+            action={
+              board.total > 0 ? (
+                <Link href={boardHref(paths.self, board.view)} className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-sm font-medium hover:bg-muted">
                   Go to the first page
                 </Link>
-              </>
-            )}
-          </p>
+              ) : undefined
+            }
+          />
         ) : (
-          <ul className="grid grid-cols-1 gap-3">
+          <ul className="grid grid-cols-1 gap-3" aria-label={`${active.label} reviews`}>
             {board.items.map((item) =>
               board.view === "decided" ? (
                 <DecisionCard key={item.id} item={item} canRecord={board.canRecord} employeesBase={paths.employees} />
@@ -384,18 +444,9 @@ export async function InternReviewsView({
   const page = parsePositivePage(raw.page);
   const todayKey = businessDateKey(new Date());
 
+  // The portal header shows the page title.
   return (
     <div className="w-full space-y-6">
-      <header className="flex flex-col gap-2 border-b border-border pb-6">
-        <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-          <ClipboardCheck className="h-6 w-6 text-primary" aria-hidden="true" /> Intern Reviews
-        </h1>
-        <p className="text-xs text-muted-foreground sm:text-sm">
-          Progress reviews held 3 or 6 months after an intern joins. The outcome is a full-time offer, an
-          extension or the end of the internship.
-        </p>
-      </header>
-
       <Suspense key={`${view}|${page}`} fallback={<ReviewBoardSkeleton />}>
         <InternReviewBoardSection user={user} paths={paths} view={view} page={page} todayKey={todayKey} />
       </Suspense>

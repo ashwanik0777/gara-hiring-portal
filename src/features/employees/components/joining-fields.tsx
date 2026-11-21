@@ -2,15 +2,18 @@
 
 import React, { useId } from "react";
 import { EmployeeStatus } from "@/types/enums";
-import { cn } from "@/lib/utils";
 import { REVIEW_PERIOD_MONTHS, type ReviewPeriodMonths } from "../conversion-rules";
 
 export type JoiningInitialStatus = typeof EmployeeStatus.ACTIVE | typeof EmployeeStatus.PROBATION;
 
-const STATUS_CHOICES: Array<{ value: JoiningInitialStatus; label: string; hint: string }> = [
-  { value: EmployeeStatus.ACTIVE, label: "Active", hint: "Starts as an active team member." },
-  { value: EmployeeStatus.PROBATION, label: "Probation", hint: "Starts in probation status." },
+const STATUS_CHOICES: Array<{ value: JoiningInitialStatus; label: string }> = [
+  { value: EmployeeStatus.ACTIVE, label: "Active" },
+  { value: EmployeeStatus.PROBATION, label: "Probation" },
 ];
+
+/** Selectable radio tile (same look as the shared ChoiceTiles). */
+const choiceTileClass =
+  "relative flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-border bg-background px-3 text-sm font-medium text-muted-foreground shadow-xs transition-[border-color,background-color,color,box-shadow] hover:border-foreground/25 hover:text-foreground has-checked:border-primary has-checked:bg-primary/5 has-checked:text-primary has-focus-visible:ring-4 has-focus-visible:ring-primary/15 has-disabled:cursor-not-allowed has-disabled:opacity-60";
 
 export const joiningInputClass =
   "w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60";
@@ -42,18 +45,12 @@ export function InitialStatusField({ value, onChange, error, disabled }: Initial
 
   return (
     <fieldset aria-describedby={error ? errorId : undefined} disabled={disabled}>
-      <legend className="mb-1.5 block text-xs font-medium text-foreground">
+      <legend className="mb-2 block text-[13px] font-medium text-foreground">
         Initial employment status <span className="text-destructive">*</span>
       </legend>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-2">
         {STATUS_CHOICES.map((choice) => (
-          <label
-            key={choice.value}
-            className={cn(
-              "flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-xs transition-colors focus-within:ring-2 focus-within:ring-ring",
-              value === choice.value ? "border-primary bg-primary/5" : "border-border bg-background"
-            )}
-          >
+          <label key={choice.value} className={choiceTileClass}>
             <input
               type="radio"
               name={groupName}
@@ -61,12 +58,9 @@ export function InitialStatusField({ value, onChange, error, disabled }: Initial
               checked={value === choice.value}
               onChange={() => onChange(choice.value)}
               required
-              className="mt-0.5 h-4 w-4 accent-primary"
+              className="sr-only"
             />
-            <span>
-              <span className="block font-semibold text-foreground">{choice.label}</span>
-              <span className="block text-muted-foreground">{choice.hint}</span>
-            </span>
+            {choice.label}
           </label>
         ))}
       </div>
@@ -96,18 +90,12 @@ export function ReviewPeriodField({ legend, hint, value, onChange, error, disabl
 
   return (
     <fieldset aria-describedby={describedBy} disabled={disabled}>
-      <legend className="mb-1.5 block text-xs font-medium text-foreground">
+      <legend className="mb-2 block text-[13px] font-medium text-foreground">
         {legend} <span className="text-destructive">*</span>
       </legend>
       <div className="grid grid-cols-2 gap-2">
         {REVIEW_PERIOD_MONTHS.map((months) => (
-          <label
-            key={months}
-            className={cn(
-              "flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-xs transition-colors focus-within:ring-2 focus-within:ring-ring",
-              value === months ? "border-primary bg-primary/5" : "border-border bg-background"
-            )}
-          >
+          <label key={months} className={choiceTileClass}>
             <input
               type="radio"
               name={groupName}
@@ -115,9 +103,9 @@ export function ReviewPeriodField({ legend, hint, value, onChange, error, disabl
               checked={value === months}
               onChange={() => onChange(months)}
               required
-              className="h-4 w-4 accent-primary"
+              className="sr-only"
             />
-            <span className="font-semibold text-foreground">{months} months</span>
+            {months} months
           </label>
         ))}
       </div>
